@@ -4,9 +4,13 @@ from datetime import datetime, timedelta
 import psycopg2
 import os
 import io
+import base64
+import json
+import extra_streamlit_components as stx
+from streamlit_cookies_manager import CookieManager
 
 # ------------------------------------------------------------
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DA PÁGINA (primeiro comando)
 # ------------------------------------------------------------
 st.set_page_config(
     page_title="Centro Educa Mais Jansen Veloso",
@@ -16,48 +20,62 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
-# CSS PROFISSIONAL – DESIGN MODERNO E RESPONSIVO
+# GESTOR DE COOKIES (para sessão persistente)
+# ------------------------------------------------------------
+cookies = CookieManager()
+if not cookies.ready():
+    st.stop()
+
+# ------------------------------------------------------------
+# CSS PROFISSIONAL RENOVADO
 # ------------------------------------------------------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@600;700;800&display=swap');
 
-    /* Geral */
+    :root {
+        --primary: #0a2a44;
+        --secondary: #1e4a6b;
+        --accent: #e6b422;
+        --accent2: #00a896;
+        --bg: #f4f7fb;
+    }
+
     .stApp {
-        background: linear-gradient(145deg, #e9eef3 0%, #dce3ea 100%);
+        background: linear-gradient(165deg, #e9f0f5 0%, #d9e4ed 100%);
     }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Cartões com vidro */
-    .card {
-        background: rgba(255, 255, 255, 0.7);
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border-radius: 24px;
-        padding: 2rem 1.8rem;
-        margin-bottom: 1.8rem;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06), 0 6px 10px rgba(0, 0, 0, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        transition: all 0.3s ease;
+    /* Cabeçalho com logo */
+    .header-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem 0 0.5rem;
     }
-    .card:hover {
-        box-shadow: 0 15px 40px rgba(0, 0, 0, 0.1);
+    .logo-img {
+        width: 180px;
+        margin-bottom: 0.8rem;
+        filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+    }
+    @media (max-width: 768px) {
+        .logo-img {
+            width: 140px;
+        }
     }
 
-    /* Títulos */
     .main-title {
         font-family: 'Montserrat', sans-serif;
-        font-size: clamp(2rem, 8vw, 3.2rem);
+        font-size: clamp(2rem, 7vw, 3rem);
         font-weight: 800;
-        background: linear-gradient(135deg, #0f2b4a 0%, #1e4a6b 100%);
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        background-clip: text;
         text-align: center;
         margin-bottom: 0.2rem;
-        letter-spacing: -0.5px;
     }
     .sub-title {
         font-family: 'Inter', sans-serif;
@@ -67,131 +85,103 @@ st.markdown("""
         margin-bottom: 2rem;
     }
 
+    /* Cards */
+    .card {
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 24px;
+        padding: 1.8rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 12px 35px rgba(0,0,0,0.05);
+        border: 1px solid rgba(255,255,255,0.7);
+    }
+
     /* Métricas */
     .metric-card {
         background: white;
         border-radius: 20px;
-        padding: 1.5rem 1rem;
+        padding: 1.4rem 1rem;
         text-align: center;
-        box-shadow: 0 6px 18px rgba(0,0,0,0.05);
-        border-left: 5px solid #f0a500;
-        transition: transform 0.2s;
-    }
-    .metric-card:hover {
-        transform: translateY(-4px);
+        box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+        border-left: 5px solid var(--accent);
+        transition: all 0.2s;
     }
     .metric-value {
         font-family: 'Montserrat', sans-serif;
-        font-size: 2.4rem;
+        font-size: 2.2rem;
         font-weight: 800;
-        color: #0f2b4a;
-        line-height: 1.2;
+        color: var(--primary);
     }
     .metric-label {
         font-family: 'Inter', sans-serif;
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.05em;
         color: #64748b;
-        margin-top: 0.3rem;
     }
 
     /* Botões */
     .stButton > button {
         font-family: 'Inter', sans-serif;
         font-weight: 600;
-        font-size: 1rem;
-        padding: 0.75rem 2.2rem;
         border-radius: 14px;
-        border: none;
-        background: linear-gradient(135deg, #1a3a5c, #2c5f8a);
+        background: linear-gradient(135deg, var(--secondary), var(--primary));
         color: white;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 14px rgba(26,58,92,0.25);
-        letter-spacing: 0.3px;
+        border: none;
+        padding: 0.7rem 2rem;
+        box-shadow: 0 4px 12px rgba(10,42,68,0.2);
+        transition: all 0.3s;
     }
     .stButton > button:hover {
-        background: linear-gradient(135deg, #2c5f8a, #1a3a5c);
-        box-shadow: 0 8px 22px rgba(26,58,92,0.35);
-        transform: translateY(-2px);
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        box-shadow: 0 6px 18px rgba(10,42,68,0.3);
+        transform: translateY(-1px);
     }
 
     /* Abas */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background: rgba(241,245,249,0.6);
+        background: rgba(255,255,255,0.4);
         padding: 6px;
         border-radius: 18px;
+        gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
         font-family: 'Inter', sans-serif;
         font-weight: 600;
-        padding: 12px 24px;
         border-radius: 14px;
-        transition: all 0.2s;
+        padding: 12px 24px;
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #0f2b4a, #1a4972) !important;
+        background: var(--primary) !important;
         color: white !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
 
     /* Inputs */
     .stTextInput > div > div > input {
         border-radius: 14px;
         border: 2px solid #e2e8f0;
-        padding: 0.7rem 1.2rem;
-        font-family: 'Inter', sans-serif;
-        transition: 0.2s;
+        padding: 0.7rem 1rem;
         background: white;
     }
-    .stTextInput > div > div > input:focus {
-        border-color: #2c5f8a;
-        box-shadow: 0 0 0 3px rgba(44,95,138,0.1);
-        outline: none;
-    }
 
-    /* Login */
+    /* Login card */
     .login-card {
         max-width: 420px;
-        margin: 7vh auto;
+        margin: 8vh auto;
         background: rgba(255,255,255,0.8);
-        backdrop-filter: blur(20px);
-        border-radius: 30px;
-        padding: 2.8rem 2.2rem;
-        box-shadow: 0 30px 50px rgba(0,0,0,0.15);
+        backdrop-filter: blur(16px);
+        border-radius: 32px;
+        padding: 2.5rem 2rem;
+        box-shadow: 0 30px 50px rgba(0,0,0,0.1);
         text-align: center;
-        border: 1px solid rgba(255,255,255,0.6);
     }
     .login-title {
         font-family: 'Montserrat', sans-serif;
-        font-size: 1.7rem;
+        font-size: 1.6rem;
         font-weight: 700;
-        color: #0f2b4a;
-        margin: 1rem 0 1.8rem;
-    }
-
-    /* Responsividade */
-    @media (max-width: 768px) {
-        .main-title {
-            font-size: 2.2rem;
-        }
-        .card {
-            padding: 1.2rem;
-        }
-        .metric-card {
-            padding: 1rem;
-        }
-        .metric-value {
-            font-size: 1.8rem;
-        }
-        .stButton > button {
-            width: 100%;
-        }
-        .stTabs [data-baseweb="tab"] {
-            padding: 10px 16px;
-            font-size: 0.9rem;
-        }
+        color: var(--primary);
+        margin: 1rem 0 2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -238,7 +228,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# FUNÇÕES DE NEGÓCIO
+# FUNÇÕES DE NEGÓCIO (mantidas, com melhoria na leitura CSV)
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -247,14 +237,10 @@ def carregar_alunos():
     return df
 
 def importar_csv_para_bd(arquivo_csv):
-    """Leitura robusta do CSV, com limpeza de BOM e múltiplas tentativas de encoding."""
     conteudo = arquivo_csv.read()
-    # remover BOM se existir
     if conteudo.startswith(b'\xef\xbb\xbf'):
         conteudo = conteudo[3:]
-    arquivo_csv.seek(0)
     try:
-        # Tentar diferentes encodings
         for enc in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
             try:
                 df = pd.read_csv(io.BytesIO(conteudo), sep=';', encoding=enc)
@@ -262,18 +248,14 @@ def importar_csv_para_bd(arquivo_csv):
             except UnicodeDecodeError:
                 continue
         else:
-            # última tentativa com engine python
             df = pd.read_csv(io.BytesIO(conteudo), sep=None, engine='python')
     except Exception as e:
-        st.error(f"Erro ao ler o ficheiro: {e}")
+        st.error(f"Erro ao ler ficheiro: {e}")
         return False
-
-    # padronizar colunas
     df.columns = [col.strip().upper() for col in df.columns]
     if 'NOME' not in df.columns or 'TURMA' not in df.columns:
-        st.error("O ficheiro CSV precisa conter as colunas 'NOME' e 'TURMA'.")
+        st.error("CSV precisa conter colunas NOME e TURMA.")
         return False
-
     conn = conectar_bd()
     cur = conn.cursor()
     for _, row in df.iterrows():
@@ -354,16 +336,41 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# TELA DE LOGIN
+# AUTENTICAÇÃO PERSISTENTE (cookies)
 # ------------------------------------------------------------
-if "autenticado" not in st.session_state:
+def check_auth():
+    if "autenticado" not in st.session_state:
+        # tentar recuperar do cookie
+        auth_cookie = cookies.get("auth_token")
+        if auth_cookie:
+            try:
+                data = json.loads(base64.b64decode(auth_cookie).decode())
+                if data.get("valido"):
+                    st.session_state.autenticado = True
+                    st.session_state.eh_admin = data.get("eh_admin", False)
+                    return
+            except:
+                pass
+        st.session_state.autenticado = False
+        st.session_state.eh_admin = False
+
+def set_auth_cookie(eh_admin):
+    token = base64.b64encode(json.dumps({"valido": True, "eh_admin": eh_admin}).encode()).decode()
+    cookies["auth_token"] = token
+    cookies.save()
+
+def clear_auth():
+    cookies["auth_token"] = ""
+    cookies.save()
     st.session_state.autenticado = False
     st.session_state.eh_admin = False
+
+check_auth()
 
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"):
-        st.image("logo.png", width=140)
+        st.image("logo.png", width=160)
     else:
         st.markdown("### 🏫 Centro Educa Mais Jansen Veloso")
     st.markdown('<div class="login-title">Sistema de Frequência</div>', unsafe_allow_html=True)
@@ -372,10 +379,12 @@ if not st.session_state.autenticado:
         if senha == SENHA_ADMIN:
             st.session_state.autenticado = True
             st.session_state.eh_admin = True
+            set_auth_cookie(True)
             st.rerun()
         elif senha == SENHA_OPERADOR:
             st.session_state.autenticado = True
             st.session_state.eh_admin = False
+            set_auth_cookie(False)
             st.rerun()
         else:
             st.error("Senha incorreta!")
@@ -383,33 +392,31 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ------------------------------------------------------------
-# SISTEMA PRINCIPAL
+# INTERFACE PRINCIPAL
 # ------------------------------------------------------------
-col_logo, col_tit = st.columns([0.5, 4])
-with col_logo:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=100)
-    else:
-        st.markdown("🏫", unsafe_allow_html=True)
-with col_tit:
-    st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime.now().strftime("%d de %B de %Y")}</p>', unsafe_allow_html=True)
+# Cabeçalho
+st.markdown('<div class="header-container">', unsafe_allow_html=True)
+if os.path.exists("logo.png"):
+    st.image("logo.png", width=180, output_format="PNG")
+st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime.now().strftime("%d de %B de %Y")}</p>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 col_h1, col_h2 = st.columns([4, 1])
 with col_h2:
     if st.button("🚪 Sair"):
-        st.session_state.autenticado = False
-        st.session_state.eh_admin = False
+        clear_auth()
         st.rerun()
 
+# Verificar alunos
 df_alunos = carregar_alunos()
 if df_alunos.empty:
     if st.session_state.eh_admin:
-        st.warning("⚠️ Base de dados vazia. Como administrador, faça o upload do ficheiro CSV.")
+        st.warning("⚠️ Base de dados vazia. Como administrador, faça o upload do CSV.")
         uploaded = st.file_uploader("Escolha o ficheiro CSV", type=["csv"])
         if uploaded is not None:
             if importar_csv_para_bd(uploaded):
-                st.success("Alunos importados com sucesso! Recarregue a página.")
+                st.success("Alunos importados! Recarregue a página.")
                 st.stop()
     else:
         st.error("🚫 Sistema indisponível. Contacte o administrador.")
@@ -435,28 +442,76 @@ col_m4.markdown(f'<div class="metric-card" style="border-left-color:#f59e0b;"><d
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Abas – a Manutenção só aparece para admin
+# Abas
 abas = ["📸 CHECK-IN", "📊 GESTÃO", "🚨 ALERTAS", "⭐ PONTUALIDADE"]
 if st.session_state.eh_admin:
     abas.append("⚙️ MANUTENÇÃO")
 tabs = st.tabs(abas)
 
-# CHECK-IN
+# --------------------------- ABA CHECK-IN (com câmera QR) ---------------------------
 with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("📸 Registo de Entrada")
+
+    # --- Componente de leitura de QR Code via câmera (HTML5) ---
+    st.markdown("""
+    <div style="text-align:center; margin-bottom:10px;">
+        <button id="start-qr-btn" style="padding:8px 18px; border-radius:12px; background:#1e4a6b; color:white; border:none; font-weight:600; cursor:pointer;" onclick="startQRScanner()">📷 Abrir Câmera para QR Code</button>
+        <button id="stop-qr-btn" style="display:none; padding:8px 18px; border-radius:12px; background:#b91c1c; color:white; border:none; font-weight:600; cursor:pointer;" onclick="stopQRScanner()">🛑 Parar Câmera</button>
+    </div>
+    <div id="qr-reader" style="width:100%; max-width:400px; margin: 0 auto;"></div>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script>
+        let html5QrCode;
+        function startQRScanner() {
+            document.getElementById('start-qr-btn').style.display = 'none';
+            document.getElementById('stop-qr-btn').style.display = 'inline-block';
+            html5QrCode = new Html5Qrcode("qr-reader");
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                (decodedText) => {
+                    // envia o texto lido para o campo de QR code do Streamlit
+                    const qrInput = window.parent.document.querySelector('input[aria-label="📱 Leitor QR Code"]');
+                    if (qrInput) {
+                        qrInput.value = decodedText;
+                        qrInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    // para a câmera após leitura bem sucedida
+                    stopQRScanner();
+                },
+                (errorMessage) => {
+                    // erro de leitura, ignorar
+                }
+            ).catch(err => {
+                console.log(err);
+                stopQRScanner();
+            });
+        }
+        function stopQRScanner() {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    document.getElementById('qr-reader').innerHTML = '';
+                    document.getElementById('start-qr-btn').style.display = 'inline-block';
+                    document.getElementById('stop-qr-btn').style.display = 'none';
+                }).catch(err => console.log(err));
+            }
+        }
+    </script>
+    """, unsafe_allow_html=True)
+
     c1, c2 = st.columns(2)
     with c1:
-        nome = st.text_input("✏️ Nome do aluno", placeholder="Digite o nome completo...", key="checkin_nome")
+        nome = st.text_input("✏️ Nome do aluno", placeholder="Digite o nome completo...")
     with c2:
-        qr = st.text_input("📱 Leitor QR Code", placeholder="Cursor aqui (ou leitura automática)", key="checkin_qr", autocomplete="off")
+        qr = st.text_input("📱 Leitor QR Code", placeholder="Cursor aqui ou use a câmera acima")
     if nome:
         registrar_presenca(nome.strip().upper())
     if qr:
         registrar_presenca(qr.strip().upper())
     st.markdown('</div>', unsafe_allow_html=True)
 
-# GESTÃO
+# --------------------------- ABA GESTÃO ---------------------------
 with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("📊 Frequência e Saídas")
@@ -513,7 +568,7 @@ with tabs[1]:
         st.info("Nenhum aluno presente sem saída registada.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ALERTAS
+# --------------------------- ABA ALERTAS ---------------------------
 with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
@@ -530,7 +585,7 @@ with tabs[2]:
             st.success("Nenhum aluno nesta situação.")
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⚠️ Saídas Antecipadas (5 dias consecutivos)")
+    st.subheader("⚠️ Saídas Antecipadas (5 dias)")
     if dias_uteis:
         df_saidas_alerta = pd.read_sql_query("SELECT nome_aluno, COUNT(DISTINCT data) as dias FROM registros WHERE data IN %s AND tipo_registro='PRESENCA' AND hora_saida<'17:00:00' GROUP BY nome_aluno HAVING COUNT(DISTINCT data)=5", conn, params=[tuple(dias_uteis)])
         if not df_saidas_alerta.empty:
@@ -541,7 +596,7 @@ with tabs[2]:
     st.markdown('</div>', unsafe_allow_html=True)
     conn.close()
 
-# PONTUALIDADE
+# --------------------------- ABA PONTUALIDADE ---------------------------
 with tabs[3]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⭐ Pontualidade (entrada antes das 07:15)")
@@ -556,21 +611,21 @@ with tabs[3]:
         st.info("Ainda não há registos de entrada antes das 07:15.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# MANUTENÇÃO (admin)
+# --------------------------- MANUTENÇÃO (admin) ---------------------------
 if st.session_state.eh_admin:
     with tabs[4]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("⚙️ Importar CSV (substituir lista de alunos)")
+        st.subheader("⚙️ Importar CSV")
         uploaded_admin = st.file_uploader("Escolha o ficheiro CSV", type=["csv"], key="admin_csv")
         if uploaded_admin is not None:
             if importar_csv_para_bd(uploaded_admin):
-                st.success("Alunos atualizados com sucesso!")
-        st.subheader("🗑️ Limpar todos os registos de frequência")
+                st.success("Alunos atualizados!")
+        st.subheader("🗑️ Limpar registos")
         senha_conf = st.text_input("Confirme com a senha de administrador", type="password")
         if st.button("Apagar todos os registos"):
             if senha_conf == SENHA_ADMIN:
                 limpar_todos_registros()
-                st.success("Todos os registos foram removidos. Pode recomeçar os testes.")
+                st.success("Registos apagados.")
                 st.balloons()
             else:
                 st.error("Senha incorreta!")
