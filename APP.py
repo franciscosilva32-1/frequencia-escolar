@@ -6,11 +6,12 @@ import os
 import io
 import base64
 import json
-import extra_streamlit_components as stx
+import streamlit.components.v1 as components
+import plotly.express as px
 from streamlit_cookies_manager import CookieManager
 
 # ------------------------------------------------------------
-# CONFIGURAÇÃO DA PÁGINA (primeiro comando)
+# CONFIGURAÇÃO DA PÁGINA
 # ------------------------------------------------------------
 st.set_page_config(
     page_title="Centro Educa Mais Jansen Veloso",
@@ -20,14 +21,14 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
-# GESTOR DE COOKIES (para sessão persistente)
+# GESTOR DE COOKIES (sessão persistente)
 # ------------------------------------------------------------
 cookies = CookieManager()
 if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# CSS PROFISSIONAL RENOVADO
+# CSS PROFISSIONAL (logo centralizada, cores renovadas)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -38,7 +39,6 @@ st.markdown("""
         --secondary: #1e4a6b;
         --accent: #e6b422;
         --accent2: #00a896;
-        --bg: #f4f7fb;
     }
 
     .stApp {
@@ -48,22 +48,24 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Cabeçalho com logo */
+    /* Cabeçalho centralizado */
     .header-container {
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 1.5rem 0 0.5rem;
+        padding: 2rem 0 0.5rem;
+        text-align: center;
     }
     .logo-img {
+        display: block;
+        margin: 0 auto 0.8rem;
         width: 180px;
-        margin-bottom: 0.8rem;
-        filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+        filter: drop-shadow(0 4px 8px rgba(0,0,0,0.15));
     }
     @media (max-width: 768px) {
         .logo-img {
-            width: 140px;
+            width: 150px;
         }
     }
 
@@ -75,7 +77,7 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 0.2rem;
+        margin: 0 0 0.2rem;
     }
     .sub-title {
         font-family: 'Inter', sans-serif;
@@ -85,7 +87,6 @@ st.markdown("""
         margin-bottom: 2rem;
     }
 
-    /* Cards */
     .card {
         background: rgba(255,255,255,0.75);
         backdrop-filter: blur(12px);
@@ -97,7 +98,6 @@ st.markdown("""
         border: 1px solid rgba(255,255,255,0.7);
     }
 
-    /* Métricas */
     .metric-card {
         background: white;
         border-radius: 20px;
@@ -121,7 +121,6 @@ st.markdown("""
         color: #64748b;
     }
 
-    /* Botões */
     .stButton > button {
         font-family: 'Inter', sans-serif;
         font-weight: 600;
@@ -139,7 +138,6 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    /* Abas */
     .stTabs [data-baseweb="tab-list"] {
         background: rgba(255,255,255,0.4);
         padding: 6px;
@@ -157,7 +155,6 @@ st.markdown("""
         color: white !important;
     }
 
-    /* Inputs */
     .stTextInput > div > div > input {
         border-radius: 14px;
         border: 2px solid #e2e8f0;
@@ -165,7 +162,6 @@ st.markdown("""
         background: white;
     }
 
-    /* Login card */
     .login-card {
         max-width: 420px;
         margin: 8vh auto;
@@ -218,17 +214,20 @@ def inicializar_tabelas():
             status_entrada TEXT,
             hora_saida TIME,
             motivo_saida TEXT,
+            pais_informados BOOLEAN,
             tipo_registro TEXT,
             UNIQUE(nome_aluno, data, tipo_registro)
         )
     ''')
+    # Adiciona colunas ausentes (caso a tabela já exista)
+    cur.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS pais_informados BOOLEAN")
     conn.commit()
     conn.close()
 
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# FUNÇÕES DE NEGÓCIO (mantidas, com melhoria na leitura CSV)
+# FUNÇÕES DE NEGÓCIO
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -301,13 +300,17 @@ def registrar_presenca(nome_estudante):
         st.warning("Registo duplicado.")
     conn.close()
 
-def registrar_saida(nome, motivo, hora_saida):
+def registrar_saida(nome, motivo, pais_informados, hora_saida):
     data_hoje = datetime.now().strftime("%Y-%m-%d")
     conn = conectar_bd()
     cur = conn.cursor()
-    cur.execute("UPDATE registros SET hora_saida = %s, motivo_saida = %s WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (hora_saida, motivo, nome, data_hoje))
+    cur.execute("""
+        UPDATE registros 
+        SET hora_saida = %s, motivo_saida = %s, pais_informados = %s 
+        WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'
+    """, (hora_saida, motivo, pais_informados, nome, data_hoje))
     if cur.rowcount > 0:
-        st.success(f"✅ Saída registada: {nome}")
+        st.success(f"✅ Saída registada: {nome} ({motivo})")
     else:
         st.error("Erro: sem registo de entrada hoje.")
     conn.commit()
@@ -335,12 +338,69 @@ def limpar_todos_registros():
     conn.commit()
     conn.close()
 
+def obter_historico_aluno(nome_aluno):
+    conn = conectar_bd()
+    df = pd.read_sql_query("""
+        SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida, pais_informados
+        FROM registros
+        WHERE nome_aluno = %s
+        ORDER BY data DESC, hora_entrada DESC
+    """, conn, params=[nome_aluno])
+    conn.close()
+    return df
+
 # ------------------------------------------------------------
-# AUTENTICAÇÃO PERSISTENTE (cookies)
+# COMPONENTE QR VIA CÂMERA (funcional em qualquer dispositivo)
+# ------------------------------------------------------------
+def qr_camera_component():
+    html_code = """
+    <div id="qr-container" style="text-align:center;">
+        <button id="start-btn" style="margin:8px; padding:10px 20px; background:#1e4a6b; color:white; border:none; border-radius:10px; font-weight:bold;" onclick="startScanner()">📷 Abrir Câmera</button>
+        <button id="stop-btn" style="display:none; margin:8px; padding:10px 20px; background:#b91c1c; color:white; border:none; border-radius:10px; font-weight:bold;" onclick="stopScanner()">🛑 Parar Câmera</button>
+        <div id="reader" style="width:100%; max-width:350px; margin:auto;"></div>
+        <script src="https://unpkg.com/html5-qrcode"></script>
+        <script>
+            let html5QrCode;
+            function startScanner() {
+                document.getElementById('start-btn').style.display = 'none';
+                document.getElementById('stop-btn').style.display = 'inline-block';
+                html5QrCode = new Html5Qrcode("reader");
+                html5QrCode.start(
+                    { facingMode: "environment" },
+                    { fps: 10, qrbox: { width: 250, height: 250 } },
+                    (decodedText) => {
+                        // Envia para o Streamlit via postMessage
+                        window.parent.postMessage({
+                            type: "qr_result",
+                            text: decodedText
+                        }, "*");
+                        stopScanner();
+                    },
+                    (error) => {}
+                ).catch(err => {
+                    console.error(err);
+                    stopScanner();
+                });
+            }
+            function stopScanner() {
+                if (html5QrCode) {
+                    html5QrCode.stop().then(() => {
+                        document.getElementById('reader').innerHTML = '';
+                        document.getElementById('start-btn').style.display = 'inline-block';
+                        document.getElementById('stop-btn').style.display = 'none';
+                    }).catch(err => console.error(err));
+                }
+            }
+        </script>
+    </div>
+    """
+    components.html(html_code, height=200)
+
+# ------------------------------------------------------------
+# AUTENTICAÇÃO PERSISTENTE
 # ------------------------------------------------------------
 def check_auth():
     if "autenticado" not in st.session_state:
-        # tentar recuperar do cookie
         auth_cookie = cookies.get("auth_token")
         if auth_cookie:
             try:
@@ -392,12 +452,14 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ------------------------------------------------------------
-# INTERFACE PRINCIPAL
+# SISTEMA PRINCIPAL
 # ------------------------------------------------------------
-# Cabeçalho
+# Cabeçalho centralizado
 st.markdown('<div class="header-container">', unsafe_allow_html=True)
 if os.path.exists("logo.png"):
-    st.image("logo.png", width=180, output_format="PNG")
+    st.markdown('<img src="logo.png" class="logo-img">', unsafe_allow_html=True)
+else:
+    st.markdown("### 🏫 Centro Educa Mais Jansen Veloso")
 st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime.now().strftime("%d de %B de %Y")}</p>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
@@ -442,73 +504,103 @@ col_m4.markdown(f'<div class="metric-card" style="border-left-color:#f59e0b;"><d
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Abas
-abas = ["📸 CHECK-IN", "📊 GESTÃO", "🚨 ALERTAS", "⭐ PONTUALIDADE"]
+# Abas (incluindo nova aba Histórico)
+abas = ["📸 CHECK-IN", "📊 GESTÃO", "🚨 ALERTAS", "⭐ PONTUALIDADE", "📈 HISTÓRICO"]
 if st.session_state.eh_admin:
     abas.append("⚙️ MANUTENÇÃO")
 tabs = st.tabs(abas)
 
-# --------------------------- ABA CHECK-IN (com câmera QR) ---------------------------
+# --------------------------- ABA CHECK-IN ---------------------------
 with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📸 Registo de Entrada")
-
-    # --- Componente de leitura de QR Code via câmera (HTML5) ---
-    st.markdown("""
-    <div style="text-align:center; margin-bottom:10px;">
-        <button id="start-qr-btn" style="padding:8px 18px; border-radius:12px; background:#1e4a6b; color:white; border:none; font-weight:600; cursor:pointer;" onclick="startQRScanner()">📷 Abrir Câmera para QR Code</button>
-        <button id="stop-qr-btn" style="display:none; padding:8px 18px; border-radius:12px; background:#b91c1c; color:white; border:none; font-weight:600; cursor:pointer;" onclick="stopQRScanner()">🛑 Parar Câmera</button>
-    </div>
-    <div id="qr-reader" style="width:100%; max-width:400px; margin: 0 auto;"></div>
-    <script src="https://unpkg.com/html5-qrcode"></script>
-    <script>
-        let html5QrCode;
-        function startQRScanner() {
-            document.getElementById('start-qr-btn').style.display = 'none';
-            document.getElementById('stop-qr-btn').style.display = 'inline-block';
-            html5QrCode = new Html5Qrcode("qr-reader");
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                (decodedText) => {
-                    // envia o texto lido para o campo de QR code do Streamlit
-                    const qrInput = window.parent.document.querySelector('input[aria-label="📱 Leitor QR Code"]');
-                    if (qrInput) {
-                        qrInput.value = decodedText;
-                        qrInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                    // para a câmera após leitura bem sucedida
-                    stopQRScanner();
-                },
-                (errorMessage) => {
-                    // erro de leitura, ignorar
+    st.subheader("📸 Registo de Entrada / Saída Antecipada")
+    
+    tab_entrada, tab_saida = st.tabs(["✅ Entrada", "🚪 Saída Antecipada"])
+    
+    with tab_entrada:
+        st.write("**Entrada de estudantes**")
+        # Leitor QR via câmera
+        qr_camera_component()
+        # Campo manual
+        nome = st.text_input("✏️ Nome do aluno (ou cole o QR code lido)", key="entrada_nome")
+        qr_manual = st.text_input("📱 Código QR (se disponível)", key="entrada_qr")
+        if nome:
+            registrar_presenca(nome.strip().upper())
+        if qr_manual:
+            registrar_presenca(qr_manual.strip().upper())
+    
+    with tab_saida:
+        st.write("**Registar saída antecipada**")
+        # Motivos comuns para ensino médio (pesquisados)
+        motivos_saida = [
+            "Consulta médica/odontológica",
+            "Mal-estar ou sintomas de doença",
+            "Compromisso familiar urgente",
+            "Problemas pessoais/emocionais",
+            "Atividade escolar externa autorizada",
+            "Entrevista de emprego/estágio",
+            "Problemas de transporte",
+            "Outro (especificar)"
+        ]
+        motivo = st.selectbox("Motivo da saída", motivos_saida)
+        if motivo == "Outro (especificar)":
+            motivo_outro = st.text_input("Descreva o motivo")
+            motivo_final = motivo_outro if motivo_outro else "Outro"
+        else:
+            motivo_final = motivo
+        
+        pais_informados = st.radio("Os pais/responsáveis foram informados?", ["Sim", "Não"], horizontal=True)
+        pais_bool = (pais_informados == "Sim")
+        
+        # Leitura QR para saída
+        st.write("**Leia o QR Code do aluno para registrar a saída**")
+        qr_camera_component_saida = components.html("""
+        <div id="qr-container-saida" style="text-align:center;">
+            <button id="start-btn-saida" style="margin:8px; padding:10px 20px; background:#1e4a6b; color:white; border:none; border-radius:10px; font-weight:bold;" onclick="startScannerSaida()">📷 Abrir Câmera</button>
+            <button id="stop-btn-saida" style="display:none; margin:8px; padding:10px 20px; background:#b91c1c; color:white; border:none; border-radius:10px; font-weight:bold;" onclick="stopScannerSaida()">🛑 Parar Câmera</button>
+            <div id="reader-saida" style="width:100%; max-width:350px; margin:auto;"></div>
+            <script src="https://unpkg.com/html5-qrcode"></script>
+            <script>
+                let html5QrCodeSaida;
+                function startScannerSaida() {
+                    document.getElementById('start-btn-saida').style.display = 'none';
+                    document.getElementById('stop-btn-saida').style.display = 'inline-block';
+                    html5QrCodeSaida = new Html5Qrcode("reader-saida");
+                    html5QrCodeSaida.start(
+                        { facingMode: "environment" },
+                        { fps: 10, qrbox: { width: 250, height: 250 } },
+                        (decodedText) => {
+                            window.parent.postMessage({
+                                type: "qr_saida",
+                                text: decodedText
+                            }, "*");
+                            stopScannerSaida();
+                        },
+                        (error) => {}
+                    ).catch(err => {
+                        console.error(err);
+                        stopScannerSaida();
+                    });
                 }
-            ).catch(err => {
-                console.log(err);
-                stopQRScanner();
-            });
-        }
-        function stopQRScanner() {
-            if (html5QrCode) {
-                html5QrCode.stop().then(() => {
-                    document.getElementById('qr-reader').innerHTML = '';
-                    document.getElementById('start-qr-btn').style.display = 'inline-block';
-                    document.getElementById('stop-qr-btn').style.display = 'none';
-                }).catch(err => console.log(err));
-            }
-        }
-    </script>
-    """, unsafe_allow_html=True)
-
-    c1, c2 = st.columns(2)
-    with c1:
-        nome = st.text_input("✏️ Nome do aluno", placeholder="Digite o nome completo...")
-    with c2:
-        qr = st.text_input("📱 Leitor QR Code", placeholder="Cursor aqui ou use a câmera acima")
-    if nome:
-        registrar_presenca(nome.strip().upper())
-    if qr:
-        registrar_presenca(qr.strip().upper())
+                function stopScannerSaida() {
+                    if (html5QrCodeSaida) {
+                        html5QrCodeSaida.stop().then(() => {
+                            document.getElementById('reader-saida').innerHTML = '';
+                            document.getElementById('start-btn-saida').style.display = 'inline-block';
+                            document.getElementById('stop-btn-saida').style.display = 'none';
+                        }).catch(err => console.error(err));
+                    }
+                }
+            </script>
+        </div>
+        """, height=200)
+        
+        nome_saida = st.text_input("Nome do aluno (ou cole o QR code)", key="saida_nome")
+        if st.button("Confirmar Saída", key="confirmar_saida"):
+            if nome_saida and motivo_final:
+                registrar_saida(nome_saida.strip().upper(), motivo_final, pais_bool, datetime.now().strftime("%H:%M:%S"))
+            else:
+                st.warning("Preencha o nome e o motivo.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --------------------------- ABA GESTÃO ---------------------------
@@ -526,7 +618,7 @@ with tabs[1]:
     data_str = data_filtro.strftime("%Y-%m-%d")
     conn = conectar_bd()
     params = [data_str]
-    query = """SELECT r.data, a.turma, r.nome_aluno, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida, r.tipo_registro
+    query = """SELECT r.data, a.turma, r.nome_aluno, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida, r.pais_informados, r.tipo_registro
                FROM registros r JOIN alunos a ON r.nome_aluno = a.nome WHERE r.data = %s"""
     if turma_filtro != "Todas":
         query += " AND a.turma = %s"
@@ -542,30 +634,6 @@ with tabs[1]:
         gerar_faltas_para_dia(data_str)
         st.success("Faltas geradas!")
         st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("🚪 Saída Antecipada (Hoje)")
-    conn = conectar_bd()
-    presentes_df = pd.read_sql_query("SELECT nome_aluno FROM registros WHERE data=%s AND tipo_registro='PRESENCA' AND hora_saida IS NULL", conn, params=[hoje_str])
-    conn.close()
-    if not presentes_df.empty:
-        c1, c2, c3, c4 = st.columns([2,2,2,1])
-        with c1:
-            aluno_s = st.selectbox("Aluno", presentes_df['nome_aluno'])
-        with c2:
-            motivo = st.text_input("Motivo")
-        with c3:
-            hora_s = st.time_input("Hora", datetime.now().time())
-        with c4:
-            st.write(""); st.write("")
-            if st.button("✅", use_container_width=True):
-                if motivo:
-                    registrar_saida(aluno_s, motivo, hora_s.strftime("%H:%M:%S"))
-                else:
-                    st.warning("Informe o motivo.")
-    else:
-        st.info("Nenhum aluno presente sem saída registada.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --------------------------- ABA ALERTAS ---------------------------
@@ -587,7 +655,7 @@ with tabs[2]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⚠️ Saídas Antecipadas (5 dias)")
     if dias_uteis:
-        df_saidas_alerta = pd.read_sql_query("SELECT nome_aluno, COUNT(DISTINCT data) as dias FROM registros WHERE data IN %s AND tipo_registro='PRESENCA' AND hora_saida<'17:00:00' GROUP BY nome_aluno HAVING COUNT(DISTINCT data)=5", conn, params=[tuple(dias_uteis)])
+        df_saidas_alerta = pd.read_sql_query("SELECT nome_aluno, COUNT(DISTINCT data) as dias FROM registros WHERE data IN %s AND tipo_registro='PRESENCA' AND hora_saida IS NOT NULL AND hora_saida < '17:00:00' GROUP BY nome_aluno HAVING COUNT(DISTINCT data) = 5", conn, params=[tuple(dias_uteis)])
         if not df_saidas_alerta.empty:
             st.warning(f"{len(df_saidas_alerta)} alunos com saídas antes das 17h")
             st.dataframe(df_saidas_alerta, hide_index=True)
@@ -611,9 +679,53 @@ with tabs[3]:
         st.info("Ainda não há registos de entrada antes das 07:15.")
     st.markdown('</div>', unsafe_allow_html=True)
 
+# --------------------------- ABA HISTÓRICO (NOVA) ---------------------------
+with tabs[4]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📈 Histórico Individual do Aluno")
+    todos_alunos = sorted(df_alunos['nome'].tolist())
+    aluno_selecionado = st.selectbox("Selecione o aluno", todos_alunos)
+    if aluno_selecionado:
+        df_hist = obter_historico_aluno(aluno_selecionado)
+        if not df_hist.empty:
+            st.write(f"**Registos de {aluno_selecionado}**")
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
+            
+            # Estatísticas resumidas
+            total_faltas = len(df_hist[df_hist['tipo_registro'] == 'FALTA'])
+            total_atrasos = len(df_hist[(df_hist['tipo_registro'] == 'PRESENCA') & (df_hist['status_entrada'] == 'ATRASO')])
+            total_saidas = len(df_hist[df_hist['hora_saida'].notna()])
+            
+            col_e1, col_e2, col_e3 = st.columns(3)
+            col_e1.metric("Total de Faltas", total_faltas)
+            col_e2.metric("Total de Atrasos", total_atrasos)
+            col_e3.metric("Saídas Antecipadas", total_saidas)
+            
+            # Gráfico de presenças/faltas ao longo do tempo (mensal)
+            if len(df_hist) > 0:
+                df_hist['data'] = pd.to_datetime(df_hist['data'])
+                df_hist['mês'] = df_hist['data'].dt.to_period('M')
+                # Contar presenças e faltas por mês
+                presencas_mes = df_hist[df_hist['tipo_registro'] == 'PRESENCA'].groupby('mês').size().reset_index(name='Presenças')
+                faltas_mes = df_hist[df_hist['tipo_registro'] == 'FALTA'].groupby('mês').size().reset_index(name='Faltas')
+                if not presencas_mes.empty or not faltas_mes.empty:
+                    # Mesclar
+                    df_mensal = pd.merge(presencas_mes, faltas_mes, on='mês', how='outer').fillna(0)
+                    df_mensal['mês'] = df_mensal['mês'].astype(str)
+                    fig = px.bar(df_mensal, x='mês', y=['Presenças', 'Faltas'], 
+                                 title=f"Presenças e Faltas por Mês - {aluno_selecionado}",
+                                 labels={'value': 'Quantidade', 'mês': 'Mês'},
+                                 barmode='group', color_discrete_sequence=['#10b981', '#ef4444'])
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Sem dados históricos suficientes.")
+        else:
+            st.info("Nenhum registo encontrado para este aluno.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # --------------------------- MANUTENÇÃO (admin) ---------------------------
 if st.session_state.eh_admin:
-    with tabs[4]:
+    with tabs[5 if len(abas) > 5 else 4]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("⚙️ Importar CSV")
         uploaded_admin = st.file_uploader("Escolha o ficheiro CSV", type=["csv"], key="admin_csv")
