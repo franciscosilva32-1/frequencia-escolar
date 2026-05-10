@@ -15,22 +15,19 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
-# CSS PROFISSIONAL MELHORADO
+# CSS PROFISSIONAL
 # ------------------------------------------------------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@600;700;800&display=swap');
 
-    /* Fundo geral */
     .stApp {
         background: linear-gradient(160deg, #f8fafc 0%, #eef2f6 50%, #e2e8f0 100%);
     }
-
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Cartão principal */
     .card {
         background: rgba(255,255,255,0.9);
         backdrop-filter: blur(10px);
@@ -45,7 +42,6 @@ st.markdown("""
         box-shadow: 0 12px 40px rgba(0,0,0,0.12);
     }
 
-    /* Título principal */
     .main-title {
         font-family: 'Montserrat', sans-serif;
         font-size: 2.8rem;
@@ -64,20 +60,6 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
 
-    /* Logo */
-    .logo-container {
-        text-align: center;
-        margin-bottom: 0.5rem;
-    }
-    .logo-container img {
-        max-width: 160px;
-        border-radius: 20px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        background: white;
-        padding: 8px;
-    }
-
-    /* Métricas */
     .metric-card {
         background: white;
         border-radius: 18px;
@@ -101,7 +83,6 @@ st.markdown("""
         color: #64748b;
     }
 
-    /* Botões */
     .stButton > button {
         font-family: 'Inter', sans-serif;
         font-weight: 600;
@@ -120,16 +101,11 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* Botão perigo */
     .danger-button > button {
         background: linear-gradient(135deg, #b91c1c, #dc2626) !important;
         box-shadow: 0 4px 14px rgba(220,38,38,0.3) !important;
     }
-    .danger-button > button:hover {
-        background: linear-gradient(135deg, #dc2626, #b91c1c) !important;
-    }
 
-    /* Abas */
     .stTabs [data-baseweb="tab-list"] {
         gap: 12px;
         background: rgba(241,245,249,0.8);
@@ -147,7 +123,6 @@ st.markdown("""
         color: white !important;
     }
 
-    /* Inputs */
     .stTextInput > div > div > input {
         border-radius: 12px;
         border: 2px solid #e2e8f0;
@@ -155,7 +130,6 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
 
-    /* Login */
     .login-card {
         max-width: 440px;
         margin: 80px auto;
@@ -172,11 +146,6 @@ st.markdown("""
         color: #0f2b4a;
         margin: 1rem 0 1.5rem;
     }
-
-    /* Expander */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -185,6 +154,7 @@ st.markdown("""
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
+SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")  # Nova senha mestra
 
 if not DATABASE_URL:
     st.error("DATABASE_URL não configurada.")
@@ -221,7 +191,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# FUNÇÕES DE NEGÓCIO
+# FUNÇÕES DE NEGÓCIO (inalteradas, exceto a de limpar)
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -322,23 +292,28 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# TELA DE LOGIN
+# TELA DE LOGIN (comum a todos)
 # ------------------------------------------------------------
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
+    st.session_state.eh_admin = False
 
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    # Logo
     if os.path.exists("logo.png"):
         st.image("logo.png", width=140)
     else:
         st.markdown("🏫")
     st.markdown('<div class="login-title">Centro Educa Mais<br>Jansen Veloso</div>', unsafe_allow_html=True)
-    senha = st.text_input("🔐 Senha de Operador", type="password")
+    senha = st.text_input("🔐 Senha de acesso", type="password")
     if st.button("🔓 Entrar", use_container_width=True):
-        if senha == SENHA_OPERADOR:
+        if senha == SENHA_ADMIN:
             st.session_state.autenticado = True
+            st.session_state.eh_admin = True
+            st.rerun()
+        elif senha == SENHA_OPERADOR:
+            st.session_state.autenticado = True
+            st.session_state.eh_admin = False
             st.rerun()
         else:
             st.error("Senha incorreta!")
@@ -346,9 +321,9 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ------------------------------------------------------------
-# SISTEMA PRINCIPAL
+# SISTEMA PRINCIPAL (após login)
 # ------------------------------------------------------------
-# Logo e cabeçalho
+# Cabeçalho
 col_logo, col_tit = st.columns([1, 5])
 with col_logo:
     if os.path.exists("logo.png"):
@@ -361,18 +336,29 @@ col_h1, col_h2 = st.columns([4, 1])
 with col_h2:
     if st.button("🚪 Sair"):
         st.session_state.autenticado = False
+        st.session_state.eh_admin = False
         st.rerun()
 
-# Verificar alunos
+# Verificar se há alunos
 df_alunos = carregar_alunos()
 if df_alunos.empty:
-    st.warning("Nenhum aluno encontrado. Faça upload do CSV.")
-    uploaded = st.file_uploader("Escolha o ficheiro CSV", type=["csv"])
-    if uploaded:
-        if importar_csv_para_bd(uploaded):
-            st.success("Alunos importados! Recarregue a página.")
-            st.stop()
-    st.stop()
+    if st.session_state.eh_admin:
+        st.warning("⚠️ Base de dados vazia. Como administrador, pode importar o CSV agora.")
+        uploaded = st.file_uploader("Escolha o ficheiro CSV", type=["csv"])
+        if uploaded is not None:
+            if importar_csv_para_bd(uploaded):
+                st.success("Alunos importados com sucesso! Recarregue a página.")
+                st.stop()
+    else:
+        st.error("🚫 Sistema indisponível. Contacte o administrador.")
+        st.stop()
+else:
+    # Se há alunos, o admin ainda pode reimportar? Vamos deixar apenas na aba Manutenção.
+    pass
+
+# Se não há alunos e é admin, já tratamos; se há alunos, continua normal.
+if df_alunos.empty:
+    st.stop()  # impede o resto se ainda estiver vazio e for admin (após upload, recarrega)
 
 # Métricas
 hoje_str = datetime.now().strftime("%Y-%m-%d")
@@ -391,10 +377,15 @@ col_m4.markdown(f'<div class="metric-card" style="border-left-color:#f59e0b;"><d
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Abas
-aba1, aba2, aba3, aba4, aba5 = st.tabs(["📸 CHECK-IN", "📊 GESTÃO", "🚨 ALERTAS", "⭐ PONTUALIDADE", "⚙️ MANUTENÇÃO"])
+# Abas – a aba Manutenção só aparece para admin
+abas = ["📸 CHECK-IN", "📊 GESTÃO", "🚨 ALERTAS", "⭐ PONTUALIDADE"]
+if st.session_state.eh_admin:
+    abas.append("⚙️ MANUTENÇÃO")
 
-with aba1:
+tabs = st.tabs(abas)
+
+# CHECK-IN
+with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("📸 Registo de Entrada")
     c1, c2 = st.columns(2)
@@ -408,7 +399,8 @@ with aba1:
             registrar_presenca(qr.strip().upper())
     st.markdown('</div>', unsafe_allow_html=True)
 
-with aba2:
+# GESTÃO
+with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("📊 Frequência e Saídas")
     c1, c2, c3 = st.columns(3)
@@ -464,7 +456,8 @@ with aba2:
         st.info("Nenhum aluno presente sem saída.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-with aba3:
+# ALERTAS
+with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
     dias_uteis.sort()
@@ -491,7 +484,8 @@ with aba3:
     st.markdown('</div>', unsafe_allow_html=True)
     conn.close()
 
-with aba4:
+# PONTUALIDADE
+with tabs[3]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⭐ Pontualidade (antes 07:15)")
     conn = conectar_bd()
@@ -505,17 +499,22 @@ with aba4:
         st.info("Nenhum registo.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-with aba5:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⚙️ Limpeza de Registos de Frequência")
-    st.warning("Atenção! Esta ação apaga **todos** os registos de presença/faltas. Os alunos permanecem guardados.")
-    with st.expander("🔐 Confirmar com senha para limpar"):
-        senha_confirm = st.text_input("Senha de operador", type="password", key="senha_limpar")
-        if st.button("🗑️ Apagar todos os registos", key="btn_limpar", help="Requer senha"):
-            if senha_confirm == SENHA_OPERADOR:
+# MANUTENÇÃO (só admin)
+if st.session_state.eh_admin:
+    with tabs[4]:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("⚙️ Importar CSV (admin)")
+        uploaded_admin = st.file_uploader("Substituir lista de alunos", type=["csv"])
+        if uploaded_admin is not None:
+            if importar_csv_para_bd(uploaded_admin):
+                st.success("Alunos atualizados!")
+        st.subheader("🗑️ Limpar todos os registos de frequência")
+        senha_conf = st.text_input("Confirme com a senha de administrador", type="password")
+        if st.button("Apagar todos os registos"):
+            if senha_conf == SENHA_ADMIN:
                 limpar_todos_registros()
-                st.success("Todos os registos foram removidos. Pode recomeçar os testes.")
+                st.success("Registos apagados. Pode recomeçar os testes.")
                 st.balloons()
             else:
                 st.error("Senha incorreta!")
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
