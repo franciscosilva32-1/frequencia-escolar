@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
-# COOKIES PARA SESSÃO PERSISTENTE
+# COOKIES – SESSÃO PERSISTENTE
 # ------------------------------------------------------------
 cookies = CookieManager()
 if not cookies.ready():
@@ -41,7 +41,6 @@ st.markdown("""
         --success: #27ae60;
         --danger: #e74c3c;
         --warning: #f1c40f;
-        --bg: #f0f4f8;
     }
 
     .stApp {
@@ -49,12 +48,11 @@ st.markdown("""
     }
     #MainMenu, footer, header {visibility: hidden;}
 
-    /* Cabeçalho com logo centralizada */
+    /* Cabeçalho */
     .header-container {
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
         padding: 1rem 0 0.5rem;
     }
     .logo-img {
@@ -63,25 +61,21 @@ st.markdown("""
         min-width: 120px;
         margin-bottom: 0.5rem;
     }
-
     .main-title {
         font-family: 'Inter', sans-serif;
         font-weight: 800;
         font-size: clamp(1.8rem, 6vw, 2.8rem);
         color: var(--primary);
-        text-align: center;
         margin: 0;
-        letter-spacing: -0.5px;
     }
     .sub-title {
         font-family: 'Inter', sans-serif;
         font-size: 0.9rem;
         color: #5f6b7a;
-        text-align: center;
         margin-bottom: 1.5rem;
     }
 
-    /* Cards com vidro */
+    /* Cards */
     .card {
         background: rgba(255,255,255,0.7);
         backdrop-filter: blur(10px);
@@ -107,10 +101,6 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
         border-bottom: 4px solid var(--accent);
-        transition: transform 0.2s;
-    }
-    .metric-item:hover {
-        transform: translateY(-2px);
     }
     .metric-value {
         font-family: 'Inter', sans-serif;
@@ -125,7 +115,6 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: #5f6b7a;
-        margin-top: 0.2rem;
     }
 
     /* Botões */
@@ -139,7 +128,6 @@ st.markdown("""
         padding: 0.6rem 1.5rem;
         box-shadow: 0 4px 10px rgba(31, 74, 107, 0.2);
         transition: all 0.3s;
-        letter-spacing: 0.3px;
     }
     .stButton > button:hover {
         background: linear-gradient(135deg, var(--primary), var(--primary-light));
@@ -160,7 +148,6 @@ st.markdown("""
         font-size: 0.9rem;
         border-radius: 14px;
         padding: 8px 16px;
-        transition: all 0.2s;
     }
     .stTabs [aria-selected="true"] {
         background: var(--primary) !important;
@@ -175,21 +162,6 @@ st.markdown("""
         padding: 0.5rem 0.8rem;
         background: white;
         font-family: 'Inter', sans-serif;
-    }
-
-    /* QR code scanner container */
-    .qr-scanner {
-        background: #f8fafc;
-        border-radius: 16px;
-        padding: 0.5rem;
-        margin: 0.5rem 0;
-        border: 2px dashed #cbd5e1;
-        text-align: center;
-    }
-    .qr-scanner button {
-        margin: 5px !important;
-        font-size: 0.9rem;
-        padding: 8px 16px;
     }
 
     /* Login */
@@ -211,11 +183,19 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
 
-    /* Responsividade */
+    /* QR scanner */
+    .qr-scanner {
+        background: #f8fafc;
+        border-radius: 16px;
+        padding: 0.5rem;
+        margin: 0.5rem 0;
+        border: 2px dashed #cbd5e1;
+        text-align: center;
+    }
+
     @media (max-width: 768px) {
         .metric-value { font-size: 1.5rem; }
         .stButton > button { width: 100%; }
-        .stTabs [data-baseweb="tab"] { padding: 6px 12px; font-size: 0.8rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -264,7 +244,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# FUNÇÕES DE NEGÓCIO
+# FUNÇÕES DE NEGÓCIO (com parâmetros de horários personalizados)
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -305,53 +285,66 @@ def importar_csv_para_bd(arquivo_csv):
     conn.close()
     return True
 
-def registrar_presenca(nome_estudante):
+def registrar_presenca(nome_estudante, data_registro, hora_limite_entrada):
+    """Registra presença considerando a data e o horário limite fornecidos."""
     agora = datetime.now()
-    data_hoje = agora.strftime("%Y-%m-%d")
     hora_atual = agora.strftime("%H:%M:%S")
-    limite = agora.replace(hour=7, minute=30, second=0)
-    status = "PRESENTE" if agora <= limite else "ATRASO"
+    status = "PRESENTE" if agora.time() <= hora_limite_entrada else "ATRASO"
     conn = conectar_bd()
     cur = conn.cursor()
     cur.execute("SELECT nome FROM alunos WHERE nome = %s", (nome_estudante,))
     if not cur.fetchone():
         st.error(f"❌ Aluno não encontrado: {nome_estudante}")
         conn.close()
-        return
-    cur.execute("SELECT * FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (nome_estudante, data_hoje))
+        return False
+    cur.execute("SELECT * FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'",
+                (nome_estudante, data_registro))
     if cur.fetchone():
-        st.warning(f"⚠️ {nome_estudante} já registou entrada hoje.")
+        st.warning(f"⚠️ {nome_estudante} já registou entrada neste dia.")
         conn.close()
-        return
-    cur.execute("DELETE FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (nome_estudante, data_hoje))
+        return False
+    cur.execute("DELETE FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'FALTA'",
+                (nome_estudante, data_registro))
     conn.commit()
     try:
-        cur.execute("INSERT INTO registros (nome_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')", (nome_estudante, data_hoje, hora_atual, status))
+        cur.execute("INSERT INTO registros (nome_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
+                    (nome_estudante, data_registro, hora_atual, status))
         conn.commit()
         if status == "PRESENTE":
             st.success(f"✅ {nome_estudante} registado às {hora_atual}")
         else:
             st.warning(f"⏰ Atraso: {nome_estudante} às {hora_atual}")
+        return True
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
         st.warning("Registo duplicado.")
-    conn.close()
+        return False
+    finally:
+        conn.close()
 
-def registrar_saida(nome, motivo, pais_informados, hora_saida):
-    data_hoje = datetime.now().strftime("%Y-%m-%d")
+def registrar_saida(nome, motivo, pais_informados, data_registro, hora_saida, hora_limite_saida):
+    """Registra saída antecipada se antes do horário limite de saída."""
     conn = conectar_bd()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE registros 
-        SET hora_saida = %s, motivo_saida = %s, pais_informados = %s 
-        WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'
-    """, (hora_saida, motivo, pais_informados, nome, data_hoje))
-    if cur.rowcount > 0:
-        st.success(f"✅ Saída de {nome} registada")
+    # Consideramos saída antecipada apenas se a hora atual for menor que o limite
+    hora_atual = datetime.now().time()
+    if hora_atual < hora_limite_saida:
+        cur.execute("""
+            UPDATE registros 
+            SET hora_saida = %s, motivo_saida = %s, pais_informados = %s 
+            WHERE nome_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'
+        """, (hora_saida, motivo, pais_informados, nome, data_registro))
+        if cur.rowcount > 0:
+            st.success(f"✅ Saída de {nome} registada")
+            conn.commit()
+            conn.close()
+            return True
+        else:
+            st.error("Erro: sem registo de entrada hoje.")
     else:
-        st.error("Erro: sem registo de entrada hoje.")
-    conn.commit()
+        st.info("Saída dentro do horário normal – não é considerada antecipada.")
     conn.close()
+    return False
 
 def gerar_faltas_para_dia(data_str):
     conn = conectar_bd()
@@ -359,10 +352,12 @@ def gerar_faltas_para_dia(data_str):
     cur.execute("SELECT nome FROM alunos")
     alunos = [row[0] for row in cur.fetchall()]
     for aluno in alunos:
-        cur.execute("SELECT tipo_registro FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro IN ('PRESENCA','FALTA')", (aluno, data_str))
+        cur.execute("SELECT tipo_registro FROM registros WHERE nome_aluno = %s AND data = %s AND tipo_registro IN ('PRESENCA','FALTA')",
+                    (aluno, data_str))
         if not cur.fetchone():
             try:
-                cur.execute("INSERT INTO registros (nome_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')", (aluno, data_str))
+                cur.execute("INSERT INTO registros (nome_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')",
+                            (aluno, data_str))
             except psycopg2.errors.UniqueViolation:
                 conn.rollback()
     conn.commit()
@@ -387,51 +382,50 @@ def obter_historico_aluno(nome_aluno):
     return df
 
 # ------------------------------------------------------------
-# COMPONENTE QR (leitor via câmera, discreto)
+# COMPONENTE LEITOR QR (funcional e confiável)
 # ------------------------------------------------------------
-def qr_reader_component(placeholder_id, button_label="📷 Ler QR Code"):
-    html = f"""
-    <div id="qr-{placeholder_id}" class="qr-scanner">
-        <button id="start-{placeholder_id}" onclick="startQr_{placeholder_id}()">{button_label}</button>
-        <button id="stop-{placeholder_id}" style="display:none;" onclick="stopQr_{placeholder_id}()">🛑 Parar</button>
-        <div id="reader-{placeholder_id}" style="width:100%; max-width:300px; margin:auto;"></div>
+def qr_scanner(key_prefix):
+    """Retorna o texto lido pelo QR code ou None."""
+    # Usamos um componente HTML que chama Streamlit.setComponentValue
+    html_code = f"""
+    <div id="qr-{key_prefix}" class="qr-scanner">
+        <button id="start-{key_prefix}" onclick="startScanner('{key_prefix}')">📷 Abrir Câmera</button>
+        <button id="stop-{key_prefix}" style="display:none;" onclick="stopScanner('{key_prefix}')">🛑 Parar</button>
+        <div id="reader-{key_prefix}" style="width:100%; max-width:300px; margin:auto;"></div>
     </div>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
-        let scanner_{placeholder_id};
-        function startQr_{placeholder_id}() {{
-            document.getElementById('start-{placeholder_id}').style.display = 'none';
-            document.getElementById('stop-{placeholder_id}').style.display = 'inline-block';
-            scanner_{placeholder_id} = new Html5Qrcode("reader-{placeholder_id}");
-            scanner_{placeholder_id}.start(
+        let scanners = {{}};
+        function startScanner(id) {{
+            document.getElementById('start-' + id).style.display = 'none';
+            document.getElementById('stop-' + id).style.display = 'inline-block';
+            scanners[id] = new Html5Qrcode("reader-" + id);
+            scanners[id].start(
                 {{ facingMode: "environment" }},
-                {{ fps: 10, qrbox: {{ width: 200, height: 200 }} }},
+                {{ fps: 10, qrbox: {{ width: 250, height: 250 }} }},
                 (decodedText) => {{
-                    window.parent.postMessage({{
-                        type: "qr_result",
-                        source: "{placeholder_id}",
-                        text: decodedText
-                    }}, "*");
-                    stopQr_{placeholder_id}();
+                    // Enviar o texto para o Streamlit
+                    Streamlit.setComponentValue(decodedText);
+                    stopScanner(id);
                 }},
                 (error) => {{}}
             ).catch(err => {{
-                alert("Erro ao acessar a câmera. Verifique se as permissões estão habilitadas.");
-                stopQr_{placeholder_id}();
+                alert("Erro ao acessar a câmera. Verifique as permissões.");
+                stopScanner(id);
             }});
         }}
-        function stopQr_{placeholder_id}() {{
-            if (scanner_{placeholder_id}) {{
-                scanner_{placeholder_id}.stop().then(() => {{
-                    document.getElementById('reader-{placeholder_id}').innerHTML = '';
-                    document.getElementById('start-{placeholder_id}').style.display = 'inline-block';
-                    document.getElementById('stop-{placeholder_id}').style.display = 'none';
+        function stopScanner(id) {{
+            if (scanners[id]) {{
+                scanners[id].stop().then(() => {{
+                    document.getElementById('reader-' + id).innerHTML = '';
+                    document.getElementById('start-' + id).style.display = 'inline-block';
+                    document.getElementById('stop-' + id).style.display = 'none';
                 }}).catch(err => console.error(err));
             }}
         }}
     </script>
     """
-    return components.html(html, height=160)
+    return components.html(html_code, height=220)
 
 # ------------------------------------------------------------
 # AUTENTICAÇÃO PERSISTENTE
@@ -491,7 +485,7 @@ if not st.session_state.autenticado:
 # ------------------------------------------------------------
 # INTERFACE PRINCIPAL
 # ------------------------------------------------------------
-# Cabeçalho com logo
+# Cabeçalho
 st.markdown('<div class="header-container">', unsafe_allow_html=True)
 if os.path.exists("logo.png"):
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -510,7 +504,7 @@ with col_logout2:
         clear_auth()
         st.rerun()
 
-# Verificar dados
+# Verificar alunos
 df_alunos = carregar_alunos()
 if df_alunos.empty:
     if st.session_state.eh_admin:
@@ -527,47 +521,77 @@ if df_alunos.empty:
 if df_alunos.empty:
     st.stop()
 
-# Métricas (cards modernos)
+# Métricas rápidas (baseadas na data de hoje, mas a aba de registro pode usar outra data)
 hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
 total = len(df_alunos)
-presentes = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
-faltas = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='FALTA'", conn, params=[hoje_str]).iloc[0,0]
-atrasos = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
+presentes_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
+faltas_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='FALTA'", conn, params=[hoje_str]).iloc[0,0]
+atrasos_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
 conn.close()
 
 st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
 st.markdown(f'<div class="metric-item"><div class="metric-value">{total}</div><div class="metric-label">📋 Alunos</div></div>', unsafe_allow_html=True)
-st.markdown(f'<div class="metric-item" style="border-bottom-color: #27ae60;"><div class="metric-value">{presentes}</div><div class="metric-label">✅ Presentes</div></div>', unsafe_allow_html=True)
-st.markdown(f'<div class="metric-item" style="border-bottom-color: #e74c3c;"><div class="metric-value">{faltas}</div><div class="metric-label">❌ Faltas</div></div>', unsafe_allow_html=True)
-st.markdown(f'<div class="metric-item" style="border-bottom-color: #f39c12;"><div class="metric-value">{atrasos}</div><div class="metric-label">⏰ Atrasos</div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="metric-item" style="border-bottom-color: #27ae60;"><div class="metric-value">{presentes_hoje}</div><div class="metric-label">✅ Presentes</div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="metric-item" style="border-bottom-color: #e74c3c;"><div class="metric-value">{faltas_hoje}</div><div class="metric-label">❌ Faltas</div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="metric-item" style="border-bottom-color: #f39c12;"><div class="metric-value">{atrasos_hoje}</div><div class="metric-label">⏰ Atrasos</div></div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Abas
-abas = ["📸 Check-in", "📊 Gestão", "🚨 Alertas", "⭐ Pontualidade", "📈 Histórico"]
+# ------------------------------------------------------------
+# ABAS
+# ------------------------------------------------------------
+abas = ["📝 Registro do Dia", "📊 Gestão", "🚨 Alertas", "⭐ Pontualidade", "📈 Histórico"]
 if st.session_state.eh_admin:
     abas.append("⚙️ Manutenção")
 tabs = st.tabs(abas)
 
-# CHECK-IN
+# ============================ ABA 0: REGISTRO DO DIA ============================
 with tabs[0]:
-    tab1, tab2 = st.tabs(["Entrada", "Saída Antecipada"])
-    with tab1:
-        st.write("**Entrada de estudante**")
-        # QR reader
-        qr_reader_component("entrada", "📷 Abrir câmera")
-        colA, colB = st.columns(2)
-        with colA:
-            nome_entrada = st.text_input("Nome do aluno", key="in_nome", placeholder="Digite ou leia QR code")
-        with colB:
-            qr_entrada = st.text_input("QR code manual", key="in_qr", placeholder="Código lido")
-        if nome_entrada:
-            registrar_presenca(nome_entrada.strip().upper())
-        if qr_entrada:
-            registrar_presenca(qr_entrada.strip().upper())
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⚙️ Configuração do Dia")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        data_registro = st.date_input("Data do registro", datetime.now(), key="data_registro")
+    # Buscar configuração prévia ou definir defaults
+    if "config_dia" not in st.session_state:
+        st.session_state.config_dia = {}
+    data_str_config = data_registro.strftime("%Y-%m-%d")
+    if data_str_config not in st.session_state.config_dia:
+        st.session_state.config_dia[data_str_config] = {
+            "hora_entrada": datetime.strptime("07:30", "%H:%M").time(),
+            "hora_saida": datetime.strptime("17:00", "%H:%M").time()
+        }
+    with col2:
+        hora_entrada = st.time_input("Horário de entrada (limite)", st.session_state.config_dia[data_str_config]["hora_entrada"], key="hora_entrada")
+    with col3:
+        hora_saida = st.time_input("Horário normal de saída", st.session_state.config_dia[data_str_config]["hora_saida"], key="hora_saida")
+    # Atualizar sessão
+    st.session_state.config_dia[data_str_config]["hora_entrada"] = hora_entrada
+    st.session_state.config_dia[data_str_config]["hora_saida"] = hora_saida
 
-    with tab2:
-        st.write("**Saída antecipada**")
+    st.markdown("---")
+    tab_entrada, tab_saida = st.tabs(["✅ Entrada", "🚪 Saída Antecipada"])
+
+    # ---------- ENTRADA ----------
+    with tab_entrada:
+        st.write("**Registar entrada de estudante**")
+        # Leitor QR para entrada
+        qr_entrada = qr_scanner("entrada")
+        # Campo manual (também recebe leitura infravermelha)
+        manual_entrada = st.text_input("Nome do aluno (ou leitura do código)", key="manual_entrada")
+        # Processar QR
+        if qr_entrada:
+            registrar_presenca(qr_entrada.strip().upper(), data_str_config, hora_entrada)
+            # Após registrar, podemos limpar o scanner recarregando? Vamos forçar um reset de estado.
+            st.experimental_rerun()  # Recarrega para um novo scan
+        # Processar manual
+        if manual_entrada:
+            registrar_presenca(manual_entrada.strip().upper(), data_str_config, hora_entrada)
+            st.experimental_rerun()
+
+    # ---------- SAÍDA ----------
+    with tab_saida:
+        st.write("**Registar saída antecipada**")
         motivos = [
             "Consulta médica/odontológica",
             "Mal-estar/sintomas de doença",
@@ -578,89 +602,106 @@ with tabs[0]:
             "Problemas de transporte",
             "Outro"
         ]
-        motivo = st.selectbox("Motivo", motivos)
+        motivo = st.selectbox("Motivo", motivos, key="motivo_saida")
         if motivo == "Outro":
             motivo = st.text_input("Especifique", key="motivo_outro")
-        pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True)
-        qr_reader_component("saida", "📷 Ler QR para saída")
-        nome_saida = st.text_input("Nome do aluno", key="out_nome", placeholder="Nome ou QR code")
-        if st.button("Registrar Saída", key="btn_saida"):
-            if nome_saida and motivo:
-                registrar_saida(nome_saida.strip().upper(), motivo, pais == "Sim", datetime.now().strftime("%H:%M:%S"))
-            else:
-                st.warning("Preencha o nome e o motivo.")
+        pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida")
+        # Leitor QR para saída
+        qr_saida = qr_scanner("saida")
+        manual_saida = st.text_input("Nome do aluno (ou leitura do código)", key="manual_saida")
+        if qr_saida:
+            if registrar_saida(qr_saida.strip().upper(), motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida):
+                st.experimental_rerun()
+        if manual_saida:
+            if registrar_saida(manual_saida.strip().upper(), motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida):
+                st.experimental_rerun()
 
-# GESTÃO
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ============================ ABA 1: GESTÃO ============================
 with tabs[1]:
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        data_filtro = st.date_input("Data", datetime.now())
-    with c2:
-        turmas = ["Todas"] + sorted(df_alunos['turma'].unique())
-        turma_filtro = st.selectbox("Turma", turmas)
-    with c3:
-        busca = st.text_input("Buscar aluno")
-    data_str = data_filtro.strftime("%Y-%m-%d")
-    conn = conectar_bd()
-    params = [data_str]
-    query = """SELECT r.data, a.turma, r.nome_aluno, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida, r.pais_informados, r.tipo_registro
-               FROM registros r JOIN alunos a ON r.nome_aluno = a.nome WHERE r.data = %s"""
-    if turma_filtro != "Todas":
-        query += " AND a.turma = %s"
-        params.append(turma_filtro)
-    if busca:
-        query += " AND r.nome_aluno ILIKE %s"
-        params.append(f"%{busca}%")
-    query += " ORDER BY a.turma, r.nome_aluno"
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    if st.button("Gerar faltas para o dia"):
-        gerar_faltas_para_dia(data_str)
-        st.success("Faltas geradas.")
-        st.rerun()
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("📊 Consulta de Frequência")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
+        with c2:
+            turmas = ["Todas"] + sorted(df_alunos['turma'].unique())
+            turma_filtro = st.selectbox("Turma", turmas, key="turma_filtro")
+        with c3:
+            busca = st.text_input("Buscar aluno", key="busca")
+        data_str_filtro = data_filtro.strftime("%Y-%m-%d")
+        conn = conectar_bd()
+        params = [data_str_filtro]
+        query = """SELECT r.data, a.turma, r.nome_aluno, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida, r.pais_informados, r.tipo_registro
+                   FROM registros r JOIN alunos a ON r.nome_aluno = a.nome WHERE r.data = %s"""
+        if turma_filtro != "Todas":
+            query += " AND a.turma = %s"
+            params.append(turma_filtro)
+        if busca:
+            query += " AND r.nome_aluno ILIKE %s"
+            params.append(f"%{busca}%")
+        query += " ORDER BY a.turma, r.nome_aluno"
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        if st.button("🔄 Gerar faltas para o dia"):
+            gerar_faltas_para_dia(data_str_filtro)
+            st.success("Faltas geradas!")
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# ALERTAS
+# ============================ ABA 2: ALERTAS ============================
 with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
     dias_uteis.sort()
     conn = conectar_bd()
-    st.subheader("Alunos sem presença (5 dias)")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("🚨 Alunos sem presença nos últimos 5 dias úteis")
     if dias_uteis:
-        df_faltas_alerta = pd.read_sql_query("SELECT a.nome, a.turma FROM alunos a WHERE a.nome NOT IN (SELECT DISTINCT nome_aluno FROM registros WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
-        if not df_faltas_alerta.empty:
-            st.error(f"{len(df_faltas_alerta)} alunos")
-            st.dataframe(df_faltas_alerta, hide_index=True)
+        df_risco = pd.read_sql_query("SELECT a.nome, a.turma FROM alunos a WHERE a.nome NOT IN (SELECT DISTINCT nome_aluno FROM registros WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
+        if not df_risco.empty:
+            st.error(f"{len(df_risco)} alunos em risco de abandono")
+            st.dataframe(df_risco, hide_index=True)
         else:
-            st.success("Nenhum.")
-    st.subheader("Saídas antecipadas (5 dias)")
+            st.success("Nenhum aluno nesta situação.")
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⚠️ Saídas antecipadas (últimos 5 dias)")
     if dias_uteis:
-        df_saidas_alerta = pd.read_sql_query("SELECT nome_aluno, COUNT(DISTINCT data) as dias FROM registros WHERE data IN %s AND tipo_registro='PRESENCA' AND hora_saida IS NOT NULL AND hora_saida < '17:00:00' GROUP BY nome_aluno HAVING COUNT(DISTINCT data) = 5", conn, params=[tuple(dias_uteis)])
-        if not df_saidas_alerta.empty:
-            st.warning(f"{len(df_saidas_alerta)} alunos")
-            st.dataframe(df_saidas_alerta, hide_index=True)
+        df_saidas_risco = pd.read_sql_query("SELECT nome_aluno, COUNT(DISTINCT data) as dias FROM registros WHERE data IN %s AND tipo_registro='PRESENCA' AND hora_saida IS NOT NULL AND hora_saida < '17:00:00' GROUP BY nome_aluno HAVING COUNT(DISTINCT data) = 5", conn, params=[tuple(dias_uteis)])
+        if not df_saidas_risco.empty:
+            st.warning(f"{len(df_saidas_risco)} alunos com saídas em todos os dias")
+            st.dataframe(df_saidas_risco, hide_index=True)
         else:
             st.info("Nenhum.")
+    st.markdown('</div>', unsafe_allow_html=True)
     conn.close()
 
-# PONTUALIDADE
+# ============================ ABA 3: PONTUALIDADE ============================
 with tabs[3]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⭐ Pontualidade de Hoje (entrada antes das 07:15)")
     conn = conectar_bd()
-    df_pont = pd.read_sql_query("SELECT r.nome_aluno, a.turma, r.hora_entrada FROM registros r JOIN alunos a ON r.nome_aluno=a.nome WHERE r.data=%s AND r.tipo_registro='PRESENCA' AND r.hora_entrada<='07:15:00' ORDER BY r.hora_entrada", conn, params=[hoje_str])
+    df_pontuais = pd.read_sql_query("SELECT r.nome_aluno, a.turma, r.hora_entrada FROM registros r JOIN alunos a ON r.nome_aluno=a.nome WHERE r.data=%s AND r.tipo_registro='PRESENCA' AND r.hora_entrada <= '07:15:00' ORDER BY r.hora_entrada", conn, params=[hoje_str])
     conn.close()
-    if not df_pont.empty:
+    if not df_pontuais.empty:
         st.balloons()
-        st.success(f"{len(df_pont)} alunos antes das 07:15")
-        st.dataframe(df_pont, hide_index=True)
+        st.success(f"{len(df_pontuais)} alunos chegaram antes das 07:15")
+        st.dataframe(df_pontuais, hide_index=True, use_container_width=True)
     else:
-        st.info("Nada ainda.")
+        st.info("Nenhum registo ainda.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# HISTÓRICO (com plotly)
+# ============================ ABA 4: HISTÓRICO ============================
 with tabs[4]:
-    aluno = st.selectbox("Aluno", sorted(df_alunos['nome'].tolist()))
-    if aluno:
-        df_hist = obter_historico_aluno(aluno)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📈 Histórico Individual do Aluno")
+    aluno_sel = st.selectbox("Selecione o aluno", sorted(df_alunos['nome'].tolist()), key="hist_aluno")
+    if aluno_sel:
+        df_hist = obter_historico_aluno(aluno_sel)
         if not df_hist.empty:
             st.dataframe(df_hist, hide_index=True)
             faltas_n = len(df_hist[df_hist['tipo_registro'] == 'FALTA'])
@@ -680,23 +721,25 @@ with tabs[4]:
                 fig = px.bar(df_mes, x='mês', y=['Presenças', 'Faltas'], barmode='group',
                              color_discrete_sequence=['#27ae60', '#e74c3c'])
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Sem dados suficientes.")
         else:
-            st.info("Sem registros.")
+            st.info("Sem registos para este aluno.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# MANUTENÇÃO (admin)
+# ============================ ABA 5: MANUTENÇÃO (admin) ============================
 if st.session_state.eh_admin:
-    with tabs[5 if len(abas) > 5 else 4]:
-        st.subheader("Importar CSV")
-        up_admin = st.file_uploader("Arquivo", type=["csv"])
+    with tabs[5]:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("⚙️ Importar CSV")
+        up_admin = st.file_uploader("Arquivo CSV", type=["csv"], key="admin_csv")
         if up_admin and importar_csv_para_bd(up_admin):
-            st.success("Alunos atualizados.")
-        st.subheader("Limpar frequência")
-        senha = st.text_input("Senha admin", type="password")
-        if st.button("Limpar tudo"):
-            if senha == SENHA_ADMIN:
+            st.success("Alunos atualizados!")
+        st.subheader("🗑️ Limpar registos de frequência")
+        senha_conf = st.text_input("Senha de administrador", type="password", key="senha_limpar")
+        if st.button("Apagar todos os registos"):
+            if senha_conf == SENHA_ADMIN:
                 limpar_todos_registros()
-                st.success("Registros apagados.")
+                st.success("Registos apagados.")
+                st.balloons()
             else:
-                st.error("Senha incorreta.")
+                st.error("Senha incorreta!")
+        st.markdown('</div>', unsafe_allow_html=True)
