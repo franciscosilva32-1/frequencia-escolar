@@ -48,7 +48,6 @@ st.markdown("""
     }
     #MainMenu, footer, header {visibility: hidden;}
 
-    /* Cabeçalho */
     .header-container {
         display: flex;
         flex-direction: column;
@@ -75,7 +74,6 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
 
-    /* Cards */
     .card {
         background: rgba(255,255,255,0.7);
         backdrop-filter: blur(10px);
@@ -86,7 +84,6 @@ st.markdown("""
         border: 1px solid rgba(255,255,255,0.8);
     }
 
-    /* Métricas */
     .metric-grid {
         display: flex;
         flex-wrap: wrap;
@@ -117,7 +114,6 @@ st.markdown("""
         color: #5f6b7a;
     }
 
-    /* Botões */
     .stButton > button {
         font-family: 'Inter', sans-serif;
         font-weight: 600;
@@ -135,7 +131,6 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    /* Abas */
     .stTabs [data-baseweb="tab-list"] {
         background: rgba(255,255,255,0.5);
         padding: 4px;
@@ -155,7 +150,6 @@ st.markdown("""
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
 
-    /* Inputs */
     .stTextInput > div > div > input {
         border-radius: 12px;
         border: 2px solid #d1d9e0;
@@ -164,7 +158,6 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
 
-    /* Login */
     .login-card {
         max-width: 380px;
         margin: 10vh auto;
@@ -183,7 +176,6 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
 
-    /* QR scanner */
     .qr-scanner {
         background: #f8fafc;
         border-radius: 16px;
@@ -191,11 +183,6 @@ st.markdown("""
         margin: 0.5rem 0;
         border: 2px dashed #cbd5e1;
         text-align: center;
-    }
-
-    @media (max-width: 768px) {
-        .metric-value { font-size: 1.5rem; }
-        .stButton > button { width: 100%; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -244,7 +231,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# FUNÇÕES DE NEGÓCIO (com parâmetros de horários personalizados)
+# FUNÇÕES DE NEGÓCIO
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -286,7 +273,6 @@ def importar_csv_para_bd(arquivo_csv):
     return True
 
 def registrar_presenca(nome_estudante, data_registro, hora_limite_entrada):
-    """Registra presença considerando a data e o horário limite fornecidos."""
     agora = datetime.now()
     hora_atual = agora.strftime("%H:%M:%S")
     status = "PRESENTE" if agora.time() <= hora_limite_entrada else "ATRASO"
@@ -323,10 +309,8 @@ def registrar_presenca(nome_estudante, data_registro, hora_limite_entrada):
         conn.close()
 
 def registrar_saida(nome, motivo, pais_informados, data_registro, hora_saida, hora_limite_saida):
-    """Registra saída antecipada se antes do horário limite de saída."""
     conn = conectar_bd()
     cur = conn.cursor()
-    # Consideramos saída antecipada apenas se a hora atual for menor que o limite
     hora_atual = datetime.now().time()
     if hora_atual < hora_limite_saida:
         cur.execute("""
@@ -386,7 +370,6 @@ def obter_historico_aluno(nome_aluno):
 # ------------------------------------------------------------
 def qr_scanner(key_prefix):
     """Retorna o texto lido pelo QR code ou None."""
-    # Usamos um componente HTML que chama Streamlit.setComponentValue
     html_code = f"""
     <div id="qr-{key_prefix}" class="qr-scanner">
         <button id="start-{key_prefix}" onclick="startScanner('{key_prefix}')">📷 Abrir Câmera</button>
@@ -404,7 +387,6 @@ def qr_scanner(key_prefix):
                 {{ facingMode: "environment" }},
                 {{ fps: 10, qrbox: {{ width: 250, height: 250 }} }},
                 (decodedText) => {{
-                    // Enviar o texto para o Streamlit
                     Streamlit.setComponentValue(decodedText);
                     stopScanner(id);
                 }},
@@ -521,7 +503,7 @@ if df_alunos.empty:
 if df_alunos.empty:
     st.stop()
 
-# Métricas rápidas (baseadas na data de hoje, mas a aba de registro pode usar outra data)
+# Métricas rápidas (baseadas na data de hoje)
 hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
 total = len(df_alunos)
@@ -552,7 +534,6 @@ with tabs[0]:
     col1, col2, col3 = st.columns(3)
     with col1:
         data_registro = st.date_input("Data do registro", datetime.now(), key="data_registro")
-    # Buscar configuração prévia ou definir defaults
     if "config_dia" not in st.session_state:
         st.session_state.config_dia = {}
     data_str_config = data_registro.strftime("%Y-%m-%d")
@@ -565,7 +546,6 @@ with tabs[0]:
         hora_entrada = st.time_input("Horário de entrada (limite)", st.session_state.config_dia[data_str_config]["hora_entrada"], key="hora_entrada")
     with col3:
         hora_saida = st.time_input("Horário normal de saída", st.session_state.config_dia[data_str_config]["hora_saida"], key="hora_saida")
-    # Atualizar sessão
     st.session_state.config_dia[data_str_config]["hora_entrada"] = hora_entrada
     st.session_state.config_dia[data_str_config]["hora_saida"] = hora_saida
 
@@ -580,13 +560,14 @@ with tabs[0]:
         # Campo manual (também recebe leitura infravermelha)
         manual_entrada = st.text_input("Nome do aluno (ou leitura do código)", key="manual_entrada")
         # Processar QR
-        if qr_entrada:
+        if qr_entrada and qr_entrada.strip():
             registrar_presenca(qr_entrada.strip().upper(), data_str_config, hora_entrada)
-            # Após registrar, podemos limpar o scanner recarregando? Vamos forçar um reset de estado.
-            st.experimental_rerun()  # Recarrega para um novo scan
+            st.session_state.pop("manual_entrada", None)
+            st.experimental_rerun()
         # Processar manual
-        if manual_entrada:
+        if manual_entrada and manual_entrada.strip():
             registrar_presenca(manual_entrada.strip().upper(), data_str_config, hora_entrada)
+            st.session_state.pop("manual_entrada", None)
             st.experimental_rerun()
 
     # ---------- SAÍDA ----------
@@ -606,13 +587,12 @@ with tabs[0]:
         if motivo == "Outro":
             motivo = st.text_input("Especifique", key="motivo_outro")
         pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida")
-        # Leitor QR para saída
         qr_saida = qr_scanner("saida")
         manual_saida = st.text_input("Nome do aluno (ou leitura do código)", key="manual_saida")
-        if qr_saida:
+        if qr_saida and qr_saida.strip():
             if registrar_saida(qr_saida.strip().upper(), motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida):
                 st.experimental_rerun()
-        if manual_saida:
+        if manual_saida and manual_saida.strip():
             if registrar_saida(manual_saida.strip().upper(), motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida):
                 st.experimental_rerun()
 
