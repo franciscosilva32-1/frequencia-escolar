@@ -6,6 +6,7 @@ import os
 import io
 import base64
 import json
+import unicodedata
 import streamlit.components.v1 as components
 import plotly.express as px
 from streamlit_cookies_manager import CookieManager
@@ -55,10 +56,10 @@ def emitir_som_beep():
         oscillator.connect(gainNode);
         gainNode.connect(audioCtx.destination);
         oscillator.type = 'sine';
-        oscillator.frequency.value = 850; // Som agudo e claro
+        oscillator.frequency.value = 850; // Tom agudo claro
         oscillator.start();
-        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.2);
-        oscillator.stop(audioCtx.currentTime + 0.2);
+        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.3); // Duração de 0.3s
+        oscillator.stop(audioCtx.currentTime + 0.3);
     </script>
     """
     components.html(html_beep, height=0, width=0)
@@ -71,14 +72,14 @@ if st.session_state.tocar_som:
     st.session_state.tocar_som = False
 
 # ------------------------------------------------------------
-# 4. CONEXÃO BANCO DE DADOS (SUPABASE) - TABELAS V2 (CÓDIGO)
+# 4. CONEXÃO BANCO DE DADOS (SUPABASE)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
 if not DATABASE_URL:
-    st.error("DATABASE_URL não configurada.")
+    st.error("DATABASE_URL não configurada nos Segredos do Streamlit.")
     st.stop()
 
 def conectar_bd():
@@ -87,7 +88,6 @@ def conectar_bd():
 def inicializar_tabelas():
     conn = conectar_bd()
     cur = conn.cursor()
-    # Criando tabelas V2 para suportar CÓDIGO como identificador principal
     cur.execute('''
         CREATE TABLE IF NOT EXISTS alunos_v2 (
             codigo TEXT PRIMARY KEY,
@@ -115,7 +115,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. FUNÇÕES DE NEGÓCIO (LÓGICA)
+# 5. FUNÇÕES DE NEGÓCIO (LÓGICA BLINDADA)
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -125,17 +125,25 @@ def carregar_alunos():
 
 def importar_csv_para_bd(arquivo_csv):
     conteudo = arquivo_csv.read()
-    if conteudo.startswith(b'\xef\xbb\xbf'): conteudo = conteudo[3:]
+    
+    # 1. Tenta decodificar o arquivo de várias formas para evitar erro de leitura
     try:
-        df = pd.read_csv(io.BytesIO(conteudo), sep=';', encoding='utf-8')
-    except:
-        df = pd.read_csv(io.BytesIO(conteudo), sep=None, engine='python')
+        texto = conteudo.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        texto = conteudo.decode('latin-1')
+        
+    df = pd.read_csv(io.StringIO(texto), sep=';')
     
-    # Padroniza nomes das colunas removendo acentos
-    df.columns = [col.strip().upper().replace('Ó', 'O') for col in df.columns]
+    # 2. Normaliza os nomes das colunas (remove acentos e espaços)
+    def normalizar_coluna(nome_col):
+        s = ''.join(c for c in unicodedata.normalize('NFD', str(nome_col)) if unicodedata.category(c) != 'Mn')
+        return s.strip().upper()
     
+    df.columns = [normalizar_coluna(col) for col in df.columns]
+    
+    # 3. Verifica se o CSV tem o que precisamos
     if 'CODIGO' not in df.columns or 'NOME' not in df.columns or 'TURMA' not in df.columns:
-        st.error("O CSV precisa conter as colunas: CODIGO, NOME e TURMA.")
+        st.error(f"Erro: O CSV precisa conter CODIGO, NOME e TURMA. Lemos apenas: {', '.join(df.columns)}")
         return False
         
     conn = conectar_bd()
@@ -144,11 +152,17 @@ def importar_csv_para_bd(arquivo_csv):
         codigo = str(row['CODIGO']).strip().upper()
         nome = str(row['NOME']).strip().upper()
         turma = str(row['TURMA']).strip().upper()
+        
+        # Ignora linhas em branco ou inválidas
+        if codigo == 'NAN' or nome == 'NAN': 
+            continue
+            
         try:
             cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma", 
                         (codigo, nome, turma))
-        except Exception as e:
+        except Exception:
             conn.rollback()
+            
     conn.commit()
     conn.close()
     return True
@@ -161,12 +175,11 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     conn = conectar_bd()
     cur = conn.cursor()
     
-    # Busca o nome pelo código para feedback visual
     cur.execute("SELECT nome FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
     resultado = cur.fetchone()
     
     if not resultado:
-        st.error(f"❌ Código não encontrado: {codigo_estudante}")
+        st.error(f"❌ Código não encontrado na base de dados: {codigo_estudante}")
         conn.close()
         return False
         
@@ -185,8 +198,8 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         conn.commit()
         if status == "PRESENTE": st.success(f"✅ {nome_aluno} registado às {hora_atual}")
         else: st.warning(f"⏰ Atraso: {nome_aluno} às {hora_atual}")
-        return True # Retorna True para acionar o Bip!
-    except:
+        return True # Aciona o bipe!
+    except Exception:
         conn.rollback()
         return False
     finally: conn.close()
@@ -211,7 +224,7 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
             st.success(f"✅ Saída de {nome_aluno} registada")
             conn.commit()
             conn.close()
-            return True
+            return True # Aciona o bipe!
         else: st.error("Erro: sem registo de entrada hoje para efetuar saída.")
     else: st.info("Saída dentro do horário normal.")
     conn.close()
@@ -225,7 +238,7 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 6. COMPONENTE LEITOR QR INTELIGENTE (Câmera c/ Auto-Submit)
+# 6. COMPONENTE LEITOR QR INTELIGENTE (Auto-Submit Sincronizado)
 # ------------------------------------------------------------
 def qr_scanner_auto(label_alvo, botao_alvo):
     html_code = f"""
@@ -251,21 +264,21 @@ def qr_scanner_auto(label_alvo, botao_alvo):
             const inputs = window.parent.document.querySelectorAll('input[type="text"]');
             for (let i = 0; i < inputs.length; i++) {{
                 if (inputs[i].getAttribute('aria-label') === '{label_alvo}') {{
-                    // Preenche o campo de texto
+                    // Insere o código no campo do Streamlit
                     let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                     nativeInputValueSetter.call(inputs[i], text);
                     inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
                     
-                    // Encontra e clica no botão oculto de submissão do Streamlit
+                    // Delay de 800ms crucial para o servidor do Streamlit absorver a mudança
                     setTimeout(() => {{
                         const buttons = window.parent.document.querySelectorAll('button');
                         for (let j = 0; j < buttons.length; j++) {{
-                            if (buttons[j].innerText.includes('{botao_alvo}')) {{
-                                buttons[j].click();
+                            if (buttons[j].innerText === '{botao_alvo}') {{
+                                buttons[j].click(); // Simula o clique no botão de Processar
                                 break;
                             }}
                         }}
-                    }}, 50); // Delay mínimo para garantir o preenchimento
+                    }}, 800); 
                     break;
                 }}
             }}
@@ -281,11 +294,11 @@ def qr_scanner_auto(label_alvo, botao_alvo):
                 {{ fps: 15, qrbox: {{ width: 250, height: 250 }} }},
                 (decodedText) => {{
                     preencherEEnviar(decodedText);
-                    // Deixa a câmera ligada para ler o próximo da fila!
+                    // A câmera não é desligada. Fica pronta para a próxima carteirinha!
                 }},
                 (errorMessage) => {{}}
             ).catch(err => {{
-                alert("Permissão de câmera negada ou erro.");
+                alert("Erro ao acessar câmera: " + err);
                 btnStart.style.display = 'inline-block';
                 btnStop.style.display = 'none';
                 readerDiv.style.display = 'none';
@@ -357,12 +370,11 @@ with col_logout2:
 df_alunos = carregar_alunos()
 if df_alunos.empty:
     if st.session_state.eh_admin:
-        st.warning("Banco de dados V2 vazio. Importe o CSV contendo CODIGO, NOME e TURMA.")
-        up = st.file_uploader("Subir CSV", type=["csv"])
-        if up and importar_csv_para_bd(up): st.success("Sucesso!"); st.rerun()
+        st.warning("Banco de dados vazio. Acesse a aba MANUTENÇÃO para importar o CSV.")
+        
     else: st.error("Sistema sem dados."); st.stop()
-if df_alunos.empty: st.stop()
 
+# Métricas rápidas
 hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
 total = len(df_alunos)
@@ -406,12 +418,11 @@ with tabs[0]:
         label_entrada = "Insira o Código do Aluno"
         botao_entrada = "Processar Entrada"
         
-        # Estrutura com colunas para alinhar input e botão
         c_in, c_btn = st.columns([3, 1])
         with c_in:
             codigo_recebido = st.text_input(label_entrada, key="input_entrada_real")
         with c_btn:
-            st.markdown("<br>", unsafe_allow_html=True) # Espaçamento
+            st.markdown("<br>", unsafe_allow_html=True)
             btn_submit_entrada = st.button(botao_entrada, use_container_width=True)
             
         qr_scanner_auto(label_entrada, botao_entrada)
@@ -420,7 +431,9 @@ with tabs[0]:
             aluno_codigo = codigo_recebido.strip().upper()
             if registrar_presenca(aluno_codigo, data_str_config, hora_entrada):
                 st.session_state.tocar_som = True
-            del st.session_state["input_entrada_real"]
+            
+            # Limpa o campo para a próxima leitura manual, se necessário
+            st.session_state["input_entrada_real"] = "" 
             st.rerun()
 
     # ---------- SAÍDA ----------
@@ -445,7 +458,8 @@ with tabs[0]:
             aluno_saida_codigo = codigo_saida_recebido.strip().upper()
             if registrar_saida(aluno_saida_codigo, motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida):
                 st.session_state.tocar_som = True
-            del st.session_state["input_saida_real"]
+            
+            st.session_state["input_saida_real"] = ""
             st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -455,7 +469,7 @@ with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1: data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
-    with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()), key="turma_filtro")
+    with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="turma_filtro")
     with c3: busca = st.text_input("Buscar por Nome", key="busca")
     
     conn = conectar_bd()
@@ -490,8 +504,7 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("📈 Histórico Individual do Aluno")
     
-    # Cria uma lista formatada "CÓDIGO - NOME" para facilitar a seleção
-    lista_selecao = [f"{row['codigo']} - {row['nome']}" for _, row in df_alunos.iterrows()]
+    lista_selecao = [f"{row['codigo']} - {row['nome']}" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
     aluno_sel = st.selectbox("Selecione o aluno para análise", [""] + lista_selecao, key="hist_aluno")
     
     if aluno_sel:
@@ -504,11 +517,13 @@ with tabs[3]:
 # ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
-        st.subheader("⚙️ Importação de Dados V2")
-        st.write("Atualize a base enviando um CSV com as colunas **CODIGO**, **NOME** e **TURMA**.")
+        st.subheader("⚙️ Importação de Dados da Escola")
+        st.write("Faça o upload do arquivo base (CSV) gerado pelo sistema. O arquivo pode conter várias colunas, desde que possua **ESCOLA**, **TURMA**, **CÓDIGO**, **NOME** e **MÃE**.")
         up_admin = st.file_uploader("Arquivo CSV", type=["csv"], key="admin_csv")
-        if up_admin and importar_csv_para_bd(up_admin):
-            st.success("Lista atualizada com sucesso!"); st.rerun()
+        if up_admin:
+            if importar_csv_para_bd(up_admin):
+                st.success("Lista atualizada com sucesso no banco de dados!")
+                st.rerun()
             
         st.subheader("🗑️ Limpeza de Base")
         senha_conf = st.text_input("Senha Admin", type="password", key="senha_limpar")
