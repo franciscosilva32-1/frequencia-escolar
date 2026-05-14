@@ -18,10 +18,11 @@ from email.mime.multipart import MIMEMultipart
 import threading
 import time
 
-# NOVAS BIBLIOTECAS PARA O ANALISADOR AVS
+# NOVAS BIBLIOTECAS PARA O ANALISADOR AVS E GRÁFICOS
 import re
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
+from matplotlib.ticker import MaxNLocator # <-- A ferramenta que corrige a régua do gráfico
 mplstyle.use('seaborn-v0_8-whitegrid')
 
 try:
@@ -655,11 +656,13 @@ if st.session_state.eh_admin:
                 else:
                     faltosos_resumo = faltosos.groupby('periodo')['nome'].nunique().reset_index(name='Total')
                     
-                    # GRÁFICO CORRIGIDO PARA NÃO DAR ERRO NO PANDAS! (Matplotlib 100% blindado)
+                    # GRÁFICO CORRIGIDO (Matplotlib 100% blindado com MaxNLocator)
                     fig_f, ax_f = plt.subplots(figsize=(8, 3), dpi=90)
                     bars_f = ax_f.bar(faltosos_resumo['periodo'], faltosos_resumo['Total'], color="#EF4444")
                     ax_f.set_title("Total de Faltosos por Período", weight='bold', color="#0a1f35")
-                    ax_f.set_yticks(range(0, int(faltosos_resumo['Total'].max()) + 2))
+                    
+                    # A MÁGICA: Manda o Matplotlib gerenciar os números inteiros!
+                    ax_f.yaxis.set_major_locator(MaxNLocator(integer=True)) 
                     
                     for bar in bars_f:
                         ax_f.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.1, f'{int(bar.get_height())}', ha='center', weight='bold')
