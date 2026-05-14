@@ -29,7 +29,7 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (LAYOUT RESPONSIVO, CORES E ABAS MAIORES)
+# 2. CSS PREMIUM (ABAS GIGANTES E DESTACADAS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -54,15 +54,14 @@ st.markdown("""
        ========================================= */
     .metrics-container {
         display: grid;
-        grid-template-columns: repeat(4, 1fr); /* 4 colunas no notebook */
+        grid-template-columns: repeat(4, 1fr);
         gap: 1.5rem;
         margin-bottom: 2.5rem;
     }
     
-    /* Regra para empilhar no celular */
     @media (max-width: 800px) {
         .metrics-container {
-            grid-template-columns: 1fr; /* 1 coluna no celular */
+            grid-template-columns: 1fr;
         }
     }
 
@@ -77,43 +76,62 @@ st.markdown("""
         border: 1px solid #e2e8f0;
     }
     
-    /* Linhas coloridas no topo de cada cartão */
     .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px; }
-    .m-total::before { background: #0ea5e9; } /* Azul */
-    .m-presente::before { background: var(--success); } /* Verde */
-    .m-falta::before { background: var(--danger); } /* Vermelho */
-    .m-atraso::before { background: #f59e0b; } /* Laranja/Amarelo */
+    .m-total::before { background: #0ea5e9; } 
+    .m-presente::before { background: var(--success); } 
+    .m-falta::before { background: var(--danger); } 
+    .m-atraso::before { background: #f59e0b; } 
 
     .m-val { font-size: 2.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
     .m-lab { font-size: 0.9rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
 
     /* =========================================
-       ESTILIZAÇÃO DAS ABAS (GIGANTES E DESTACADAS)
+       ESTILIZAÇÃO DAS ABAS (GIGANTES E SUPER DESTACADAS)
        ========================================= */
-    button[data-baseweb="tab"] {
-        font-size: 1.3rem !important; /* Letras maiores */
-        font-weight: 800 !important;
-        padding: 1rem 1.5rem !important;
-        color: #64748b !important;
-        background: transparent !important;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        color: var(--accent) !important;
-        border-bottom-color: var(--accent) !important;
-        border-bottom-width: 4px !important;
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        padding-bottom: 0px;
     }
     
-    /* Paineis Brancos para as Abas */
+    /* Abas normais (Inativas) */
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f1f5f9 !important;
+        border: 3px solid #cbd5e1 !important;
+        border-bottom: none !important;
+        border-radius: 18px 18px 0 0 !important;
+        padding: 15px 25px !important;
+        font-size: 1.5rem !important; /* TEXTO BEM MAIOR */
+        font-weight: 900 !important;
+        color: #64748b !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    /* Efeito ao passar o mouse */
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #e2e8f0 !important;
+        color: var(--primary) !important;
+    }
+    
+    /* ABA SELECIONADA (CORES CHAMATIVAS E BORDAS FORTES) */
+    .stTabs [aria-selected="true"] {
+        background-color: var(--primary) !important; /* Fundo Azul Escuro */
+        color: #ffffff !important; /* Letra Branca */
+        border: 5px solid var(--accent) !important; /* Borda Laranja Grossa */
+        border-bottom: none !important;
+        transform: translateY(-4px); /* Levanta um pouco a aba pra dar destaque */
+        box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; /* Sombra laranja de destaque */
+    }
+    
+    /* Paineis Brancos abaixo das Abas */
     .card-panel { background: white; border-radius: 20px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
 
-    /* Campos de Entrada */
+    /* Campos de Entrada e Botões */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.2rem !important; padding: 0.8rem 1rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
 
     div[data-baseweb="select"] > div { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; color: #000000 !important; font-weight: 800 !important; font-size: 1.1rem !important; }
 
-    /* Botões */
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.1rem !important; padding: 0.6rem 2rem !important; text-transform: uppercase !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; }
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
@@ -472,7 +490,6 @@ faltas_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s
 atrasos_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
 conn.close()
 
-# CARTÕES COM A NOVA GRID INTELIGENTE (Não usa st.columns)
 st.markdown(f'''
 <div class="metrics-container">
     <div class="metric-card m-total">
