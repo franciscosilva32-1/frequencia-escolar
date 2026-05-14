@@ -50,7 +50,7 @@ def data_formatada_ptbr():
 
 ATIVAR_EMAILS = True
 
-# 🔒 Credenciais seguras via Secrets (NÃO ficam mais no código)
+# 🔒 Credenciais seguras via Secrets
 try:
     EMAIL_ESCOLA = st.secrets["EMAIL_ESCOLA"]
     SENHA_APP_ESCOLA = st.secrets["SENHA_APP_ESCOLA"]
@@ -79,7 +79,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM 
+# 2. CSS PREMIUM (FONTES GRANDES E LOGO MENOR)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -87,33 +87,202 @@ st.markdown("""
     :root { --primary: #0a1f35; --accent: #ff7b00; --success: #10b981; --danger: #ef4444; --bg-color: #f8fafc; }
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
-    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.2rem, 6vw, 3rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
-    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.1rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
-    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2.5rem; }
-    @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
-    .metric-card { background: white; padding: 1.8rem 1rem; border-radius: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.04); text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; }
-    .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px; }
-    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } 
-    .m-val { font-size: 2.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
-    .m-lab { font-size: 0.9rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
-    .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 12px 20px !important; font-size: 1.3rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
-    .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
-    .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
-    .card-panel { background: white; border-radius: 20px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
-    div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
-    div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.2rem !important; padding: 0.8rem 1rem !important; }
-    div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
-    div[data-baseweb="select"] > div { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; color: #000000 !important; font-weight: 800 !important; font-size: 1.1rem !important; }
-    .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.1rem !important; padding: 0.6rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
-    [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important;}
-    [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
-    .login-card { max-width: 450px; margin: 8vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
+    
+    /* ===== TIPOGRAFIA BASE (AUMENTADA) ===== */
+    html, body, [class*="css"] {
+        font-size: 18px !important;
+        font-weight: 500 !important;
+    }
+
+    .main-title { 
+        font-family: 'Inter', sans-serif; 
+        font-weight: 900; 
+        font-size: clamp(2.8rem, 8vw, 3.5rem); 
+        color: var(--primary); 
+        text-align: center; 
+        margin: 0.2rem 0 0 0; 
+        text-transform: uppercase; 
+        letter-spacing: -1px;
+    }
+    .sub-title { 
+        font-family: 'Inter', sans-serif; 
+        font-size: 1.3rem; 
+        color: #475569; 
+        text-align: center; 
+        margin-bottom: 2rem; 
+        font-weight: 700;
+    }
+
+    /* ===== MÉTRICAS (NÚMEROS GRANDES) ===== */
+    .metrics-container { 
+        display: grid; 
+        grid-template-columns: repeat(4, 1fr); 
+        gap: 1.5rem; 
+        margin-bottom: 2.5rem; 
+    }
+    .metric-card { 
+        background: white; 
+        padding: 2rem 0.5rem; 
+        border-radius: 20px; 
+        box-shadow: 0 4px 10px rgba(0,0,0,0.04); 
+        text-align: center; 
+        position: relative; 
+        overflow: hidden; 
+        border: 1px solid #e2e8f0; 
+    }
+    .metric-card::before { 
+        content: ''; 
+        position: absolute; 
+        top: 0; left: 0; right: 0; 
+        height: 8px; 
+    }
+    .m-total::before { background: #0ea5e9; } 
+    .m-presente::before { background: var(--success); } 
+    .m-falta::before { background: var(--danger); } 
+    .m-atraso::before { background: #f59e0b; } 
+    
+    .m-val { 
+        font-size: 3.2rem; 
+        font-weight: 900; 
+        color: #0f172a; 
+        display: block; 
+        line-height: 1.2; 
+    }
+    .m-lab { 
+        font-size: 1.1rem; 
+        font-weight: 800; 
+        color: #475569; 
+        text-transform: uppercase; 
+        letter-spacing: 1.5px; 
+        margin-top: 0.5rem; 
+        display: block; 
+    }
+
+    /* ===== ABAS GRANDES E DESTACADAS ===== */
+    .stTabs [data-baseweb="tab-list"] { 
+        gap: 12px; 
+        padding-bottom: 0px; 
+        flex-wrap: wrap; 
+    }
+    .stTabs [data-baseweb="tab"] { 
+        background-color: #f1f5f9 !important; 
+        border: 3px solid #cbd5e1 !important; 
+        border-bottom: none !important; 
+        border-radius: 20px 20px 0 0 !important; 
+        padding: 14px 28px !important; 
+        font-size: 1.4rem !important; 
+        font-weight: 900 !important; 
+        color: #334155 !important; 
+        transition: all 0.3s ease !important; 
+    }
+    .stTabs [data-baseweb="tab"]:hover { 
+        background-color: #e2e8f0 !important; 
+        color: var(--primary) !important; 
+    }
+    .stTabs [aria-selected="true"] { 
+        background-color: var(--primary) !important; 
+        color: #ffffff !important; 
+        border: 5px solid var(--accent) !important; 
+        border-bottom: none !important; 
+        transform: translateY(-4px); 
+        box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; 
+    }
+
+    /* ===== CARDS DE CONTEÚDO ===== */
+    .card-panel { 
+        background: white; 
+        border-radius: 24px; 
+        padding: 2.2rem; 
+        margin-bottom: 1.8rem; 
+        box-shadow: 0 10px 25px rgba(0,0,0,0.03); 
+        border: 2px solid #e2e8f0; 
+    }
+
+    /* ===== INPUTS E CAIXAS DE TEXTO GRANDES ===== */
+    div[data-baseweb="input"] { 
+        border: 2px solid #cbd5e1 !important; 
+        border-radius: 14px !important; 
+        background-color: #ffffff !important; 
+    }
+    div[data-baseweb="input"] input { 
+        color: #000000 !important; 
+        -webkit-text-fill-color: #000000 !important; 
+        font-weight: 800 !important; 
+        font-size: 1.4rem !important; 
+        padding: 1rem 1.2rem !important; 
+    }
+    div[data-baseweb="input"]:focus-within { 
+        border-color: var(--accent) !important; 
+        box-shadow: 0 0 0 5px rgba(255, 123, 0, 0.25) !important; 
+    }
+
+    div[data-baseweb="select"] > div { 
+        border: 2px solid #cbd5e1 !important; 
+        border-radius: 14px !important; 
+        background-color: #ffffff !important; 
+        color: #000000 !important; 
+        font-weight: 800 !important; 
+        font-size: 1.3rem !important; 
+    }
+
+    /* ===== BOTÕES GRANDES ===== */
+    .stButton > button { 
+        border-radius: 14px !important; 
+        font-weight: 900 !important; 
+        font-size: 1.2rem !important; 
+        padding: 0.7rem 2.5rem !important; 
+        border: none !important; 
+        transition: all 0.2s ease !important; 
+    }
+    [data-testid="stFormSubmitButton"] > button { 
+        background: linear-gradient(135deg, var(--primary), #1a4b82) !important; 
+        color: white !important; 
+        box-shadow: 0 8px 18px rgba(10, 31, 53, 0.35) !important; 
+        width: 100% !important; 
+        text-transform: uppercase !important;
+        font-size: 1.3rem !important;
+        padding: 0.9rem !important;
+    }
+    [data-testid="stFormSubmitButton"] > button:active { 
+        transform: scale(0.96); 
+    }
+
+    /* ===== LOGIN ===== */
+    .login-card { 
+        max-width: 480px; 
+        margin: 8vh auto; 
+        background: white; 
+        border-radius: 28px; 
+        padding: 3.5rem 2.5rem; 
+        text-align: center; 
+        box-shadow: 0 25px 50px rgba(0,0,0,0.12); 
+        border: 3px solid var(--primary); 
+    }
+    .login-title { 
+        font-size: 2rem; 
+        font-weight: 900; 
+        color: var(--primary); 
+        margin-bottom: 1.5rem; 
+    }
+
+    /* ===== RESPONSIVO ===== */
+    @media (max-width: 800px) { 
+        .metrics-container { 
+            grid-template-columns: 1fr; 
+        }
+        .m-val { 
+            font-size: 2.5rem; 
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 10px 16px !important;
+            font-size: 1.2rem !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS (VACINA CONTRA CONEXÃO SUJA)
+# 3. CONEXÃO BANCO DE DADOS
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -256,7 +425,7 @@ def limpar_todos_registros():
     except: pass
 
 # =========================================================
-# 🧠 NOVO MOTOR: ANALISADOR AVS NA NUVEM
+# 🧠 ANALISADOR AVS NA NUVEM
 # =========================================================
 @st.cache_data(ttl=60)
 def carregar_dados_avs():
@@ -359,7 +528,7 @@ def set_auth_cookie(eh_admin): token = base64.b64encode(json.dumps({"valido": Tr
 check_auth()
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    if os.path.exists("logo.png"): st.image("logo.png", width=180)
+    if os.path.exists("logo.png"): st.image("logo.png", width=120)
     st.markdown('<div class="login-title">JANSEN VELOSO</div>', unsafe_allow_html=True)
     senha = st.text_input("DIGITE SUA SENHA:", type="password")
     if st.button("ACESSAR SISTEMA", use_container_width=True):
@@ -371,7 +540,7 @@ if not st.session_state.autenticado:
 
 if os.path.exists("logo.png"):
     col1, col2, col3 = st.columns([1, 1, 1])
-    with col2: st.image("logo.png", use_column_width=True)
+    with col2: st.image("logo.png", width=150)
 
 st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
@@ -521,7 +690,7 @@ if st.session_state.eh_admin:
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================================================
-# 📑 ABA 5: O SEU SUPER ANALISADOR AVS 100% RESTAURADO
+# 📑 ABA 5: ANALISADOR AVS (admin)
 # =================================================================================
 if st.session_state.eh_admin:
     with tabs[5]:
@@ -534,7 +703,6 @@ if st.session_state.eh_admin:
 
         df_avs = carregar_dados_avs()
         
-        # Filtros Globais (CORRIGIDOS COM KEYS ÚNICAS)
         st.markdown("##### 🔍 Filtros Globais")
         c_f1, c_f2, c_f3 = st.columns(3)
         with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS, key="avs_p_filtro")
@@ -546,12 +714,8 @@ if st.session_state.eh_admin:
         if a_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['area'] == a_filtro]
         if t_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['turma'] == t_filtro]
 
-        # Sub-Abas do Analisador
         abas_avs = st.tabs(["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões", "📉 Críticas", "⚙️ Gerenciar Dados"])
         
-        # -----------------------------------------------------------------
-        # 🏆 DESTAQUES
-        # -----------------------------------------------------------------
         with abas_avs[0]:
             if df_filtrado.empty: st.info("Nenhum dado encontrado para os filtros selecionados.")
             else:
@@ -559,36 +723,20 @@ if st.session_state.eh_admin:
                 resumo = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo['Nota'] = (resumo['Acertos'] / resumo['Total']) * 10
                 resumo = resumo.sort_values(by='Nota', ascending=False).head(7).reset_index(drop=True)
-                
                 status_stats = df_filtrado[df_filtrado['resposta'].isin(['BRANCO', 'DUPLA'])].groupby(['nome', 'resposta']).size().unstack(fill_value=0)
-                
                 for idx, row in resumo.iterrows():
-                    if idx == 0: medalha = "🥇 1º Lugar"
-                    elif idx == 1: medalha = "🥈 2º Lugar"
-                    elif idx == 2: medalha = "🥉 3º Lugar"
-                    else: medalha = f"⭐ {idx+1}º Lugar"
-                    
+                    medalha = "🥇 1º Lugar" if idx == 0 else "🥈 2º Lugar" if idx == 1 else "🥉 3º Lugar" if idx == 2 else f"⭐ {idx+1}º Lugar"
                     nome = row['nome']
-                    b = status_stats.at[nome, 'BRANCO'] if (not status_stats.empty and nome in status_stats.index and 'BRANCO' in status_stats.columns) else 0
-                    d = status_stats.at[nome, 'DUPLA'] if (not status_stats.empty and nome in status_stats.index and 'DUPLA' in status_stats.columns) else 0
-                    if b > 0 or d > 0: status_str = f"⚠️ Atenção (Brancos: {b}, Duplas: {d})"
-                    else: status_str = "✅ Prova Perfeita (Sem brancos/duplas)"
-                    
+                    b = status_stats.at[nome, 'BRANCO'] if not status_stats.empty and nome in status_stats.index and 'BRANCO' in status_stats.columns else 0
+                    d = status_stats.at[nome, 'DUPLA'] if not status_stats.empty and nome in status_stats.index and 'DUPLA' in status_stats.columns else 0
+                    status_str = f"⚠️ Atenção (Brancos: {b}, Duplas: {d})" if b > 0 or d > 0 else "✅ Prova Perfeita (Sem brancos/duplas)"
                     with st.expander(f"{medalha} - {nome} | Nota: {row['Nota']:.2f}"):
-                        st.write(f"**Turma:** {row['turma']}")
-                        st.write(f"**Status da Prova:** {status_str}")
-                        st.info("Vá até a aba 'Estudantes' para ver o Boletim detalhado deste aluno.")
-                
-                st.markdown("---")
-                st.subheader("📚 Top 3 Disciplinas (Maior Média)")
+                        st.write(f"**Turma:** {row['turma']}"); st.write(f"**Status da Prova:** {status_str}")
+                st.markdown("---"); st.subheader("📚 Top 3 Disciplinas (Maior Média)")
                 disc_stats = df_filtrado.groupby('disciplina').agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 disc_stats['Nota'] = (disc_stats['Acertos'] / disc_stats['Total']) * 10
-                for _, row in disc_stats.sort_values('Nota', ascending=False).head(3).iterrows():
-                    st.success(f"**{row['disciplina'].upper()}** - Média Geral: {row['Nota']:.2f}")
+                for _, row in disc_stats.sort_values('Nota', ascending=False).head(3).iterrows(): st.success(f"**{row['disciplina'].upper()}** - Média Geral: {row['Nota']:.2f}")
 
-        # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES E BOLETIM COMPLETO
-        # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
@@ -596,34 +744,27 @@ if st.session_state.eh_admin:
                 with c_est1: busca_aluno = st.text_input("Buscar por nome...")
                 with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
                 with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente com erros/brancos")
-
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
                 status_stats_est = df_filtrado[df_filtrado['resposta'].isin(['BRANCO', 'DUPLA'])].groupby(['nome', 'resposta']).size().unstack(fill_value=0)
-                
                 alunos_filtrados = []
                 for _, r in resumo_est.iterrows():
                     n = r['nome']
-                    b = status_stats_est.at[n, 'BRANCO'] if (not status_stats_est.empty and n in status_stats_est.index and 'BRANCO' in status_stats_est.columns) else 0
-                    d = status_stats_est.at[n, 'DUPLA'] if (not status_stats_est.empty and n in status_stats_est.index and 'DUPLA' in status_stats_est.columns) else 0
+                    b = status_stats_est.at[n, 'BRANCO'] if not status_stats_est.empty and n in status_stats_est.index and 'BRANCO' in status_stats_est.columns else 0
+                    d = status_stats_est.at[n, 'DUPLA'] if not status_stats_est.empty and n in status_stats_est.index and 'DUPLA' in status_stats_est.columns else 0
                     tem_erro = b > 0 or d > 0
-                    
                     if busca_aluno and busca_aluno.lower() not in n.lower(): continue
                     if filtro_erros and not tem_erro: continue
                     if filtro_desempenho == "INSUFICIENTE" and r['Nota'] >= 6.0: continue
                     elif filtro_desempenho == "BOM" and (r['Nota'] < 6.0 or r['Nota'] > 7.5): continue
                     elif filtro_desempenho == "ÓTIMO" and r['Nota'] <= 7.5: continue
-                    
                     status_txt = f"Brancos: {b} | Duplas: {d}" if tem_erro else "✅ Perfeito"
                     alunos_filtrados.append({'nome': n, 'turma': r['turma'], 'nota': r['Nota'], 'status': status_txt})
-
                 st.write(f"**Encontrados:** {len(alunos_filtrados)} estudante(s)")
-                
                 for al in alunos_filtrados[:50]: 
                     with st.expander(f"🧑‍🎓 {al['nome']} ({al['turma']}) - Nota: {al['nota']:.2f}"):
                         st.write(f"**Detalhes:** {al['status']}")
                         df_boletim = df_avs[df_avs['nome'] == al['nome']]
-                        
                         st.markdown("#### 📈 Evolução ao Longo do Ano")
                         progresso = df_boletim.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
@@ -631,15 +772,11 @@ if st.session_state.eh_admin:
                         for d_nome in progresso['disciplina'].unique():
                             d_df = progresso[progresso['disciplina'] == d_nome]
                             ax_b.plot(d_df['periodo'], d_df['Nota'], marker='o', label=d_nome.upper(), linewidth=2)
-                        ax_b.set_ylim(-0.5, 11); ax_b.grid(True, alpha=0.3); ax_b.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-                        st.pyplot(fig_b)
-                        
+                        ax_b.set_ylim(-0.5, 11); ax_b.grid(True, alpha=0.3); ax_b.legend(bbox_to_anchor=(1.05, 1), loc='upper left'); st.pyplot(fig_b)
                         st.markdown("#### 📊 Médias por Disciplina")
                         medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         for _, mb in medias_b.iterrows():
-                            st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
-                            st.progress(mb['Nota'] / 10)
-                        
+                            st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})"); st.progress(mb['Nota'] / 10)
                         st.markdown("#### 📋 Mapa de Questões (Visual)")
                         for disc in df_boletim['disciplina'].unique():
                             st.markdown(f"**{disc.upper()}**")
@@ -647,19 +784,10 @@ if st.session_state.eh_admin:
                             grid_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                             for _, q in q_df.iterrows():
                                 cor = "#10b981" if q['acerto'] == 1 else ("#f59e0b" if q['resposta'] == 'BRANCO' else "#ef4444")
-                                grid_html += f"""
-                                <div style="background-color: {cor}; color: white; padding: 8px; border-radius: 6px; width: 80px; text-align: center; font-size: 12px; font-weight: bold;">
-                                    P{q['periodo'][:1]} Q{q['questao']}<br>R:{q['resposta']} G:{q['gabarito']}
-                                </div>"""
-                            grid_html += '</div>'
-                            st.markdown(grid_html, unsafe_allow_html=True)
-                            st.markdown("<br>", unsafe_allow_html=True)
-
+                                grid_html += f"""<div style="background-color: {cor}; color: white; padding: 8px; border-radius: 6px; width: 80px; text-align: center; font-size: 12px; font-weight: bold;">P{q['periodo'][:1]} Q{q['questao']}<br>R:{q['resposta']} G:{q['gabarito']}</div>"""
+                            grid_html += '</div>'; st.markdown(grid_html, unsafe_allow_html=True); st.markdown("<br>", unsafe_allow_html=True)
                 if len(alunos_filtrados) > 50: st.info("Mostrando os 50 primeiros. Use a busca para encontrar estudantes específicos.")
 
-        # -----------------------------------------------------------------
-        # 📈 GRÁFICOS E FALTOSOS
-        # -----------------------------------------------------------------
         with abas_avs[2]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
@@ -669,57 +797,39 @@ if st.session_state.eh_admin:
                 resumo_graf = df_filtrado.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
                 resumo_graf = resumo_graf.sort_values('Nota')
-                
                 fig_g, ax_g = plt.subplots(figsize=(10, 4), dpi=100)
                 cores_g = ['#0D6EFD', '#00D68F', '#FFAA00', '#FF3D71', '#A855F7'] * 5
                 bars = ax_g.bar(resumo_graf[col_agrup].str.upper(), resumo_graf['Nota'], color=cores_g[:len(resumo_graf)])
                 ax_g.set_ylim(0, 11)
                 media_geral = (df_filtrado['acerto'].sum() / len(df_filtrado)) * 10
                 ax_g.axhline(y=media_geral, color='red', linestyle='--', label=f'Média Geral: {media_geral:.2f}')
-                for bar in bars:
-                    ax_g.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
-                plt.xticks(rotation=15); ax_g.legend()
-                st.pyplot(fig_g)
-                
+                for bar in bars: ax_g.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
+                plt.xticks(rotation=15); ax_g.legend(); st.pyplot(fig_g)
                 st.markdown("---")
                 st.subheader("⚠️ Histórico de Faltas (Área inteira em branco)")
                 area_stats = df_filtrado.groupby(['periodo', 'turma', 'nome', 'area']).agg(Total=('questao', 'count'), Brancos=('resposta', lambda x: (x == 'BRANCO').sum())).reset_index()
                 area_stats['faltou'] = area_stats['Total'] == area_stats['Brancos']
                 faltosos = area_stats[area_stats['faltou']]
-                
                 if faltosos.empty: st.success("Nenhuma ausência total por área encontrada.")
                 else:
                     faltosos_resumo = faltosos.groupby('periodo')['nome'].nunique().reset_index(name='Total')
-                    
-                    # GRÁFICO CORRIGIDO (Matplotlib 100% blindado com MaxNLocator)
                     fig_f, ax_f = plt.subplots(figsize=(8, 3), dpi=90)
                     bars_f = ax_f.bar(faltosos_resumo['periodo'], faltosos_resumo['Total'], color="#EF4444")
                     ax_f.set_title("Total de Faltosos por Período", weight='bold', color="#0a1f35")
                     ax_f.yaxis.set_major_locator(MaxNLocator(integer=True)) 
-                    
-                    for bar in bars_f:
-                        ax_f.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.1, f'{int(bar.get_height())}', ha='center', weight='bold')
-                        
+                    for bar in bars_f: ax_f.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.1, f'{int(bar.get_height())}', ha='center', weight='bold')
                     st.pyplot(fig_f)
-                    
                     st.write("**Lista de Alunos:**")
-                    for _, f_row in faltosos.iterrows():
-                        st.error(f"👤 {f_row['nome']} ({f_row['turma']}) - Deixou toda a área de **{f_row['area']}** em branco no {f_row['periodo']}.")
+                    for _, f_row in faltosos.iterrows(): st.error(f"👤 {f_row['nome']} ({f_row['turma']}) - Deixou toda a área de **{f_row['area']}** em branco no {f_row['periodo']}.")
 
-        # -----------------------------------------------------------------
-        # 📋 QUESTÕES E PDF
-        # -----------------------------------------------------------------
         with abas_avs[3]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
                 col_q1, col_q2 = st.columns([3, 1])
                 col_q1.subheader("📌 3 Questões mais erradas por Turma/Disciplina")
-                
-                # Gerador de PDF
                 if FPDF is not None:
                     if col_q2.button("📄 Exportar Relatório PDF", type="primary"):
-                        pdf = FPDF()
-                        pdf.add_page(); pdf.set_font("Arial", "B", 16)
+                        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", "B", 16)
                         pdf.cell(0, 10, "Relatorio de Questoes Criticas", 0, 1, "C")
                         for turma in sorted(df_filtrado['turma'].unique()):
                             t_df = df_filtrado[df_filtrado['turma'] == turma]
@@ -732,18 +842,13 @@ if st.session_state.eh_admin:
                                 if not top3.empty:
                                     pdf.set_font("Arial", "B", 12); pdf.cell(0, 8, f"Disciplina: {disc.upper()}", 0, 1)
                                     pdf.set_font("Arial", "", 10)
-                                    for _, q in top3.iterrows():
-                                        pdf.cell(0, 6, f"  Questao {int(q['questao'])} - {q['Pct_Erro']:.1f}% de erro", 0, 1)
+                                    for _, q in top3.iterrows(): pdf.cell(0, 6, f"  Questao {int(q['questao'])} - {q['Pct_Erro']:.1f}% de erro", 0, 1)
                                     pdf.ln(2)
-                        
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             pdf.output(tmp.name)
                             with open(tmp.name, "rb") as f: pdf_bytes = f.read()
-                        
                         st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf")
-                else:
-                    col_q2.warning("Módulo FPDF não instalado no Streamlit.")
-
+                else: col_q2.warning("Módulo FPDF não instalado no Streamlit.")
                 for turma in sorted(df_filtrado['turma'].unique()):
                     t_df = df_filtrado[df_filtrado['turma'] == turma]
                     st.markdown(f"### 🏫 {turma}")
@@ -754,12 +859,8 @@ if st.session_state.eh_admin:
                         top3 = erro_q.nlargest(3, 'Pct_Erro')
                         if not top3.empty:
                             st.markdown(f"**📚 {disc.upper()}**")
-                            for _, q in top3.iterrows():
-                                st.error(f"Q{int(q['questao'])} → {q['Pct_Erro']:.1f}% de erro")
+                            for _, q in top3.iterrows(): st.error(f"Q{int(q['questao'])} → {q['Pct_Erro']:.1f}% de erro")
 
-        # -----------------------------------------------------------------
-        # 📉 CRÍTICAS
-        # -----------------------------------------------------------------
         with abas_avs[4]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
@@ -767,43 +868,32 @@ if st.session_state.eh_admin:
                 disc_stats = df_filtrado.groupby('disciplina').agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 disc_stats['Nota'] = (disc_stats['Acertos'] / disc_stats['Total']) * 10
                 disc_crit = disc_stats.sort_values('Nota').head(5)
-                
                 fig_c, ax_c = plt.subplots(figsize=(10, 4), dpi=100)
                 cores_c = ["#FF3D71", "#FFAA00", "#F97316", "#EAB308", "#84CC16"]
                 bars = ax_c.bar(disc_crit['disciplina'].str.upper(), disc_crit['Nota'], color=cores_c[:len(disc_crit)])
                 ax_c.set_ylim(0, 11)
-                for bar in bars:
-                    ax_c.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
+                for bar in bars: ax_c.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
                 st.pyplot(fig_c)
-                
-                for _, row in disc_crit.iterrows():
-                    st.warning(f"📌 **{row['disciplina'].upper()}** - Média: {row['Nota']:.2f}")
+                for _, row in disc_crit.iterrows(): st.warning(f"📌 **{row['disciplina'].upper()}** - Média: {row['Nota']:.2f}")
 
-        # -----------------------------------------------------------------
-        # ⚙️ GERENCIAR DADOS
-        # -----------------------------------------------------------------
         with abas_avs[5]:
             st.subheader("📥 Importar Novo Arquivo")
             c_up1, c_up2, c_up3 = st.columns(3)
             with c_up1: p_up = st.selectbox("Período:", PERIODOS, key="pup")
             with c_up2: a_up = st.selectbox("Área:", AREAS, key="aup")
             with c_up3: t_up = st.selectbox("Turma:", TURMAS_LISTA, key="tup")
-            
             arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"])
             if st.button("PROCESSAR E SALVAR", type="primary") and arquivo_avs:
                 sucesso, msg = importar_csv_avs_nuvem(arquivo_avs, p_up, a_up, t_up)
                 if sucesso: st.success(msg); st.rerun()
                 else: st.error(msg)
-                
             st.markdown("---")
             st.subheader("🗑️ Limpeza Seletiva de Banco")
             st.write("Selecione um bloco de avaliação para excluir permanentemente da Nuvem:")
-            
             if not df_avs.empty:
                 blocos = df_avs[['periodo', 'area', 'turma']].drop_duplicates()
                 lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
                 bloco_del = st.selectbox("Blocos importados:", lista_blocos)
-                
                 if st.button("EXCLUIR BLOCO SELECIONADO"):
                     p_del, a_del, t_del = bloco_del.split(" | ")
                     linhas_apagadas = excluir_dados_avs(p_del, a_del, t_del)
