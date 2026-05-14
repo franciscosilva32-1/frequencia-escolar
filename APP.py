@@ -28,19 +28,35 @@ cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # =========================================================
+# ⌚ FUNÇÕES DE TEMPO (FORÇANDO FUSO HORÁRIO DO MARANHÃO)
+# =========================================================
+def obter_hora_atual():
+    # Subtrai 3 horas do UTC para garantir o horário de Brasília/Maranhão (UTC-3)
+    return datetime.utcnow() - timedelta(hours=3)
+
+def data_formatada_ptbr():
+    dt = obter_hora_atual()
+    meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
+
+# =========================================================
 # 📧 CONFIGURAÇÃO DO CARTEIRO ELETRÔNICO (E-MAIL ATIVADO!)
 # =========================================================
 ATIVAR_EMAILS = True  # O motor está ligado!
 EMAIL_ESCOLA = "cejv.cema@gmail.com" 
-SENHA_APP_ESCOLA = "jetkkkridsefalvd" # Senha formatada sem espaços
+SENHA_APP_ESCOLA = "jetkkkridsefalvd" # Senha de Aplicativo
 
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
+    # Formata a data de YYYY-MM-DD para DD/MM/YYYY no e-mail
+    try: data_formatada = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except: data_formatada = data
+
     assunto = f"🏫 Aviso de {evento} - Centro Educa Mais Jansen Veloso"
     
     if evento == "ENTRADA":
-        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou sua ENTRADA na escola hoje ({data}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou sua ENTRADA na escola hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
     else:
-        texto = f"⚠️ ATENÇÃO, família!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        texto = f"⚠️ ATENÇÃO, família!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
 
     msg = MIMEMultipart()
     msg['From'] = EMAIL_ESCOLA
@@ -59,15 +75,12 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
                 print(f"[SUCESSO] E-mail enviado -> {email_destino}")
             except Exception as e:
                 print(f"[ERRO] Falha ao enviar e-mail para {email_destino}: {e}")
-        else:
-            print(f"[SIMULAÇÃO] E-mail pronto para envio -> {email_destino} | Assunto: {evento}")
 
-    # Envia o e-mail em segundo plano para não travar a "Fila Rápida"
+    # Envia o e-mail em segundo plano para não travar o sistema
     threading.Thread(target=enviar).start()
-# =========================================================
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (DESIGN E ABAS GIGANTES)
+# 2. CSS PREMIUM 
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -133,7 +146,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 4. FUNÇÕES DE NEGÓCIO (COM CACHE)
+# 4. FUNÇÕES DE NEGÓCIO
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -194,7 +207,7 @@ def abrir_dia_letivo(data_str):
     conn.commit(); conn.close(); return faltas_geradas
 
 def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hora_exata=None):
-    agora = datetime.now()
+    agora = obter_hora_atual()
     hora_atual = hora_exata if hora_exata else agora.strftime("%H:%M:%S")
     hora_obj = datetime.strptime(hora_atual, "%H:%M:%S").time()
     status_entrada = "PRESENTE" if hora_obj <= hora_limite_entrada else "ATRASO"
@@ -224,7 +237,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hor
         if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE ({hora_atual})")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         
-        # DISPARA O E-MAIL DE ENTRADA (Se houver e-mail cadastrado)
+        # DISPARA O E-MAIL
         if email_resp:
             disparar_email_background(email_resp, nome_aluno, "ENTRADA", hora_atual, data_registro)
             
@@ -241,20 +254,16 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
         conn.close(); return False
     
     nome_aluno, email_resp = resultado
-    hora_atual = datetime.now().time()
+    hora_atual = obter_hora_atual().time()
     
-    # AVALIA SE É SAÍDA ANTECIPADA (Antes do horário normal configurado)
     if hora_atual < hora_limite_saida:
         cur.execute("UPDATE registros_v2 SET hora_saida = %s, motivo_saida = %s, pais_informados = %s WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", 
                     (hora_saida, motivo, pais_informados, codigo_estudante, data_registro))
         if cur.rowcount > 0:
             st.success(f"✅ Saída autorizada: {nome_aluno}")
             conn.commit()
-            
-            # DISPARA O E-MAIL APENAS PARA SAÍDA ANTECIPADA
             if email_resp:
                 disparar_email_background(email_resp, nome_aluno, "SAÍDA ANTECIPADA", hora_saida, data_registro)
-                
             conn.close(); return True
         else: st.error("Erro: Aluno não tem registro de entrada hoje.")
     else: st.info("Saída no horário normal. (E-mail não acionado)")
@@ -267,7 +276,7 @@ def limpar_todos_registros():
     conn.commit(); conn.close()
 
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA E HTML5 QR CODE
+# 5. COMPONENTE DA CÂMERA
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
@@ -327,14 +336,14 @@ if os.path.exists("logo.png"):
     with col2: st.image("logo.png", use_column_width=True)
 
 st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
-st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime.now().strftime("%d de %B de %Y")}</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 
 col_logout1, col_logout2 = st.columns([5, 1])
 with col_logout2:
     if st.button("SAIR", key="logout"): cookies["auth_token"] = ""; cookies.save(); st.session_state.autenticado = False; st.rerun()
 
 df_alunos = carregar_alunos()
-hoje_str = datetime.now().strftime("%Y-%m-%d")
+hoje_str = obter_hora_atual().strftime("%Y-%m-%d")
 
 conn = conectar_bd(); cur = conn.cursor()
 cur.execute('''SELECT COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END), COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END), COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END) FROM registros_v2 WHERE data=%s''', (hoje_str,))
@@ -361,7 +370,7 @@ tabs = st.tabs(abas)
 with tabs[0]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
-    with col1: data_registro = st.date_input("Data do registro", datetime.now(), key="data_registro")
+    with col1: data_registro = st.date_input("Data do registro", obter_hora_atual(), key="data_registro")
     data_str_config = data_registro.strftime("%Y-%m-%d")
     
     if "config_dia" not in st.session_state: st.session_state.config_dia = {}
@@ -391,7 +400,7 @@ with tabs[0]:
         if btn_submit_entrada and codigo_recebido.strip():
             aluno_codigo = codigo_recebido.strip().upper()
             if modo_rapido:
-                hora_exata = datetime.now().strftime("%H:%M:%S")
+                hora_exata = obter_hora_atual().strftime("%H:%M:%S")
                 st.session_state.fila_offline.append({"codigo": aluno_codigo, "hora": hora_exata})
                 st.success(f"⚡ Adicionado à fila: {aluno_codigo} ({hora_exata})")
             else: registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
@@ -406,7 +415,6 @@ with tabs[0]:
                 with st.spinner("Enviando dados para a nuvem..."):
                     sucessos = 0
                     for item in st.session_state.fila_offline:
-                        # O e-mail é disparado lá dentro da função registrar_presenca!
                         if registrar_presenca(item['codigo'], data_str_config, hora_entrada, item['hora']): sucessos += 1
                     st.session_state.fila_offline = [] 
                     st.success(f"🎉 Sincronização concluída! {sucessos} registros salvos e e-mails processados.")
@@ -426,7 +434,7 @@ with tabs[0]:
             
         if btn_submit_saida and codigo_saida_recebido.strip():
             aluno_saida_codigo = codigo_saida_recebido.strip().upper()
-            registrar_saida(aluno_saida_codigo, motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida)
+            registrar_saida(aluno_saida_codigo, motivo, pais == "Sim", data_str_config, obter_hora_atual().strftime("%H:%M:%S"), hora_saida)
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -435,7 +443,7 @@ with tabs[1]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
-    with c1: data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
+    with c1: data_filtro = st.date_input("Data", obter_hora_atual(), key="data_filtro")
     with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="turma_filtro")
     with c3: status_filtro = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="status_filtro")
     with c4: busca = st.text_input("Buscar Nome", key="busca")
@@ -450,7 +458,7 @@ with tabs[1]:
 
 with tabs[2]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
-    hoje = datetime.now(); dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
+    hoje = obter_hora_atual(); dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
     conn = conectar_bd()
     if dias_uteis:
         df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
@@ -471,13 +479,12 @@ with tabs[3]:
         if not df_hist.empty: st.dataframe(df_hist, hide_index=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 4: MANUTENÇÃO (CADASTRO DE E-MAIL) ============================
+# ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
         st.subheader("📧 Cadastrar/Atualizar E-mail do Responsável")
         st.write("Registre o e-mail dos pais para enviar alertas automáticos de entrada e saída futuramente.")
-        
         lista_email = []
         for _, row in df_alunos.iterrows():
             email_atual = row.get('email_responsavel', None)
