@@ -11,14 +11,12 @@ import streamlit.components.v1 as components
 from streamlit_cookies_manager import CookieManager
 import tempfile
 
-# BIBLIOTECAS PARA O ENVIO DE E-MAIL E TEMPO
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
 import time
 
-# NOVAS BIBLIOTECAS PARA O ANALISADOR AVS E GRÁFICOS
 import re
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
@@ -50,21 +48,30 @@ def data_formatada_ptbr():
     meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
     return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
 
-ATIVAR_EMAILS = True  
-EMAIL_ESCOLA = "cejv.cema@gmail.com" 
-SENHA_APP_ESCOLA = "jetkkkridsefalvd" 
+ATIVAR_EMAILS = True
+
+# 🔒 Credenciais seguras via Secrets (NÃO ficam mais no código)
+try:
+    EMAIL_ESCOLA = st.secrets["EMAIL_ESCOLA"]
+    SENHA_APP_ESCOLA = st.secrets["SENHA_APP_ESCOLA"]
+except KeyError:
+    EMAIL_ESCOLA = ""
+    SENHA_APP_ESCOLA = ""
+    ATIVAR_EMAILS = False
 
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_formatada = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
     except: data_formatada = data
     assunto = f"🏫 Aviso de {evento} - Centro Educa Mais Jansen Veloso"
-    if evento == "ENTRADA": texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou sua ENTRADA na escola hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
-    else: texto = f"⚠️ ATENÇÃO, família!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+    if evento == "ENTRADA":
+        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou sua ENTRADA na escola hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+    else:
+        texto = f"⚠️ ATENÇÃO, família!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_formatada}) no horário exato de: {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
     msg = MIMEMultipart()
     msg['From'] = EMAIL_ESCOLA; msg['To'] = email_destino; msg['Subject'] = assunto
     msg.attach(MIMEText(texto, 'plain'))
     def enviar():
-        if ATIVAR_EMAILS:
+        if ATIVAR_EMAILS and EMAIL_ESCOLA and SENHA_APP_ESCOLA:
             try:
                 server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls(); server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
                 server.send_message(msg); server.quit()
@@ -115,7 +122,6 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 if not DATABASE_URL: st.error("DATABASE_URL não configurada."); st.stop()
 
 def conectar_bd():
-    # AQUI ESTÁ A MÁGICA: O autocommit=True OBRIGA a limpar a conexão do Supabase
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = True 
     return conn
@@ -130,8 +136,8 @@ def inicializar_tabelas():
         cur.execute('''CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))''')
         cur.execute('''CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))''')
         conn.close()
-    except Exception as e:
-        pass # Se der erro, não trava o app na largada.
+    except Exception:
+        pass
 
 inicializar_tabelas()
 
@@ -145,8 +151,7 @@ def carregar_alunos():
         df = pd.read_sql_query("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
         conn.close()
         return df
-    except Exception:
-        # Retorna DataFrame vazio se o banco falhar, evitando tela vermelha
+    except:
         return pd.DataFrame(columns=['codigo', 'nome', 'turma', 'status', 'email_responsavel'])
 
 def importar_csv_para_bd(arquivo_csv):
@@ -217,7 +222,6 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hor
         cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
         if cur.fetchone(): st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje."); conn.close(); return False
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
-        
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')", (codigo_estudante, data_registro, hora_atual, status_entrada))
         if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE ({hora_atual})")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
@@ -261,9 +265,7 @@ def carregar_dados_avs():
         df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
         conn.close()
         return df
-    except Exception: 
-        # A vacina: Se falhar (por qualquer motivo), retorna vazio sem dar tela vermelha
-        return pd.DataFrame() 
+    except: return pd.DataFrame()
 
 def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
     conteudo = arquivo_csv.read()
@@ -378,7 +380,6 @@ c1, c2 = st.columns([8, 1]); c2.button("SAIR", on_click=lambda: (cookies.update(
 df_alunos = carregar_alunos()
 hoje_str = obter_hora_atual().strftime("%Y-%m-%d")
 
-# Escudo de falha para os indicadores
 try:
     conn = conectar_bd(); cur = conn.cursor()
     cur.execute('''SELECT COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END), COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END), COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END) FROM registros_v2 WHERE data=%s''', (hoje_str,))
@@ -452,7 +453,7 @@ with tabs[0]:
                 registrar_saida(codigo_saida_recebido.strip().upper(), motivo, pais == "Sim", data_str_config, obter_hora_atual().strftime("%H:%M:%S"), hora_saida); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 1 A 4: GESTÃO / ALERTAS / MANUTENÇÃO ============================
+# ============================ ABA 1: GESTÃO ============================
 with tabs[1]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -471,6 +472,7 @@ with tabs[1]:
     except: st.info("Sem dados para exibir no momento.")
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ============================ ABA 2: ALERTAS ============================
 with tabs[2]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
@@ -482,6 +484,7 @@ with tabs[2]:
         except: st.info("Aguardando estabilização do banco de dados...")
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ============================ ABA 3: HISTÓRICO ============================
 with tabs[3]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [])
@@ -491,6 +494,7 @@ with tabs[3]:
         except: st.warning("Não foi possível carregar o histórico agora.")
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ============================ ABA 4: MANUTENÇÃO (admin) ============================
 if st.session_state.eh_admin:
     with tabs[4]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📧 Atualizar E-mail do Responsável")
@@ -530,12 +534,12 @@ if st.session_state.eh_admin:
 
         df_avs = carregar_dados_avs()
         
-        # Filtros Globais
+        # Filtros Globais (CORRIGIDOS COM KEYS ÚNICAS)
         st.markdown("##### 🔍 Filtros Globais")
         c_f1, c_f2, c_f3 = st.columns(3)
-        with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS)
-        with c_f2: a_filtro = st.selectbox("Área", ["Todas"] + AREAS)
-        with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA)
+        with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS, key="avs_p_filtro")
+        with c_f2: a_filtro = st.selectbox("Área", ["Todas"] + AREAS, key="avs_a_filtro")
+        with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA, key="avs_t_filtro")
         
         df_filtrado = df_avs.copy()
         if p_filtro != "Todos" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['periodo'] == p_filtro]
