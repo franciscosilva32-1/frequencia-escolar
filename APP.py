@@ -10,11 +10,12 @@ import unicodedata
 import streamlit.components.v1 as components
 from streamlit_cookies_manager import CookieManager
 
-# BIBLIOTECAS PARA O ENVIO DE E-MAIL
+# BIBLIOTECAS PARA O ENVIO DE E-MAIL E TEMPO
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
+import time  # <-- NOSSA MÁQUINA DO TEMPO PARA EVITAR BLOQUEIOS DO GOOGLE
 
 # ------------------------------------------------------------
 # 1. CONFIGURAÇÃO GERAL E CHAVES DE E-MAIL
@@ -40,7 +41,7 @@ def data_formatada_ptbr():
     return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
 
 # =========================================================
-# 📧 CONFIGURAÇÃO DO CARTEIRO ELETRÔNICO (E-MAIL ATIVADO!)
+# 📧 CONFIGURAÇÃO DO CARTEIRO ELETRÔNICO
 # =========================================================
 ATIVAR_EMAILS = True  # O motor está ligado!
 EMAIL_ESCOLA = "cejv.cema@gmail.com" 
@@ -237,7 +238,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hor
         if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE ({hora_atual})")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         
-        # DISPARA O E-MAIL
+        # DISPARA O E-MAIL (Se houver e-mail cadastrado)
         if email_resp:
             disparar_email_background(email_resp, nome_aluno, "ENTRADA", hora_atual, data_registro)
             
@@ -411,11 +412,19 @@ with tabs[0]:
         if len(st.session_state.fila_offline) > 0:
             st.markdown("<hr>", unsafe_allow_html=True)
             st.warning(f"⚠️ **ATENÇÃO:** Você tem **{len(st.session_state.fila_offline)}** estudante(s) na memória aguardando envio.")
+            
+            # --- MUDANÇA: O FREIO PARA EVITAR BLOQUEIO DO GOOGLE (time.sleep) APLICADO AQUI ---
             if st.button("🔄 SINCRONIZAR AGORA COM A NUVEM", type="primary", use_container_width=True):
-                with st.spinner("Enviando dados para a nuvem..."):
+                with st.spinner(f"Enviando dados e e-mails de {len(st.session_state.fila_offline)} alunos... Por favor, não feche a página."):
                     sucessos = 0
                     for item in st.session_state.fila_offline:
-                        if registrar_presenca(item['codigo'], data_str_config, hora_entrada, item['hora']): sucessos += 1
+                        if registrar_presenca(item['codigo'], data_str_config, hora_entrada, item['hora']): 
+                            sucessos += 1
+                        
+                        # PROTEÇÃO ANTI-BLOQUEIO (Efeito Conta-gotas de 1.5s)
+                        if ATIVAR_EMAILS:
+                            time.sleep(1.5)
+                            
                     st.session_state.fila_offline = [] 
                     st.success(f"🎉 Sincronização concluída! {sucessos} registros salvos e e-mails processados.")
                     st.rerun()
