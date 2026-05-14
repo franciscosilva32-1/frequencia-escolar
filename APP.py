@@ -26,15 +26,15 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS MEGA CHAMATIVO E OTIMIZADO PARA CELULAR
+# 2. CSS MEGA CHAMATIVO E RESPONSIVO (CORRIGIDO PARA CELULAR)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
     
     :root { 
-        --primary: #0a1f35; /* Azul mais escuro e forte */
-        --accent: #ff7b00; /* Laranja bem vibrante */
+        --primary: #0a1f35; 
+        --accent: #ff7b00; 
         --success: #1e8449; 
         --danger: #c0392b; 
         --bg-color: #eef2f5;
@@ -43,78 +43,31 @@ st.markdown("""
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* Títulos da Página */
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.2rem, 7vw, 3rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.1rem; color: #34495e; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    /* Caixas e Métricas */
     .card { background: white; border-radius: 24px; padding: 1.8rem; margin-bottom: 1.5rem; box-shadow: 0 15px 35px rgba(0,0,0,0.1); border: 3px solid #dce4ec; }
     .metric-item { background: #ffffff; border-radius: 16px; padding: 1.2rem; text-align: center; border-bottom: 6px solid var(--accent); box-shadow: 0 8px 15px rgba(0,0,0,0.08); }
     .metric-value { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 2.5rem; color: var(--primary); }
     .metric-label { font-size: 0.9rem; font-weight: 800; text-transform: uppercase; color: #5f6b7a; }
     
-    /* =========================================
-       CAMPOS DE TEXTO E SENHA BEM FORTES
-       ========================================= */
-    div[data-baseweb="input"] {
-        border: 3px solid var(--primary) !important;
-        border-radius: 14px !important;
-        background-color: #ffffff !important;
-    }
-    div[data-baseweb="input"] input {
-        color: #000000 !important;
-        -webkit-text-fill-color: #000000 !important; /* Força cor preta no iPhone/Android */
-        font-weight: 900 !important;
-        font-size: 1.3rem !important;
-        padding: 0.8rem 1rem !important;
-    }
-    div[data-baseweb="input"]:focus-within {
-        border-color: var(--accent) !important;
-        box-shadow: 0 0 0 5px rgba(255, 123, 0, 0.3) !important;
-    }
+    div[data-baseweb="input"] { border: 3px solid var(--primary) !important; border-radius: 14px !important; background-color: #ffffff !important; }
+    div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.3rem !important; padding: 0.8rem 1rem !important; }
+    div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 5px rgba(255, 123, 0, 0.3) !important; }
 
-    /* Select Box (Caixa de Seleção) */
-    div[data-baseweb="select"] > div {
-        border: 3px solid var(--primary) !important;
-        border-radius: 14px !important;
-        background-color: #ffffff !important;
-        color: #000000 !important;
-        font-weight: 800 !important;
-        font-size: 1.2rem !important;
-    }
+    div[data-baseweb="select"] > div { border: 3px solid var(--primary) !important; border-radius: 14px !important; background-color: #ffffff !important; color: #000000 !important; font-weight: 800 !important; font-size: 1.2rem !important; }
 
-    /* =========================================
-       BOTÕES DO SISTEMA
-       ========================================= */
-    .stButton > button {
-        border-radius: 14px !important;
-        font-weight: 900 !important;
-        font-size: 1.2rem !important;
-        padding: 0.8rem 2rem !important;
-        text-transform: uppercase !important;
-        border: none !important;
-        transition: all 0.2s ease !important;
-    }
-    
-    /* Botão Principal de Processar/Submit */
-    [data-testid="stFormSubmitButton"] > button {
-        background: linear-gradient(135deg, var(--primary), #1a4b82) !important;
-        color: white !important;
-        box-shadow: 0 8px 20px rgba(10, 31, 53, 0.4) !important;
-        width: 100% !important;
-    }
-    [data-testid="stFormSubmitButton"] > button:active {
-        transform: scale(0.95);
-    }
+    .stButton > button { border-radius: 14px !important; font-weight: 900 !important; font-size: 1.2rem !important; padding: 0.8rem 2rem !important; text-transform: uppercase !important; border: none !important; transition: all 0.2s ease !important; }
+    [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 8px 20px rgba(10, 31, 53, 0.4) !important; width: 100% !important; }
+    [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
 
-    /* Tela de Login Gigante */
     .login-card { max-width: 450px; margin: 5vh auto; background: white; border-radius: 30px; padding: 3rem 2rem; text-align: center; box-shadow: 0 30px 60px rgba(0,0,0,0.2); border: 4px solid var(--primary); }
     .login-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 1.8rem; color: var(--primary); margin-bottom: 2rem; text-transform: uppercase;}
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS (SUPABASE)
+# 3. CONEXÃO BANCO DE DADOS (COM NOVA COLUNA STATUS)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -130,7 +83,13 @@ def conectar_bd():
 def inicializar_tabelas():
     conn = conectar_bd()
     cur = conn.cursor()
+    # Tabela alunos_v2 com a nova coluna status (ATIVO por padrão)
     cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
+    try:
+        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
+    except Exception as e:
+        conn.rollback()
+        
     cur.execute('''
         CREATE TABLE IF NOT EXISTS registros_v2 (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME,
@@ -148,7 +107,8 @@ inicializar_tabelas()
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
-    df = pd.read_sql_query("SELECT codigo, nome, turma FROM alunos_v2 ORDER BY turma, nome", conn)
+    # Agora trazemos o status também
+    df = pd.read_sql_query("SELECT codigo, nome, turma, status FROM alunos_v2 ORDER BY turma, nome", conn)
     conn.close()
     return df
 
@@ -175,16 +135,43 @@ def importar_csv_para_bd(arquivo_csv):
         nome = str(row['NOME']).strip().upper()
         turma = str(row['TURMA']).strip().upper()
         if codigo == 'NAN' or nome == 'NAN': continue
-        try: cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma", (codigo, nome, turma))
+        try: cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO') ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma", (codigo, nome, turma))
         except: conn.rollback()
     conn.commit()
     conn.close()
     return True
 
+# Adição Manual de Aluno
+def adicionar_aluno_manual(codigo, nome, turma):
+    conn = conectar_bd()
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO')", 
+                    (codigo.strip().upper(), nome.strip().upper(), turma.strip().upper()))
+        conn.commit()
+        return True
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return "duplicado"
+    except Exception as e:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+# Alteração de Status
+def alterar_status_aluno(codigo, novo_status):
+    conn = conectar_bd()
+    cur = conn.cursor()
+    cur.execute("UPDATE alunos_v2 SET status = %s WHERE codigo = %s", (novo_status, codigo))
+    conn.commit()
+    conn.close()
+
 def abrir_dia_letivo(data_str):
     conn = conectar_bd()
     cur = conn.cursor()
-    cur.execute("SELECT codigo FROM alunos_v2")
+    # MUDANÇA: Só gera falta para alunos ATIVOS!
+    cur.execute("SELECT codigo FROM alunos_v2 WHERE status = 'ATIVO'")
     alunos = [row[0] for row in cur.fetchall()]
     
     faltas_geradas = 0
@@ -202,18 +189,24 @@ def abrir_dia_letivo(data_str):
 def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     agora = datetime.now()
     hora_atual = agora.strftime("%H:%M:%S")
-    status = "PRESENTE" if agora.time() <= hora_limite_entrada else "ATRASO"
+    status_entrada = "PRESENTE" if agora.time() <= hora_limite_entrada else "ATRASO"
     
     conn = conectar_bd()
     cur = conn.cursor()
-    cur.execute("SELECT nome FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
+    cur.execute("SELECT nome, status FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
     resultado = cur.fetchone()
+    
     if not resultado:
         st.error(f"❌ Código não cadastrado: {codigo_estudante}")
         conn.close()
         return False
         
-    nome_aluno = resultado[0]
+    nome_aluno, status_aluno = resultado
+    
+    # Se o aluno não estiver ATIVO, emitimos um alerta, mas o sistema pode registrar (opcional)
+    if status_aluno != 'ATIVO':
+        st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
+    
     cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
     if cur.fetchone():
         st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje.")
@@ -224,9 +217,9 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     
     try:
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
-                    (codigo_estudante, data_registro, hora_atual, status))
+                    (codigo_estudante, data_registro, hora_atual, status_entrada))
         conn.commit()
-        if status == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE")
+        if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         return True
     except: conn.rollback(); return False
@@ -257,15 +250,8 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
     conn.close()
     return False
 
-def limpar_todos_registros():
-    conn = conectar_bd()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM registros_v2")
-    conn.commit()
-    conn.close()
-
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA (MANUAL E SEGURO)
+# 5. COMPONENTE DA CÂMERA (CORRIGIDO PARA MODO RETRATO)
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
@@ -273,7 +259,7 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         <div id="reader-qr-{id_camera}" style="width:100%;"></div>
     </div>
     
-    <div style="text-align: center; margin-top: 15px; display: flex; gap: 15px; justify-content: center;">
+    <div style="text-align: center; margin-top: 15px; display: flex; flex-wrap: wrap; gap: 15px; justify-content: center;">
         <button id="btn-start" style="padding: 15px 25px; background: #27ae60; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 200px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(39, 174, 96, 0.4);">
             📷 LIGAR CÂMERA
         </button>
@@ -294,12 +280,7 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         function unlockAudio() {{
             if (!audioCtx) {{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }}
             if (audioCtx.state === 'suspended') {{ audioCtx.resume(); }}
-            try {{
-                const osc = audioCtx.createOscillator();
-                osc.connect(audioCtx.destination);
-                osc.start(0);
-                osc.stop(0.001);
-            }} catch(e) {{}}
+            try {{ const osc = audioCtx.createOscillator(); osc.connect(audioCtx.destination); osc.start(0); osc.stop(0.001); }} catch(e) {{}}
         }}
 
         function playBeep() {{
@@ -323,26 +304,24 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
             btnStop.style.display = 'inline-block';
             boxCamera.style.display = 'block';
             
+            // Lógica inteligente de tamanho da tela para não bugar no modo retrato!
+            let screenWidth = window.innerWidth || document.documentElement.clientWidth;
+            let size = screenWidth < 400 ? 200 : 250; 
+
             html5QrCode.start(
                 {{ facingMode: "environment" }},
-                {{ fps: 10, qrbox: {{ width: 250, height: 250 }} }},
+                {{ fps: 15, qrbox: {{ width: size, height: size }} }},
                 (decodedText) => {{
-                    // 1. Toca o BIPE imediatamente
                     playBeep(); 
-                    
-                    // 2. DESLIGA A CÂMERA IMEDIATAMENTE (Acaba com o travamento)
                     desligarCamera();
                     
-                    // 3. Procura o campo e manda processar
                     const inputs = window.parent.document.querySelectorAll('input[type="text"]');
                     for (let i = 0; i < inputs.length; i++) {{
                         if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
-                            
                             let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                             nativeSetter.call(inputs[i], decodedText);
                             inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
                             
-                            // Delay curtinho para o React entender, e clica no botão "Registrar"
                             setTimeout(() => {{
                                 const buttons = window.parent.document.querySelectorAll('button');
                                 for (let j = 0; j < buttons.length; j++) {{
@@ -356,11 +335,9 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                         }}
                     }}
                 }},
-                (errorMessage) => {{
-                    // Erros de "não achei código nesse frame" são normais, ignorar.
-                }}
+                (errorMessage) => {{}}
             ).catch(err => {{
-                alert("Verifique a permissão da câmera no navegador.");
+                alert("Verifique a permissão da câmera.");
                 desligarCamera();
             }});
         }};
@@ -383,7 +360,7 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         btnStop.onclick = desligarCamera;
     </script>
     """
-    components.html(html_code, height=450)
+    components.html(html_code, height=480)
 
 # ------------------------------------------------------------
 # 6. AUTENTICAÇÃO PERSISTENTE
@@ -437,24 +414,27 @@ with col_logout2:
         cookies["auth_token"] = ""; cookies.save(); st.session_state.autenticado = False; st.rerun()
 
 df_alunos = carregar_alunos()
-if df_alunos.empty:
-    if st.session_state.eh_admin: st.warning("Acesse a aba MANUTENÇÃO para importar a Base de Dados.")
-    else: st.error("Sistema sem dados."); st.stop()
 
 hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
-total = len(df_alunos)
+
+# Métrica Inteligente: Conta apenas os ATIVOS
+total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
+
 presentes_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
 faltas_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='FALTA'", conn, params=[hoje_str]).iloc[0,0]
 atrasos_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
 conn.close()
 
 st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
-st.markdown(f'<div class="metric-item"><div class="metric-value">{total}</div><div class="metric-label">📋 Alunos</div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="metric-item"><div class="metric-value">{total_ativos}</div><div class="metric-label">📋 Alunos Ativos</div></div>', unsafe_allow_html=True)
 st.markdown(f'<div class="metric-item" style="border-bottom-color: #27ae60;"><div class="metric-value">{presentes_hoje}</div><div class="metric-label">✅ Presentes</div></div>', unsafe_allow_html=True)
 st.markdown(f'<div class="metric-item" style="border-bottom-color: #e74c3c;"><div class="metric-value">{faltas_hoje}</div><div class="metric-label">❌ Faltas</div></div>', unsafe_allow_html=True)
 st.markdown(f'<div class="metric-item" style="border-bottom-color: #f39c12;"><div class="metric-value">{atrasos_hoje}</div><div class="metric-label">⏰ Atrasos</div></div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
+
+if df_alunos.empty and not st.session_state.eh_admin:
+    st.error("Sistema sem dados."); st.stop()
 
 abas = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção"] if st.session_state.eh_admin else ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
 tabs = st.tabs(abas)
@@ -476,20 +456,17 @@ with tabs[0]:
     st.session_state.config_dia[data_str_config]["hora_saida"] = hora_saida
 
     st.markdown("---")
-    
     if st.button("📍 ABRIR DIA LETIVO (GERAR FALTAS)", use_container_width=True):
         faltas = abrir_dia_letivo(data_str_config)
-        st.success(f"Dia Iniciado! {faltas} alunos marcados como Ausentes.")
+        st.success(f"Dia Iniciado! {faltas} alunos (Ativos) marcados como Ausentes na pauta.")
         
     st.markdown("---")
 
     tab_entrada, tab_saida = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA"])
 
-    # ---------- ENTRADA ----------
     with tab_entrada:
         label_in = "Código Estudante (Entrada)"
         botao_in = "Registrar Entrada"
-        
         gerar_componente_camera(label_in, botao_in, "entrada")
         
         with st.form("form_in", clear_on_submit=True):
@@ -502,7 +479,6 @@ with tabs[0]:
             registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
             st.rerun()
 
-    # ---------- SAÍDA ----------
     with tab_saida:
         motivo = st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"], key="motivo_saida_val")
         if motivo == "Outro": motivo = st.text_input("Especifique", key="motivo_outro_val")
@@ -510,7 +486,6 @@ with tabs[0]:
         
         label_out = "Código Estudante (Saída)"
         botao_out = "Registrar Saída"
-        
         gerar_componente_camera(label_out, botao_out, "saida")
         
         with st.form("form_out", clear_on_submit=True):
@@ -522,7 +497,6 @@ with tabs[0]:
             aluno_saida_codigo = codigo_saida_recebido.strip().upper()
             registrar_saida(aluno_saida_codigo, motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida)
             st.rerun()
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ============================ ABA 1: GESTÃO ============================
@@ -547,7 +521,6 @@ with tabs[1]:
     query += " ORDER BY a.turma, a.nome"
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
-    
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -557,16 +530,17 @@ with tabs[2]:
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
     conn = conectar_bd()
     if dias_uteis:
-        df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
-        st.subheader("🚨 Alunos sem presença nos últimos 5 dias úteis")
+        # Alerta ignorando quem não é mais ativo!
+        df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
+        st.subheader("🚨 Alunos Ativos sem presença nos últimos 5 dias")
         if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
-        else: st.success("Nenhum aluno nesta situação.")
+        else: st.success("Nenhum aluno ativo nesta situação.")
     conn.close()
 
 # ============================ ABA 3: HISTÓRICO ============================
 with tabs[3]:
     st.subheader("📈 Histórico Individual do Aluno")
-    lista_selecao = [f"{row['codigo']} - {row['nome']}" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
+    lista_selecao = [f"{row['codigo']} - {row['nome']} ({row['status']})" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
     aluno_sel = st.selectbox("Selecione o aluno para análise", [""] + lista_selecao, key="hist_aluno")
     if aluno_sel:
         codigo_extraid = aluno_sel.split(" - ")[0]
@@ -578,13 +552,45 @@ with tabs[3]:
 # ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
-        st.subheader("⚙️ Importação de Dados da Escola")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("➕ Adicionar Estudante Manualmente")
+        with st.form("form_add_aluno", clear_on_submit=True):
+            c_add1, c_add2, c_add3 = st.columns([1, 2, 1])
+            with c_add1: new_cod = st.text_input("Código da Matrícula")
+            with c_add2: new_nome = st.text_input("Nome Completo")
+            with c_add3: new_turma = st.text_input("Turma")
+            btn_add = st.form_submit_button("CADASTRAR ESTUDANTE")
+            
+            if btn_add and new_cod and new_nome and new_turma:
+                res = adicionar_aluno_manual(new_cod, new_nome, new_turma)
+                if res == True: st.success(f"Estudante {new_nome} adicionado com sucesso!"); st.rerun()
+                elif res == "duplicado": st.error("Erro: Esse código já existe no sistema.")
+                else: st.error("Erro ao adicionar estudante.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("🔄 Alterar Situação do Estudante")
+        lista_sit = [f"{row['codigo']} - {row['nome']} (Atual: {row['status']})" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
+        aluno_sit = st.selectbox("Selecione o Estudante", [""] + lista_sit, key="sit_aluno")
+        novo_status = st.selectbox("Nova Situação", ["ATIVO", "TRANSFERIDO", "DESISTENTE", "FALECIDO"])
+        if st.button("ATUALIZAR SITUAÇÃO", type="primary") and aluno_sit:
+            cod_sit = aluno_sit.split(" - ")[0]
+            alterar_status_aluno(cod_sit, novo_status)
+            st.success("Situação atualizada com sucesso!")
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("⚙️ Importação em Massa (CSV)")
         st.write("Faça o upload do arquivo CSV com **ESCOLA**, **TURMA**, **CÓDIGO** e **NOME**.")
         up_admin = st.file_uploader("Arquivo CSV", type=["csv"], key="admin_csv")
         if up_admin:
             if importar_csv_para_bd(up_admin): st.success("Lista atualizada!"); st.rerun()
-            
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("🗑️ Limpeza de Base")
         senha_conf = st.text_input("Senha Admin", type="password", key="senha_limpar")
         if st.button("APAGAR HISTÓRICO", type="primary") and senha_conf == SENHA_ADMIN:
             limpar_todos_registros(); st.success("Registos apagados.")
+        st.markdown('</div>', unsafe_allow_html=True)
