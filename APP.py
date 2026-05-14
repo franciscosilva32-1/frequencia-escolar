@@ -22,7 +22,7 @@ import time
 import re
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
-from matplotlib.ticker import MaxNLocator # <-- A ferramenta que corrige a régua do gráfico
+from matplotlib.ticker import MaxNLocator
 mplstyle.use('seaborn-v0_8-whitegrid')
 
 try:
@@ -106,32 +106,32 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS E TABELAS (BLINDAGEM ULTRA)
+# 3. CONEXÃO BANCO DE DADOS (VACINA CONTRA CONEXÃO SUJA)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
 if not DATABASE_URL: st.error("DATABASE_URL não configurada."); st.stop()
-def conectar_bd(): return psycopg2.connect(DATABASE_URL)
+
+def conectar_bd():
+    # AQUI ESTÁ A MÁGICA: O autocommit=True OBRIGA a limpar a conexão do Supabase
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True 
+    return conn
 
 def inicializar_tabelas():
-    conn = conectar_bd()
-    conn.autocommit = True 
-    cur = conn.cursor()
-    try: cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
-    except: pass
-    try: cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
-    except: pass
-    try: cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS email_responsavel TEXT")
-    except: pass
-    try: cur.execute('''CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))''')
-    except: pass
-    
-    # TABELA AVS
-    try: cur.execute('''CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))''')
-    except: pass
-    conn.close()
+    try:
+        conn = conectar_bd()
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
+        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
+        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS email_responsavel TEXT")
+        cur.execute('''CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))''')
+        conn.close()
+    except Exception as e:
+        pass # Se der erro, não trava o app na largada.
 
 inicializar_tabelas()
 
@@ -140,10 +140,14 @@ inicializar_tabelas()
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
-    conn = conectar_bd()
-    df = pd.read_sql_query("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
-    conn.close()
-    return df
+    try:
+        conn = conectar_bd()
+        df = pd.read_sql_query("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
+        conn.close()
+        return df
+    except Exception:
+        # Retorna DataFrame vazio se o banco falhar, evitando tela vermelha
+        return pd.DataFrame(columns=['codigo', 'nome', 'turma', 'status', 'email_responsavel'])
 
 def importar_csv_para_bd(arquivo_csv):
     conteudo = arquivo_csv.read()
@@ -158,85 +162,94 @@ def importar_csv_para_bd(arquivo_csv):
         codigo, nome, turma = str(row['CODIGO']).strip().upper(), str(row['NOME']).strip().upper(), str(row['TURMA']).strip().upper()
         if codigo == 'NAN' or nome == 'NAN': continue
         try: cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO') ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma", (codigo, nome, turma))
-        except: conn.rollback()
-    conn.commit(); conn.close(); st.cache_data.clear(); return True
+        except: pass
+    conn.close(); st.cache_data.clear(); return True
 
 def adicionar_aluno_manual(codigo, nome, turma):
     conn = conectar_bd(); cur = conn.cursor()
     try:
         cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO')", (codigo.strip().upper(), nome.strip().upper(), turma.strip().upper()))
-        conn.commit(); st.cache_data.clear(); return True
-    except psycopg2.errors.UniqueViolation: conn.rollback(); return "duplicado"
-    except: conn.rollback(); return False
+        st.cache_data.clear(); return True
+    except psycopg2.errors.UniqueViolation: return "duplicado"
+    except: return False
     finally: conn.close()
 
 def alterar_status_aluno(codigo, novo_status):
-    conn = conectar_bd(); cur = conn.cursor()
-    cur.execute("UPDATE alunos_v2 SET status = %s WHERE codigo = %s", (novo_status, codigo))
-    conn.commit(); conn.close(); st.cache_data.clear()
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("UPDATE alunos_v2 SET status = %s WHERE codigo = %s", (novo_status, codigo))
+        conn.close(); st.cache_data.clear()
+    except: pass
 
 def atualizar_email_aluno(codigo, email):
-    conn = conectar_bd(); cur = conn.cursor()
     try:
+        conn = conectar_bd(); cur = conn.cursor()
         cur.execute("UPDATE alunos_v2 SET email_responsavel = %s WHERE codigo = %s", (email.strip().lower(), codigo))
-        conn.commit(); st.cache_data.clear(); return True
-    except: conn.rollback(); return False
+        st.cache_data.clear(); return True
+    except: return False
     finally: conn.close()
 
 def abrir_dia_letivo(data_str):
-    conn = conectar_bd(); cur = conn.cursor()
-    cur.execute("SELECT codigo FROM alunos_v2 WHERE status = 'ATIVO'")
-    alunos = [row[0] for row in cur.fetchall()]; faltas_geradas = 0
-    for codigo in alunos:
-        cur.execute("SELECT id FROM registros_v2 WHERE codigo_aluno = %s AND data = %s", (codigo, data_str))
-        if not cur.fetchone():
-            try: cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')", (codigo, data_str)); faltas_geradas += 1
-            except: conn.rollback()
-    conn.commit(); conn.close(); return faltas_geradas
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("SELECT codigo FROM alunos_v2 WHERE status = 'ATIVO'")
+        alunos = [row[0] for row in cur.fetchall()]; faltas_geradas = 0
+        for codigo in alunos:
+            cur.execute("SELECT id FROM registros_v2 WHERE codigo_aluno = %s AND data = %s", (codigo, data_str))
+            if not cur.fetchone():
+                try: cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')", (codigo, data_str)); faltas_geradas += 1
+                except: pass
+        conn.close(); return faltas_geradas
+    except: return 0
 
 def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hora_exata=None):
     agora = obter_hora_atual()
     hora_atual = hora_exata if hora_exata else agora.strftime("%H:%M:%S")
     hora_obj = datetime.strptime(hora_atual, "%H:%M:%S").time()
     status_entrada = "PRESENTE" if hora_obj <= hora_limite_entrada else "ATRASO"
-    conn = conectar_bd(); cur = conn.cursor()
-    cur.execute("SELECT nome, status, email_responsavel FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
-    resultado = cur.fetchone()
-    if not resultado: st.error(f"❌ Código não cadastrado: {codigo_estudante}"); conn.close(); return False
-    nome_aluno, status_aluno, email_resp = resultado
-    if status_aluno != 'ATIVO': st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
-    cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
-    if cur.fetchone(): st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje."); conn.close(); return False
-    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
     try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("SELECT nome, status, email_responsavel FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
+        resultado = cur.fetchone()
+        if not resultado: st.error(f"❌ Código não cadastrado: {codigo_estudante}"); conn.close(); return False
+        nome_aluno, status_aluno, email_resp = resultado
+        if status_aluno != 'ATIVO': st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
+        cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
+        if cur.fetchone(): st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje."); conn.close(); return False
+        cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
+        
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')", (codigo_estudante, data_registro, hora_atual, status_entrada))
-        conn.commit()
         if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE ({hora_atual})")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         if email_resp: disparar_email_background(email_resp, nome_aluno, "ENTRADA", hora_atual, data_registro)
         return True
-    except: conn.rollback(); return False
-    finally: conn.close()
+    except: return False
+    finally: 
+        try: conn.close()
+        except: pass
 
 def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, hora_saida, hora_limite_saida):
-    conn = conectar_bd(); cur = conn.cursor()
-    cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
-    resultado = cur.fetchone()
-    if not resultado: st.error(f"❌ Código não encontrado."); conn.close(); return False
-    nome_aluno, email_resp = resultado
-    hora_atual = obter_hora_atual().time()
-    if hora_atual < hora_limite_saida:
-        cur.execute("UPDATE registros_v2 SET hora_saida = %s, motivo_saida = %s, pais_informados = %s WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (hora_saida, motivo, pais_informados, codigo_estudante, data_registro))
-        if cur.rowcount > 0:
-            st.success(f"✅ Saída autorizada: {nome_aluno}"); conn.commit()
-            if email_resp: disparar_email_background(email_resp, nome_aluno, "SAÍDA ANTECIPADA", hora_saida, data_registro)
-            conn.close(); return True
-        else: st.error("Erro: Aluno não tem registro de entrada hoje.")
-    else: st.info("Saída no horário normal. (E-mail não acionado)")
-    conn.close(); return False
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
+        resultado = cur.fetchone()
+        if not resultado: st.error(f"❌ Código não encontrado."); conn.close(); return False
+        nome_aluno, email_resp = resultado
+        hora_atual = obter_hora_atual().time()
+        if hora_atual < hora_limite_saida:
+            cur.execute("UPDATE registros_v2 SET hora_saida = %s, motivo_saida = %s, pais_informados = %s WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (hora_saida, motivo, pais_informados, codigo_estudante, data_registro))
+            if cur.rowcount > 0:
+                st.success(f"✅ Saída autorizada: {nome_aluno}")
+                if email_resp: disparar_email_background(email_resp, nome_aluno, "SAÍDA ANTECIPADA", hora_saida, data_registro)
+                conn.close(); return True
+            else: st.error("Erro: Aluno não tem registro de entrada hoje.")
+        else: st.info("Saída no horário normal. (E-mail não acionado)")
+        conn.close(); return False
+    except: return False
 
 def limpar_todos_registros():
-    conn = conectar_bd(); cur = conn.cursor(); cur.execute("DELETE FROM registros_v2"); conn.commit(); conn.close()
+    try: conn = conectar_bd(); cur = conn.cursor(); cur.execute("DELETE FROM registros_v2"); conn.close()
+    except: pass
 
 # =========================================================
 # 🧠 NOVO MOTOR: ANALISADOR AVS NA NUVEM
@@ -244,12 +257,13 @@ def limpar_todos_registros():
 @st.cache_data(ttl=60)
 def carregar_dados_avs():
     try:
-        conn = conectar_bd(); cur = conn.cursor()
-        cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'avaliacoes_avs');")
-        if cur.fetchone()[0]: df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
-        else: df = pd.DataFrame()
-        conn.close(); return df
-    except Exception: return pd.DataFrame() 
+        conn = conectar_bd()
+        df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
+        conn.close()
+        return df
+    except Exception: 
+        # A vacina: Se falhar (por qualquer motivo), retorna vazio sem dar tela vermelha
+        return pd.DataFrame() 
 
 def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
     conteudo = arquivo_csv.read()
@@ -284,20 +298,24 @@ def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
             dados_longos.append((periodo, area, turma, nome, disciplinas[d_idx], int(q_match.group(1)) if q_match else (i + 1), resp, gabarito, acerto))
 
     if not dados_longos: return False, "Nenhum dado processável."
-    conn = conectar_bd(); cur = conn.cursor()
-    inseridos = 0
-    for linha in dados_longos:
-        try:
-            cur.execute('''INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, gabarito=EXCLUDED.gabarito, acerto=EXCLUDED.acerto''', linha)
-            inseridos += 1
-        except Exception: conn.rollback(); continue
-    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"Sucesso! {inseridos} respostas cadastradas no Banco."
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        inseridos = 0
+        for linha in dados_longos:
+            try:
+                cur.execute('''INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, gabarito=EXCLUDED.gabarito, acerto=EXCLUDED.acerto''', linha)
+                inseridos += 1
+            except: pass
+        conn.close(); st.cache_data.clear(); return True, f"Sucesso! {inseridos} respostas cadastradas no Banco."
+    except Exception as e: return False, f"Erro ao injetar dados: {e}"
 
 def excluir_dados_avs(periodo, area, turma):
-    conn = conectar_bd(); cur = conn.cursor()
-    cur.execute("DELETE FROM avaliacoes_avs WHERE periodo = %s AND area = %s AND turma = %s", (periodo, area, turma))
-    linhas = cur.rowcount; conn.commit(); conn.close(); st.cache_data.clear()
-    return linhas
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("DELETE FROM avaliacoes_avs WHERE periodo = %s AND area = %s AND turma = %s", (periodo, area, turma))
+        linhas = cur.rowcount; conn.close(); st.cache_data.clear()
+        return linhas
+    except: return 0
 
 # ------------------------------------------------------------
 # 5. COMPONENTE DA CÂMERA
@@ -359,9 +377,15 @@ c1, c2 = st.columns([8, 1]); c2.button("SAIR", on_click=lambda: (cookies.update(
 
 df_alunos = carregar_alunos()
 hoje_str = obter_hora_atual().strftime("%Y-%m-%d")
-conn = conectar_bd(); cur = conn.cursor()
-cur.execute('''SELECT COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END), COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END), COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END) FROM registros_v2 WHERE data=%s''', (hoje_str,))
-pres_hoje, falt_hoje, atras_hoje = cur.fetchone(); conn.close()
+
+# Escudo de falha para os indicadores
+try:
+    conn = conectar_bd(); cur = conn.cursor()
+    cur.execute('''SELECT COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END), COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END), COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END) FROM registros_v2 WHERE data=%s''', (hoje_str,))
+    pres_hoje, falt_hoje, atras_hoje = cur.fetchone(); conn.close()
+except:
+    pres_hoje, falt_hoje, atras_hoje = 0, 0, 0
+
 total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
 
 st.markdown(f'''
@@ -436,28 +460,35 @@ with tabs[1]:
     with c2: t_f = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"])
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"])
     with c4: b_f = st.text_input("Buscar Nome")
-    query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
-    if t_f != "Todas": query += " AND a.turma = %s"; params.append(t_f)
-    if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
-    elif s_f == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
-    if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
-    conn = conectar_bd(); df = pd.read_sql_query(query + " ORDER BY a.turma, a.nome", conn, params=params); conn.close()
-    st.dataframe(df, use_container_width=True, hide_index=True); st.markdown('</div>', unsafe_allow_html=True)
+    try:
+        query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
+        if t_f != "Todas": query += " AND a.turma = %s"; params.append(t_f)
+        if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
+        elif s_f == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
+        if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
+        conn = conectar_bd(); df_relatorio = pd.read_sql_query(query + " ORDER BY a.turma, a.nome", conn, params=params); conn.close()
+        st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
+    except: st.info("Sem dados para exibir no momento.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 with tabs[2]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     if dias_u:
-        conn = conectar_bd(); df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)]); conn.close()
-        if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
-        else: st.success("Nenhum aluno ativo nesta situação.")
+        try:
+            conn = conectar_bd(); df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)]); conn.close()
+            if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
+            else: st.success("Nenhum aluno ativo nesta situação.")
+        except: st.info("Aguardando estabilização do banco de dados...")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with tabs[3]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [])
     if aluno_sel:
-        conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
+        try:
+            conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
+        except: st.warning("Não foi possível carregar o histórico agora.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 if st.session_state.eh_admin:
@@ -507,9 +538,9 @@ if st.session_state.eh_admin:
         with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA)
         
         df_filtrado = df_avs.copy()
-        if p_filtro != "Todos": df_filtrado = df_filtrado[df_filtrado['periodo'] == p_filtro]
-        if a_filtro != "Todas": df_filtrado = df_filtrado[df_filtrado['area'] == a_filtro]
-        if t_filtro != "Todas": df_filtrado = df_filtrado[df_filtrado['turma'] == t_filtro]
+        if p_filtro != "Todos" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['periodo'] == p_filtro]
+        if a_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['area'] == a_filtro]
+        if t_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['turma'] == t_filtro]
 
         # Sub-Abas do Analisador
         abas_avs = st.tabs(["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões", "📉 Críticas", "⚙️ Gerenciar Dados"])
@@ -660,8 +691,6 @@ if st.session_state.eh_admin:
                     fig_f, ax_f = plt.subplots(figsize=(8, 3), dpi=90)
                     bars_f = ax_f.bar(faltosos_resumo['periodo'], faltosos_resumo['Total'], color="#EF4444")
                     ax_f.set_title("Total de Faltosos por Período", weight='bold', color="#0a1f35")
-                    
-                    # A MÁGICA: Manda o Matplotlib gerenciar os números inteiros!
                     ax_f.yaxis.set_major_locator(MaxNLocator(integer=True)) 
                     
                     for bar in bars_f:
