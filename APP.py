@@ -45,34 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. GESTÃO DO BIPE (AVISO SONORO)
-# ------------------------------------------------------------
-def emitir_som_beep():
-    html_beep = """
-    <script>
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        oscillator.type = 'sine';
-        oscillator.frequency.value = 850; 
-        oscillator.start();
-        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.3);
-        oscillator.stop(audioCtx.currentTime + 0.3);
-    </script>
-    """
-    components.html(html_beep, height=0, width=0)
-
-if "tocar_som" not in st.session_state:
-    st.session_state.tocar_som = False
-
-if st.session_state.tocar_som:
-    emitir_som_beep()
-    st.session_state.tocar_som = False
-
-# ------------------------------------------------------------
-# 4. CONEXÃO BANCO DE DADOS
+# 3. CONEXÃO BANCO DE DADOS (SUPABASE)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -89,17 +62,20 @@ def inicializar_tabelas():
     conn = conectar_bd()
     cur = conn.cursor()
     cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS registros_v2 (
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS registros_v2 (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME,
             status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT,
-            UNIQUE(codigo_aluno, data, tipo_registro))''')
+            UNIQUE(codigo_aluno, data, tipo_registro)
+        )
+    ''')
     conn.commit()
     conn.close()
 
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. FUNÇÕES DE LÓGICA DE NEGÓCIO
+# 4. FUNÇÕES DE NEGÓCIO
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
@@ -162,12 +138,10 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
                     (codigo_estudante, data_registro, hora_atual, status))
         conn.commit()
-        if status == "PRESENTE": st.success(f"✅ {nome_aluno} registado às {hora_atual}")
+        if status == "PRESENTE": st.success(f"✅ Sucesso: {nome_aluno} registado às {hora_atual}")
         else: st.warning(f"⏰ Atraso: {nome_aluno} às {hora_atual}")
         return True
-    except:
-        conn.rollback()
-        return False
+    except: conn.rollback(); return False
     finally: conn.close()
 
 def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, hora_saida, hora_limite_saida):
@@ -203,68 +177,124 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 6. CALLBACKS PARA PROCESSAMENTO AUTOMÁTICO (DIGITAÇÃO/JS)
+# 5. COMPONENTE DA CÂMERA (COM BIPE E MEMÓRIA JS)
 # ------------------------------------------------------------
-def callback_processar_entrada(data_str, hora_limite):
-    codigo = st.session_state.input_entrada.strip().upper()
-    if codigo:
-        if registrar_presenca(codigo, data_str, hora_limite):
-            st.session_state.tocar_som = True
-    st.session_state.input_entrada = "" # Limpa o campo automaticamente
-
-def callback_processar_saida(data_str, hora_saida_limite):
-    codigo = st.session_state.input_saida.strip().upper()
-    if codigo:
-        motivo = st.session_state.motivo_saida_val
-        if motivo == "Outro": motivo = st.session_state.get("motivo_outro_val", "Outro")
-        pais = st.session_state.pais_saida_val == "Sim"
-        
-        if registrar_saida(codigo, motivo, pais, data_str, datetime.now().strftime("%H:%M:%S"), hora_saida_limite):
-            st.session_state.tocar_som = True
-    st.session_state.input_saida = ""
-
-# ------------------------------------------------------------
-# 7. COMPONENTE LEITOR QR CÂMERA
-# ------------------------------------------------------------
-def gerar_componente_camera(label_alvo):
+def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
-    <div id="reader-qr" style="width:100%; max-width:350px; margin:auto; border-radius:10px; overflow:hidden; border: 2px solid #0f2b4a;"></div>
+    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:10px; overflow:hidden; border: 3px solid #0f2b4a; background: #000; display:none;">
+        <div id="reader-qr-{id_camera}" style="width:100%;"></div>
+    </div>
+    
+    <div style="text-align: center; margin-top: 15px; display: flex; gap: 10px; justify-content: center;">
+        <button id="btn-start" style="padding: 12px 24px; background: #0f2b4a; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px;">
+            📷 Ligar Câmera
+        </button>
+        <button id="btn-stop" style="display:none; padding: 12px 24px; background: #e74c3c; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px;">
+            🛑 Desligar
+        </button>
+    </div>
+
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
-        const html5QrCode = new Html5Qrcode("reader-qr");
+        const html5QrCode = new Html5Qrcode("reader-qr-{id_camera}");
+        const btnStart = document.getElementById("btn-start");
+        const btnStop = document.getElementById("btn-stop");
+        const boxCamera = document.getElementById("box-camera");
         
-        const preencherEEnviar = (text) => {{
-            const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-            for (let i = 0; i < inputs.length; i++) {{
-                if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
-                    
-                    let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                    nativeInputValueSetter.call(inputs[i], text);
-                    inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
-                    
-                    // Simula a tecla Enter imediatamente após preencher (Aciona o callback do Streamlit)
-                    setTimeout(() => {{
-                        inputs[i].dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }}));
-                    }}, 150); 
-                    
-                    html5QrCode.stop(); // Desliga para não duplicar o envio
-                    break;
-                }}
-            }}
+        let isProcessing = false;
+        let audioCtx = null;
+        
+        // Inicializa o som do Bipe na primeira interação
+        function initAudio() {{
+            if (!audioCtx) {{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }}
+            if (audioCtx.state === 'suspended') {{ audioCtx.resume(); }}
+        }}
+
+        function playBeep() {{
+            if(!audioCtx) return;
+            try {{
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 850; 
+                oscillator.start();
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
+                oscillator.stop(audioCtx.currentTime + 0.15);
+            }} catch(e) {{}}
+        }}
+
+        const ligarCamera = () => {{
+            initAudio(); // Ativa o áudio
+            btnStart.style.display = 'none';
+            btnStop.style.display = 'inline-block';
+            boxCamera.style.display = 'block';
+            
+            html5QrCode.start(
+                {{ facingMode: "environment" }},
+                {{ fps: 15, qrbox: {{ width: 250, height: 250 }} }},
+                (decodedText) => {{
+                    if (!isProcessing) {{
+                        isProcessing = true;
+                        playBeep(); // Toca o bipe na hora!
+                        
+                        // Busca o campo de texto do Streamlit e preenche
+                        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                        for (let i = 0; i < inputs.length; i++) {{
+                            if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
+                                let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                nativeSetter.call(inputs[i], decodedText);
+                                inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
+                                
+                                // Clica no botão "Processar" instantaneamente
+                                const buttons = window.parent.document.querySelectorAll('button');
+                                for (let j = 0; j < buttons.length; j++) {{
+                                    if (buttons[j].innerText.includes('{botao_alvo}')) {{
+                                        buttons[j].click();
+                                        break;
+                                    }}
+                                }}
+                                break;
+                            }}
+                        }}
+                        
+                        // Trava a leitura por 2 segundos para o sistema respirar antes de ler o próximo aluno
+                        setTimeout(() => {{ isProcessing = false; }}, 2000);
+                    }}
+                }},
+                (errorMessage) => {{}}
+            ).then(() => {{
+                // Salva na memória que a câmera estava ligada
+                sessionStorage.setItem('camera_{id_camera}', 'on');
+            }}).catch(err => {{
+                alert("Erro ao acessar câmera. Pode ser necessário reiniciar a permissão.");
+                desligarCamera();
+            }});
         }};
 
-        html5QrCode.start(
-            {{ facingMode: "environment" }},
-            {{ fps: 15, qrbox: {{ width: 250, height: 250 }} }},
-            (decodedText) => {{ preencherEEnviar(decodedText); }},
-            (errorMessage) => {{}}
-        ).catch(err => {{ alert("Câmera não autorizada."); }});
+        const desligarCamera = () => {{
+            html5QrCode.stop().then(() => {{
+                btnStart.style.display = 'inline-block';
+                btnStop.style.display = 'none';
+                boxCamera.style.display = 'none';
+                sessionStorage.setItem('camera_{id_camera}', 'off');
+            }});
+        }};
+
+        btnStart.onclick = ligarCamera;
+        btnStop.onclick = desligarCamera;
+
+        // Se a página atualizar sozinha, a câmera religa automaticamente sem pedir clique!
+        if (sessionStorage.getItem('camera_{id_camera}') === 'on') {{
+            setTimeout(ligarCamera, 500);
+        }}
     </script>
     """
-    components.html(html_code, height=350)
+    components.html(html_code, height=450)
 
 # ------------------------------------------------------------
-# 8. AUTENTICAÇÃO PERSISTENTE
+# 6. AUTENTICAÇÃO PERSISTENTE
 # ------------------------------------------------------------
 def check_auth():
     if "autenticado" not in st.session_state:
@@ -300,7 +330,7 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ------------------------------------------------------------
-# 9. INTERFACE PRINCIPAL DO SISTEMA
+# 7. INTERFACE PRINCIPAL
 # ------------------------------------------------------------
 if os.path.exists("logo.png"):
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -358,47 +388,44 @@ with tabs[0]:
 
     # ---------- ENTRADA ----------
     with tab_entrada:
-        label_entrada = "Código do Estudante (Entrada)"
+        label_in = "Código do Estudante (Entrada)"
+        botao_in = "Processar Entrada"
         
-        # O Interruptor (Toggle) para controlar a câmera nativamente no Python!
-        camera_ligada_entrada = st.toggle("📷 Ligar/Desligar Câmera de Entrada", key="cam_in")
+        gerar_componente_camera(label_in, botao_in, "entrada")
         
-        if camera_ligada_entrada:
-            gerar_componente_camera(label_entrada)
+        # Uso do FORM para agilizar e eliminar lentidão do Streamlit
+        with st.form("form_in", clear_on_submit=True):
+            codigo_recebido = st.text_input(label_in)
+            btn_submit_entrada = st.form_submit_button(botao_in)
             
-        st.text_input(
-            label_entrada, 
-            key="input_entrada", 
-            on_change=callback_processar_entrada, 
-            args=(data_str_config, hora_entrada),
-            placeholder="Digite o código ou posicione o QR Code e pressione Enter..."
-        )
+        if btn_submit_entrada and codigo_recebido.strip():
+            aluno_codigo = codigo_recebido.strip().upper()
+            registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
+            st.rerun()
 
     # ---------- SAÍDA ----------
     with tab_saida:
-        st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"], key="motivo_saida_val")
-        if st.session_state.get("motivo_saida_val") == "Outro": 
-            st.text_input("Especifique", key="motivo_outro_val")
-        st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida_val")
+        motivo = st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"], key="motivo_saida_val")
+        if motivo == "Outro": motivo = st.text_input("Especifique", key="motivo_outro_val")
+        pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida_val")
         
-        label_saida = "Código do Estudante (Saída)"
+        label_out = "Código do Estudante (Saída)"
+        botao_out = "Processar Saída"
         
-        camera_ligada_saida = st.toggle("📷 Ligar/Desligar Câmera de Saída", key="cam_out")
+        gerar_componente_camera(label_out, botao_out, "saida")
         
-        if camera_ligada_saida:
-            gerar_componente_camera(label_saida)
+        with st.form("form_out", clear_on_submit=True):
+            codigo_saida_recebido = st.text_input(label_out)
+            btn_submit_saida = st.form_submit_button(botao_out)
             
-        st.text_input(
-            label_saida, 
-            key="input_saida", 
-            on_change=callback_processar_saida, 
-            args=(data_str_config, hora_saida),
-            placeholder="Digite o código ou posicione o QR Code e pressione Enter..."
-        )
+        if btn_submit_saida and codigo_saida_recebido.strip():
+            aluno_saida_codigo = codigo_saida_recebido.strip().upper()
+            registrar_saida(aluno_saida_codigo, motivo, pais == "Sim", data_str_config, datetime.now().strftime("%H:%M:%S"), hora_saida)
+            st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 1: GESTÃO ============================
+# ============================ ABA 1 A 4: MANTIDAS IGUAIS ============================
 with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
@@ -407,10 +434,7 @@ with tabs[1]:
     with c3: busca = st.text_input("Buscar por Nome", key="busca")
     
     conn = conectar_bd()
-    query = """
-        SELECT r.data, a.turma, a.nome, r.hora_entrada, r.status_entrada, r.hora_saida 
-        FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s
-    """
+    query = "SELECT r.data, a.turma, a.nome, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"
     params = [data_filtro.strftime("%Y-%m-%d")]
     if turma_filtro != "Todas": query += " AND a.turma = %s"; params.append(turma_filtro)
     if busca: query += " AND a.nome ILIKE %s"; params.append(f"%{busca}%")
@@ -420,7 +444,6 @@ with tabs[1]:
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 2: ALERTAS ============================
 with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
@@ -432,7 +455,6 @@ with tabs[2]:
         else: st.success("Nenhum aluno nesta situação.")
     conn.close()
 
-# ============================ ABA 3: HISTÓRICO ============================
 with tabs[3]:
     st.subheader("📈 Histórico Individual do Aluno")
     lista_selecao = [f"{row['codigo']} - {row['nome']}" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
@@ -444,7 +466,6 @@ with tabs[3]:
         conn.close()
         if not df_hist.empty: st.dataframe(df_hist, hide_index=True)
 
-# ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
         st.subheader("⚙️ Importação de Dados da Escola")
