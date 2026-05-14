@@ -551,7 +551,7 @@ if st.session_state.eh_admin:
                     st.success(f"**{row['disciplina'].upper()}** - Média Geral: {row['Nota']:.2f}")
 
         # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES E BOLETIM COMPLETO (RESTAURADO!)
+        # 🧑‍🎓 ESTUDANTES E BOLETIM COMPLETO
         # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
@@ -561,7 +561,6 @@ if st.session_state.eh_admin:
                 with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
                 with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente com erros/brancos")
 
-                # Prepara dados dos alunos
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
                 status_stats_est = df_filtrado[df_filtrado['resposta'].isin(['BRANCO', 'DUPLA'])].groupby(['nome', 'resposta']).size().unstack(fill_value=0)
@@ -584,12 +583,9 @@ if st.session_state.eh_admin:
 
                 st.write(f"**Encontrados:** {len(alunos_filtrados)} estudante(s)")
                 
-                # Lista de Alunos (Expander vira o Boletim!)
-                for al in alunos_filtrados[:50]: # Paginação natural para não travar o navegador
+                for al in alunos_filtrados[:50]: 
                     with st.expander(f"🧑‍🎓 {al['nome']} ({al['turma']}) - Nota: {al['nota']:.2f}"):
                         st.write(f"**Detalhes:** {al['status']}")
-                        
-                        # --- O BOLETIM DENTRO DO EXPANDER ---
                         df_boletim = df_avs[df_avs['nome'] == al['nome']]
                         
                         st.markdown("#### 📈 Evolução ao Longo do Ano")
@@ -612,8 +608,6 @@ if st.session_state.eh_admin:
                         for disc in df_boletim['disciplina'].unique():
                             st.markdown(f"**{disc.upper()}**")
                             q_df = df_boletim[df_boletim['disciplina'] == disc].sort_values(["periodo", "questao"])
-                            
-                            # A mágica do Grid HTML!
                             grid_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                             for _, q in q_df.iterrows():
                                 cor = "#10b981" if q['acerto'] == 1 else ("#f59e0b" if q['resposta'] == 'BRANCO' else "#ef4444")
@@ -660,7 +654,18 @@ if st.session_state.eh_admin:
                 if faltosos.empty: st.success("Nenhuma ausência total por área encontrada.")
                 else:
                     faltosos_resumo = faltosos.groupby('periodo')['nome'].nunique().reset_index(name='Total')
-                    st.bar_chart(faltosos_resumo.set_index('periodo'))
+                    
+                    # GRÁFICO CORRIGIDO PARA NÃO DAR ERRO NO PANDAS! (Matplotlib 100% blindado)
+                    fig_f, ax_f = plt.subplots(figsize=(8, 3), dpi=90)
+                    bars_f = ax_f.bar(faltosos_resumo['periodo'], faltosos_resumo['Total'], color="#EF4444")
+                    ax_f.set_title("Total de Faltosos por Período", weight='bold', color="#0a1f35")
+                    ax_f.set_yticks(range(0, int(faltosos_resumo['Total'].max()) + 2))
+                    
+                    for bar in bars_f:
+                        ax_f.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.1, f'{int(bar.get_height())}', ha='center', weight='bold')
+                        
+                    st.pyplot(fig_f)
+                    
                     st.write("**Lista de Alunos:**")
                     for _, f_row in faltosos.iterrows():
                         st.error(f"👤 {f_row['nome']} ({f_row['turma']}) - Deixou toda a área de **{f_row['area']}** em branco no {f_row['periodo']}.")
@@ -695,7 +700,6 @@ if st.session_state.eh_admin:
                                         pdf.cell(0, 6, f"  Questao {int(q['questao'])} - {q['Pct_Erro']:.1f}% de erro", 0, 1)
                                     pdf.ln(2)
                         
-                        # Salva o PDF num arquivo temporário e oferece para download
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             pdf.output(tmp.name)
                             with open(tmp.name, "rb") as f: pdf_bytes = f.read()
@@ -704,7 +708,6 @@ if st.session_state.eh_admin:
                 else:
                     col_q2.warning("Módulo FPDF não instalado no Streamlit.")
 
-                # Renderização na Tela
                 for turma in sorted(df_filtrado['turma'].unique()):
                     t_df = df_filtrado[df_filtrado['turma'] == turma]
                     st.markdown(f"### 🏫 {turma}")
@@ -741,7 +744,7 @@ if st.session_state.eh_admin:
                     st.warning(f"📌 **{row['disciplina'].upper()}** - Média: {row['Nota']:.2f}")
 
         # -----------------------------------------------------------------
-        # ⚙️ GERENCIAR DADOS (SUBSTITUI A LIMPEZA ANTIGA)
+        # ⚙️ GERENCIAR DADOS
         # -----------------------------------------------------------------
         with abas_avs[5]:
             st.subheader("📥 Importar Novo Arquivo")
