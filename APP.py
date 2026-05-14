@@ -90,7 +90,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS E NOVA TABELA AVS
+# 3. CONEXÃO BANCO DE DADOS E NOVA TABELA AVS (CORRIGIDO)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -101,12 +101,22 @@ def conectar_bd(): return psycopg2.connect(DATABASE_URL)
 
 def inicializar_tabelas():
     conn = conectar_bd(); cur = conn.cursor()
-    # Tabelas de Frequência
+    
+    # Compartimento 1: Alunos
     cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
-    try: cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
+    conn.commit()
+    
+    try: 
+        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
+        conn.commit()
     except: conn.rollback()
-    try: cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS email_responsavel TEXT")
+    
+    try: 
+        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS email_responsavel TEXT")
+        conn.commit()
     except: conn.rollback()
+    
+    # Compartimento 2: Frequência
     cur.execute('''
         CREATE TABLE IF NOT EXISTS registros_v2 (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME,
@@ -114,7 +124,9 @@ def inicializar_tabelas():
             UNIQUE(codigo_aluno, data, tipo_registro)
         )
     ''')
-    # NOVO: Tabela Definitiva do Analisador AVS na Nuvem
+    conn.commit()
+    
+    # Compartimento 3: AVS Definitivo
     cur.execute('''
         CREATE TABLE IF NOT EXISTS avaliacoes_avs (
             id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT,
@@ -122,7 +134,8 @@ def inicializar_tabelas():
             UNIQUE(periodo, area, turma, nome, disciplina, questao)
         )
     ''')
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 inicializar_tabelas()
 
@@ -193,13 +206,19 @@ def abrir_dia_letivo(data_str):
     conn.commit(); conn.close(); return faltas_geradas
 
 # =========================================================
-# 🧠 NOVO: MOTOR DO ANALISADOR AVS NA NUVEM
+# 🧠 NOVO: MOTOR DO ANALISADOR AVS NA NUVEM (CORRIGIDO)
 # =========================================================
 @st.cache_data(ttl=60)
 def carregar_dados_avs():
     conn = conectar_bd()
-    df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
-    conn.close()
+    try:
+        # Amortecedor de Quedas: Tenta ler a tabela
+        df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
+    except Exception as e:
+        # Se a tabela não existir por um milissegundo, não trava a tela! Cria um DataFrame vazio.
+        df = pd.DataFrame()
+    finally:
+        conn.close()
     return df
 
 def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
@@ -320,7 +339,6 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-# Nova Aba Adicionada!
 abas = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Analisador AVS"] if st.session_state.eh_admin else ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
 tabs = st.tabs(abas)
 
@@ -548,11 +566,10 @@ if st.session_state.eh_admin:
                     aluno_b = st.selectbox("Busque pelo Nome do Estudante:", [""] + lista_nomes)
                     
                     if aluno_b:
-                        df_aluno = df_avs[df_avs['nome'] == aluno_b] # Busca a vida inteira do aluno no banco
+                        df_aluno = df_avs[df_avs['nome'] == aluno_b]
                         turma_aluno = df_aluno['turma'].iloc[0]
                         st.markdown(f"### 🎓 {aluno_b} ({turma_aluno})")
                         
-                        # Evolução Temporal (Gráfico de Linha)
                         progresso = df_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                         
@@ -565,7 +582,6 @@ if st.session_state.eh_admin:
                         ax_l.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
                         st.pyplot(fig_l)
                         
-                        # Tabela de Resultados
                         st.write("**Desempenho Detalhado:**")
                         medias_aluno = df_aluno.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         st.dataframe(medias_aluno, use_container_width=True, hide_index=True)
