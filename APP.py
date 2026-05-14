@@ -29,7 +29,7 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (ABAS GIGANTES E DESTACADAS)
+# 2. CSS PREMIUM (ABAS GIGANTES E DESTACADAS MANTIDAS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -49,9 +49,6 @@ st.markdown("""
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.2rem, 6vw, 3rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.1rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    /* =========================================
-       CARTÕES DE MÉTRICAS (GRID INTELIGENTE)
-       ========================================= */
     .metrics-container {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -85,47 +82,39 @@ st.markdown("""
     .m-val { font-size: 2.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
     .m-lab { font-size: 0.9rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
 
-    /* =========================================
-       ESTILIZAÇÃO DAS ABAS (GIGANTES E SUPER DESTACADAS)
-       ========================================= */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
         padding-bottom: 0px;
     }
     
-    /* Abas normais (Inativas) */
     .stTabs [data-baseweb="tab"] {
         background-color: #f1f5f9 !important;
         border: 3px solid #cbd5e1 !important;
         border-bottom: none !important;
         border-radius: 18px 18px 0 0 !important;
         padding: 15px 25px !important;
-        font-size: 1.5rem !important; /* TEXTO BEM MAIOR */
+        font-size: 1.5rem !important; 
         font-weight: 900 !important;
         color: #64748b !important;
         transition: all 0.3s ease !important;
     }
     
-    /* Efeito ao passar o mouse */
     .stTabs [data-baseweb="tab"]:hover {
         background-color: #e2e8f0 !important;
         color: var(--primary) !important;
     }
     
-    /* ABA SELECIONADA (CORES CHAMATIVAS E BORDAS FORTES) */
     .stTabs [aria-selected="true"] {
-        background-color: var(--primary) !important; /* Fundo Azul Escuro */
-        color: #ffffff !important; /* Letra Branca */
-        border: 5px solid var(--accent) !important; /* Borda Laranja Grossa */
+        background-color: var(--primary) !important; 
+        color: #ffffff !important; 
+        border: 5px solid var(--accent) !important; 
         border-bottom: none !important;
-        transform: translateY(-4px); /* Levanta um pouco a aba pra dar destaque */
-        box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; /* Sombra laranja de destaque */
+        transform: translateY(-4px); 
+        box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; 
     }
     
-    /* Paineis Brancos abaixo das Abas */
     .card-panel { background: white; border-radius: 20px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
 
-    /* Campos de Entrada e Botões */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.2rem !important; padding: 0.8rem 1rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
@@ -174,8 +163,10 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 4. FUNÇÕES DE NEGÓCIO
+# 4. FUNÇÕES DE NEGÓCIO (COM CACHE PARA VELOCIDADE)
 # ------------------------------------------------------------
+# O segredo da velocidade: Guardar a lista de alunos na memória (Cache)
+@st.cache_data(ttl=300)
 def carregar_alunos():
     conn = conectar_bd()
     df = pd.read_sql_query("SELECT codigo, nome, turma, status FROM alunos_v2 ORDER BY turma, nome", conn)
@@ -209,6 +200,7 @@ def importar_csv_para_bd(arquivo_csv):
         except: conn.rollback()
     conn.commit()
     conn.close()
+    st.cache_data.clear() # Limpa o cache após atualizar
     return True
 
 def adicionar_aluno_manual(codigo, nome, turma):
@@ -217,6 +209,7 @@ def adicionar_aluno_manual(codigo, nome, turma):
     try:
         cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO')", (codigo.strip().upper(), nome.strip().upper(), turma.strip().upper()))
         conn.commit()
+        st.cache_data.clear() # Limpa o cache para mostrar na hora
         return True
     except psycopg2.errors.UniqueViolation: conn.rollback(); return "duplicado"
     except: conn.rollback(); return False
@@ -228,6 +221,7 @@ def alterar_status_aluno(codigo, novo_status):
     cur.execute("UPDATE alunos_v2 SET status = %s WHERE codigo = %s", (novo_status, codigo))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 def abrir_dia_letivo(data_str):
     conn = conectar_bd()
@@ -465,7 +459,7 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ------------------------------------------------------------
-# 7. INTERFACE PRINCIPAL E DASHBOARD
+# 7. INTERFACE PRINCIPAL E DASHBOARD (SUPER OTIMIZADO)
 # ------------------------------------------------------------
 if os.path.exists("logo.png"):
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -482,13 +476,24 @@ with col_logout2:
 df_alunos = carregar_alunos()
 
 hoje_str = datetime.now().strftime("%Y-%m-%d")
+
+# O segredo da velocidade pt 2: Uma única consulta ultrarrápida pro Banco!
 conn = conectar_bd()
+cur = conn.cursor()
+cur.execute('''
+    SELECT 
+        COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END),
+        COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END),
+        COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END)
+    FROM registros_v2 WHERE data=%s
+''', (hoje_str,))
+pres_hoje, falt_hoje, atras_hoje = cur.fetchone()
+conn.close()
 
 total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
-presentes_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
-faltas_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='FALTA'", conn, params=[hoje_str]).iloc[0,0]
-atrasos_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
-conn.close()
+presentes_hoje = pres_hoje or 0
+faltas_hoje = falt_hoje or 0
+atrasos_hoje = atras_hoje or 0
 
 st.markdown(f'''
 <div class="metrics-container">
@@ -565,6 +570,28 @@ with tabs[0]:
             else:
                 registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
             st.rerun()
+
+        # O ROBÔ INVISÍVEL DO AUTOFOCO FICA AQUI
+        components.html("""
+            <script>
+                const parentDoc = window.parent.document;
+                function setFocus() {
+                    const inputs = parentDoc.querySelectorAll('input');
+                    for (let input of inputs) {
+                        if (input.getAttribute('aria-label') && input.getAttribute('aria-label').includes('Código Estudante (Entrada)')) {
+                            input.focus();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                let attempts = 0;
+                const intervalId = setInterval(() => {
+                    if (setFocus() || attempts > 10) clearInterval(intervalId);
+                    attempts++;
+                }, 200);
+            </script>
+        """, height=0, width=0)
 
         if len(st.session_state.fila_offline) > 0:
             st.markdown("<hr>", unsafe_allow_html=True)
