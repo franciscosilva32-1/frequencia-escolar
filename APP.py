@@ -26,75 +26,90 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS MODERNO, RESPONSIVO E CHAMATIVO (NOVO DESIGN)
+# 2. CSS MEGA CHAMATIVO E OTIMIZADO PARA CELULAR
 # ------------------------------------------------------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
     
     :root { 
-        --primary: #0f2b4a; 
-        --accent: #e67e22; 
-        --success: #27ae60; 
-        --danger: #e74c3c; 
-        --bg-color: #f0f4f8;
+        --primary: #0a1f35; /* Azul mais escuro e forte */
+        --accent: #ff7b00; /* Laranja bem vibrante */
+        --success: #1e8449; 
+        --danger: #c0392b; 
+        --bg-color: #eef2f5;
     }
     
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* Títulos */
-    .main-title { font-family: 'Inter', sans-serif; font-weight: 800; font-size: clamp(2rem, 6vw, 2.8rem); color: var(--primary); text-align: center; margin:0;}
-    .sub-title { font-family: 'Inter', sans-serif; font-size: 1rem; color: #34495e; text-align: center; margin-bottom: 1.5rem; font-weight: 600;}
+    /* Títulos da Página */
+    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.2rem, 7vw, 3rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
+    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.1rem; color: #34495e; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    /* Cards e Métricas */
-    .card { background: white; border-radius: 20px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 10px 25px rgba(0,0,0,0.08); border: 2px solid #e1e8ed; }
-    .metric-item { background: #ffffff; border-radius: 16px; padding: 1rem; text-align: center; border-bottom: 5px solid var(--accent); box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-    .metric-value { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 2rem; color: var(--primary); }
-    .metric-label { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; color: #5f6b7a; }
+    /* Caixas e Métricas */
+    .card { background: white; border-radius: 24px; padding: 1.8rem; margin-bottom: 1.5rem; box-shadow: 0 15px 35px rgba(0,0,0,0.1); border: 3px solid #dce4ec; }
+    .metric-item { background: #ffffff; border-radius: 16px; padding: 1.2rem; text-align: center; border-bottom: 6px solid var(--accent); box-shadow: 0 8px 15px rgba(0,0,0,0.08); }
+    .metric-value { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 2.5rem; color: var(--primary); }
+    .metric-label { font-size: 0.9rem; font-weight: 800; text-transform: uppercase; color: #5f6b7a; }
     
-    /* CAMPOS DE DIGITAÇÃO E SENHAS MAIS VISÍVEIS */
-    .stTextInput > div > div > input, .stSelectbox > div > div > div {
-        border: 2px solid var(--primary) !important;
-        border-radius: 12px !important;
+    /* =========================================
+       CAMPOS DE TEXTO E SENHA BEM FORTES
+       ========================================= */
+    div[data-baseweb="input"] {
+        border: 3px solid var(--primary) !important;
+        border-radius: 14px !important;
         background-color: #ffffff !important;
-        color: #000000 !important;
-        font-weight: 600 !important;
-        font-size: 1.1rem !important;
-        padding: 0.6rem 1rem !important;
-        box-shadow: 0 4px 6px rgba(15, 43, 74, 0.1) !important;
     }
-    
-    /* Efeito ao clicar no campo */
-    .stTextInput > div > div > input:focus, .stSelectbox > div > div > div:focus {
+    div[data-baseweb="input"] input {
+        color: #000000 !important;
+        -webkit-text-fill-color: #000000 !important; /* Força cor preta no iPhone/Android */
+        font-weight: 900 !important;
+        font-size: 1.3rem !important;
+        padding: 0.8rem 1rem !important;
+    }
+    div[data-baseweb="input"]:focus-within {
         border-color: var(--accent) !important;
-        box-shadow: 0 0 0 4px rgba(230, 126, 34, 0.3) !important;
+        box-shadow: 0 0 0 5px rgba(255, 123, 0, 0.3) !important;
     }
 
-    /* Botões mais chamativos */
-    .stButton > button {
-        border-radius: 12px !important;
+    /* Select Box (Caixa de Seleção) */
+    div[data-baseweb="select"] > div {
+        border: 3px solid var(--primary) !important;
+        border-radius: 14px !important;
+        background-color: #ffffff !important;
+        color: #000000 !important;
         font-weight: 800 !important;
-        font-size: 1.1rem !important;
-        padding: 0.6rem 1.5rem !important;
-        transition: all 0.3s ease !important;
-        border: 2px solid transparent !important;
+        font-size: 1.2rem !important;
+    }
+
+    /* =========================================
+       BOTÕES DO SISTEMA
+       ========================================= */
+    .stButton > button {
+        border-radius: 14px !important;
+        font-weight: 900 !important;
+        font-size: 1.2rem !important;
+        padding: 0.8rem 2rem !important;
+        text-transform: uppercase !important;
+        border: none !important;
+        transition: all 0.2s ease !important;
     }
     
-    /* Botão de Submit do Form (Processar) */
+    /* Botão Principal de Processar/Submit */
     [data-testid="stFormSubmitButton"] > button {
         background: linear-gradient(135deg, var(--primary), #1a4b82) !important;
         color: white !important;
-        box-shadow: 0 6px 15px rgba(15, 43, 74, 0.3) !important;
+        box-shadow: 0 8px 20px rgba(10, 31, 53, 0.4) !important;
+        width: 100% !important;
     }
-    [data-testid="stFormSubmitButton"] > button:hover {
-        background: linear-gradient(135deg, #1a4b82, var(--primary)) !important;
-        transform: translateY(-2px);
+    [data-testid="stFormSubmitButton"] > button:active {
+        transform: scale(0.95);
     }
 
-    /* Tela de Login */
-    .login-card { max-width: 400px; margin: 8vh auto; background: white; border-radius: 28px; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 25px 50px rgba(0,0,0,0.15); border: 3px solid var(--primary); }
-    .login-title { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 1.6rem; color: var(--primary); margin-bottom: 1.5rem; }
+    /* Tela de Login Gigante */
+    .login-card { max-width: 450px; margin: 5vh auto; background: white; border-radius: 30px; padding: 3rem 2rem; text-align: center; box-shadow: 0 30px 60px rgba(0,0,0,0.2); border: 4px solid var(--primary); }
+    .login-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 1.8rem; color: var(--primary); margin-bottom: 2rem; text-transform: uppercase;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -201,7 +216,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     nome_aluno = resultado[0]
     cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
     if cur.fetchone():
-        st.warning(f"⚠️ {nome_aluno} já passou na catraca hoje.")
+        st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje.")
         conn.close()
         return False
         
@@ -250,20 +265,20 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA BLINDADO (Não trava mais)
+# 5. COMPONENTE DA CÂMERA (MANUAL E SEGURO)
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
-    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:12px; overflow:hidden; border: 4px solid #e67e22; background: #000; display:none; box-shadow: 0 10px 20px rgba(0,0,0,0.2);">
+    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:16px; overflow:hidden; border: 5px solid var(--accent); background: #000; display:none; box-shadow: 0 15px 30px rgba(0,0,0,0.3);">
         <div id="reader-qr-{id_camera}" style="width:100%;"></div>
     </div>
     
-    <div style="text-align: center; margin-top: 15px; display: flex; gap: 10px; justify-content: center;">
-        <button id="btn-start" style="padding: 12px 20px; background: #27ae60; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px; font-size: 1rem; box-shadow: 0 4px 6px rgba(39, 174, 96, 0.3);">
-            📷 Ligar Câmera
+    <div style="text-align: center; margin-top: 15px; display: flex; gap: 15px; justify-content: center;">
+        <button id="btn-start" style="padding: 15px 25px; background: #27ae60; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 200px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(39, 174, 96, 0.4);">
+            📷 LIGAR CÂMERA
         </button>
-        <button id="btn-stop" style="display:none; padding: 12px 20px; background: #e74c3c; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px; font-size: 1rem; box-shadow: 0 4px 6px rgba(231, 76, 60, 0.3);">
-            🛑 Parar
+        <button id="btn-stop" style="display:none; padding: 15px 25px; background: #c0392b; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 200px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(192, 57, 43, 0.4);">
+            🛑 PARAR
         </button>
     </div>
 
@@ -274,7 +289,6 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         const btnStop = document.getElementById("btn-stop");
         const boxCamera = document.getElementById("box-camera");
         
-        let isProcessing = false;
         let audioCtx = null;
         
         function unlockAudio() {{
@@ -296,11 +310,11 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                 oscillator.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
                 oscillator.type = 'sine';
-                oscillator.frequency.value = 900; 
+                oscillator.frequency.value = 950; 
                 oscillator.start();
                 gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15); 
                 oscillator.stop(audioCtx.currentTime + 0.15);
-            }} catch(e) {{ console.log("Erro no beep", e); }}
+            }} catch(e) {{}}
         }}
 
         const ligarCamera = () => {{
@@ -309,70 +323,67 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
             btnStop.style.display = 'inline-block';
             boxCamera.style.display = 'block';
             
-            // Reseta a trava de segurança forçadamente caso tenha ficado presa
-            isProcessing = false;
-            
             html5QrCode.start(
                 {{ facingMode: "environment" }},
-                {{ fps: 15, qrbox: {{ width: 250, height: 250 }} }},
+                {{ fps: 10, qrbox: {{ width: 250, height: 250 }} }},
                 (decodedText) => {{
-                    if (!isProcessing) {{
-                        isProcessing = true;
-                        playBeep(); 
-                        
-                        let enviou = false;
-                        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                        for (let i = 0; i < inputs.length; i++) {{
-                            if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
-                                
-                                let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                nativeSetter.call(inputs[i], decodedText);
-                                inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
-                                
+                    // 1. Toca o BIPE imediatamente
+                    playBeep(); 
+                    
+                    // 2. DESLIGA A CÂMERA IMEDIATAMENTE (Acaba com o travamento)
+                    desligarCamera();
+                    
+                    // 3. Procura o campo e manda processar
+                    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                    for (let i = 0; i < inputs.length; i++) {{
+                        if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
+                            
+                            let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                            nativeSetter.call(inputs[i], decodedText);
+                            inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
+                            
+                            // Delay curtinho para o React entender, e clica no botão "Registrar"
+                            setTimeout(() => {{
                                 const buttons = window.parent.document.querySelectorAll('button');
                                 for (let j = 0; j < buttons.length; j++) {{
                                     if (buttons[j].innerText.includes('{botao_alvo}')) {{
                                         buttons[j].click();
-                                        enviou = true;
                                         break;
                                     }}
                                 }}
-                                break;
-                            }}
+                            }}, 300);
+                            break;
                         }}
-                        
-                        // Failsafe: Libera a câmera para a próxima leitura após 2.5 segundos de qualquer forma
-                        setTimeout(() => {{ isProcessing = false; }}, 2500);
                     }}
                 }},
-                (errorMessage) => {{}}
-            ).then(() => {{
-                sessionStorage.setItem('camera_{id_camera}', 'on');
-            }}).catch(err => {{
-                alert("Erro ao ligar a câmera. Tente recarregar a página.");
+                (errorMessage) => {{
+                    // Erros de "não achei código nesse frame" são normais, ignorar.
+                }}
+            ).catch(err => {{
+                alert("Verifique a permissão da câmera no navegador.");
                 desligarCamera();
             }});
         }};
 
         const desligarCamera = () => {{
-            html5QrCode.stop().then(() => {{
-                btnStart.style.display = 'inline-block';
-                btnStop.style.display = 'none';
-                boxCamera.style.display = 'none';
-                sessionStorage.setItem('camera_{id_camera}', 'off');
-                isProcessing = false;
-            }}).catch(err => console.log(err));
+            if(html5QrCode.isScanning) {{
+                html5QrCode.stop().then(() => {{ resetUI(); }}).catch(() => {{ resetUI(); }});
+            }} else {{
+                resetUI();
+            }}
+        }};
+
+        const resetUI = () => {{
+            btnStart.style.display = 'inline-block';
+            btnStop.style.display = 'none';
+            boxCamera.style.display = 'none';
         }};
 
         btnStart.onclick = ligarCamera;
         btnStop.onclick = desligarCamera;
-
-        if (sessionStorage.getItem('camera_{id_camera}') === 'on') {{
-            setTimeout(ligarCamera, 500);
-        }}
     </script>
     """
-    components.html(html_code, height=480)
+    components.html(html_code, height=450)
 
 # ------------------------------------------------------------
 # 6. AUTENTICAÇÃO PERSISTENTE
@@ -400,9 +411,9 @@ check_auth()
 
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    if os.path.exists("logo.png"): st.image("logo.png", width=160)
-    st.markdown('<div class="login-title">Jansen Veloso</div>', unsafe_allow_html=True)
-    senha = st.text_input("Digite sua Senha:", type="password")
+    if os.path.exists("logo.png"): st.image("logo.png", width=180)
+    st.markdown('<div class="login-title">JANSEN VELOSO</div>', unsafe_allow_html=True)
+    senha = st.text_input("DIGITE SUA SENHA:", type="password")
     if st.button("ACESSAR SISTEMA", use_container_width=True):
         if senha == SENHA_ADMIN: st.session_state.autenticado = True; st.session_state.eh_admin = True; set_auth_cookie(True); st.rerun()
         elif senha == SENHA_OPERADOR: st.session_state.autenticado = True; st.session_state.eh_admin = False; set_auth_cookie(False); st.rerun()
@@ -422,7 +433,7 @@ st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime
 
 col_logout1, col_logout2 = st.columns([5, 1])
 with col_logout2:
-    if st.button("Sair do Sistema", key="logout"):
+    if st.button("SAIR", key="logout"):
         cookies["auth_token"] = ""; cookies.save(); st.session_state.autenticado = False; st.rerun()
 
 df_alunos = carregar_alunos()
@@ -445,10 +456,10 @@ st.markdown(f'<div class="metric-item" style="border-bottom-color: #e74c3c;"><di
 st.markdown(f'<div class="metric-item" style="border-bottom-color: #f39c12;"><div class="metric-value">{atrasos_hoje}</div><div class="metric-label">⏰ Atrasos</div></div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-abas = ["📝 Registro do Dia", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção"] if st.session_state.eh_admin else ["📝 Registro do Dia", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
+abas = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção"] if st.session_state.eh_admin else ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
 tabs = st.tabs(abas)
 
-# ============================ ABA 0: REGISTRO DO DIA ============================
+# ============================ ABA 0: REGISTRO ============================
 with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
@@ -466,25 +477,24 @@ with tabs[0]:
 
     st.markdown("---")
     
-    st.info("Passo 1: Clique abaixo para gerar a lista de faltas do dia. Depois, use a câmera para dar presença.")
-    if st.button("📍 Abrir Dia Letivo (Gerar Faltas)", use_container_width=True):
+    if st.button("📍 ABRIR DIA LETIVO (GERAR FALTAS)", use_container_width=True):
         faltas = abrir_dia_letivo(data_str_config)
         st.success(f"Dia Iniciado! {faltas} alunos marcados como Ausentes.")
         
     st.markdown("---")
 
-    tab_entrada, tab_saida = st.tabs(["✅ Entrada", "🚪 Saída Antecipada"])
+    tab_entrada, tab_saida = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA"])
 
     # ---------- ENTRADA ----------
     with tab_entrada:
-        label_in = "Código (Entrada)"
+        label_in = "Código Estudante (Entrada)"
         botao_in = "Registrar Entrada"
         
         gerar_componente_camera(label_in, botao_in, "entrada")
         
         with st.form("form_in", clear_on_submit=True):
             st.markdown("<br>", unsafe_allow_html=True)
-            codigo_recebido = st.text_input(label_in, placeholder="Clique aqui e use o leitor de mão, ou aguarde a câmera...")
+            codigo_recebido = st.text_input(label_in, placeholder="Clique, leia ou digite e dê Enter...")
             btn_submit_entrada = st.form_submit_button(botao_in)
             
         if btn_submit_entrada and codigo_recebido.strip():
@@ -498,14 +508,14 @@ with tabs[0]:
         if motivo == "Outro": motivo = st.text_input("Especifique", key="motivo_outro_val")
         pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida_val")
         
-        label_out = "Código (Saída)"
+        label_out = "Código Estudante (Saída)"
         botao_out = "Registrar Saída"
         
         gerar_componente_camera(label_out, botao_out, "saida")
         
         with st.form("form_out", clear_on_submit=True):
             st.markdown("<br>", unsafe_allow_html=True)
-            codigo_saida_recebido = st.text_input(label_out, placeholder="Aguarde a câmera ou digite...")
+            codigo_saida_recebido = st.text_input(label_out, placeholder="Clique, leia ou digite e dê Enter...")
             btn_submit_saida = st.form_submit_button(botao_out)
             
         if btn_submit_saida and codigo_saida_recebido.strip():
@@ -523,7 +533,7 @@ with tabs[1]:
     with c1: data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
     with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="turma_filtro")
     with c3: status_filtro = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="status_filtro")
-    with c4: busca = st.text_input("Buscar por Nome", key="busca")
+    with c4: busca = st.text_input("Buscar Nome", key="busca")
     
     conn = conectar_bd()
     query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"
@@ -576,5 +586,5 @@ if st.session_state.eh_admin:
             
         st.subheader("🗑️ Limpeza de Base")
         senha_conf = st.text_input("Senha Admin", type="password", key="senha_limpar")
-        if st.button("Apagar Histórico") and senha_conf == SENHA_ADMIN:
+        if st.button("APAGAR HISTÓRICO", type="primary") and senha_conf == SENHA_ADMIN:
             limpar_todos_registros(); st.success("Registos apagados.")
