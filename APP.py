@@ -12,7 +12,7 @@ import plotly.express as px
 from streamlit_cookies_manager import CookieManager
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA
+# 1. CONFIGURAÇÃO DA PÁGINA E VARIÁVEIS DE SESSÃO
 # ------------------------------------------------------------
 st.set_page_config(
     page_title="Centro Educa Mais Jansen Veloso",
@@ -20,6 +20,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Inicializa a memória da fila rápida (Off-line temporário)
+if 'fila_offline' not in st.session_state:
+    st.session_state.fila_offline = []
 
 cookies = CookieManager()
 if not cookies.ready():
@@ -84,10 +88,8 @@ def inicializar_tabelas():
     conn = conectar_bd()
     cur = conn.cursor()
     cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
-    try:
-        cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
-    except Exception as e:
-        conn.rollback()
+    try: cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
+    except: conn.rollback()
         
     cur.execute('''
         CREATE TABLE IF NOT EXISTS registros_v2 (
@@ -143,18 +145,12 @@ def adicionar_aluno_manual(codigo, nome, turma):
     conn = conectar_bd()
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO')", 
-                    (codigo.strip().upper(), nome.strip().upper(), turma.strip().upper()))
+        cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO')", (codigo.strip().upper(), nome.strip().upper(), turma.strip().upper()))
         conn.commit()
         return True
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        return "duplicado"
-    except Exception as e:
-        conn.rollback()
-        return False
-    finally:
-        conn.close()
+    except psycopg2.errors.UniqueViolation: conn.rollback(); return "duplicado"
+    except: conn.rollback(); return False
+    finally: conn.close()
 
 def alterar_status_aluno(codigo, novo_status):
     conn = conectar_bd()
@@ -181,10 +177,14 @@ def abrir_dia_letivo(data_str):
     conn.close()
     return faltas_geradas
 
-def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
+# MUDANÇA: Agora aceita a hora_exata salva na fila off-line
+def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hora_exata=None):
     agora = datetime.now()
-    hora_atual = agora.strftime("%H:%M:%S")
-    status_entrada = "PRESENTE" if agora.time() <= hora_limite_entrada else "ATRASO"
+    # Se veio do modo offline, usa a hora exata em que o estudante passou na porta
+    hora_atual = hora_exata if hora_exata else agora.strftime("%H:%M:%S")
+    
+    hora_obj = datetime.strptime(hora_atual, "%H:%M:%S").time()
+    status_entrada = "PRESENTE" if hora_obj <= hora_limite_entrada else "ATRASO"
     
     conn = conectar_bd()
     cur = conn.cursor()
@@ -197,9 +197,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         return False
         
     nome_aluno, status_aluno = resultado
-    
-    if status_aluno != 'ATIVO':
-        st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
+    if status_aluno != 'ATIVO': st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
     
     cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
     if cur.fetchone():
@@ -213,7 +211,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
                     (codigo_estudante, data_registro, hora_atual, status_entrada))
         conn.commit()
-        if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE")
+        if status_entrada == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE ({hora_atual})")
         else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         return True
     except: conn.rollback(); return False
@@ -252,10 +250,9 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA (NOVA POSIÇÃO DOS BOTÕES - ACIMA DA CÂMERA)
+# 5. COMPONENTE DA CÂMERA
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
-    # Mudança principal: O bloco dos botões vem ANTES da câmera no HTML
     html_code = f"""
     <div style="display: flex; justify-content: center; margin-bottom: 15px; width: 100%;">
         <button id="btn-start" style="padding: 15px 25px; background: #27ae60; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 250px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(39, 174, 96, 0.4);">
@@ -361,7 +358,6 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         btnStop.onclick = desligarCamera;
     </script>
     """
-    # Aumentei a altura de 480 para 550 para evitar qualquer corte
     components.html(html_code, height=550)
 
 # ------------------------------------------------------------
@@ -421,7 +417,6 @@ hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
 
 total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
-
 presentes_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
 faltas_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='FALTA'", conn, params=[hoje_str]).iloc[0,0]
 atrasos_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA' AND status_entrada='ATRASO'", conn, params=[hoje_str]).iloc[0,0]
@@ -466,19 +461,49 @@ with tabs[0]:
     tab_entrada, tab_saida = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA"])
 
     with tab_entrada:
+        # ----------------------------------------------------
+        # O SEGREDO DA VELOCIDADE: MODO FILA RÁPIDA
+        # ----------------------------------------------------
+        modo_rapido = st.toggle("⚡ Modo Fila Rápida (Salva na memória do Notebook para Sincronizar Depois)", value=True)
+        
         label_in = "Código Estudante (Entrada)"
         botao_in = "Registrar Entrada"
         gerar_componente_camera(label_in, botao_in, "entrada")
         
         with st.form("form_in", clear_on_submit=True):
             st.markdown("<br>", unsafe_allow_html=True)
-            codigo_recebido = st.text_input(label_in, placeholder="Clique, leia ou digite e dê Enter...")
+            codigo_recebido = st.text_input(label_in, placeholder="Use o leitor ou digite e dê Enter...")
             btn_submit_entrada = st.form_submit_button(botao_in)
             
         if btn_submit_entrada and codigo_recebido.strip():
             aluno_codigo = codigo_recebido.strip().upper()
-            registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
+            
+            if modo_rapido:
+                # Salva na memória do notebook (MUITO RÁPIDO - Menos de 1 décimo de segundo)
+                hora_exata = datetime.now().strftime("%H:%M:%S")
+                st.session_state.fila_offline.append({"codigo": aluno_codigo, "hora": hora_exata})
+                st.success(f"⚡ Adicionado à fila: {aluno_codigo} ({hora_exata})")
+            else:
+                # Salva direto no Banco de Dados (Demora os 2 ou 3 segundos normais)
+                registrar_presenca(aluno_codigo, data_str_config, hora_entrada)
             st.rerun()
+
+        # ÁREA DE SINCRONIZAÇÃO (Aparece apenas se tiver alunos na fila)
+        if len(st.session_state.fila_offline) > 0:
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.warning(f"⚠️ **ATENÇÃO:** Você tem **{len(st.session_state.fila_offline)}** estudante(s) na memória aguardando envio para o Banco de Dados.")
+            
+            if st.button("🔄 SINCRONIZAR AGORA COM A NUVEM", type="primary", use_container_width=True):
+                with st.spinner("Enviando dados para a nuvem..."):
+                    sucessos = 0
+                    for item in st.session_state.fila_offline:
+                        # Envia um por um com a hora exata em que passou na catraca
+                        if registrar_presenca(item['codigo'], data_str_config, hora_entrada, item['hora']):
+                            sucessos += 1
+                    
+                    st.session_state.fila_offline = [] # Limpa a memória após o envio
+                    st.success(f"🎉 Sincronização concluída! {sucessos} registros salvos no banco de dados.")
+                    st.rerun()
 
     with tab_saida:
         motivo = st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"], key="motivo_saida_val")
@@ -525,7 +550,7 @@ with tabs[1]:
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 2: ALERTAS ============================
+# ============================ ABA 2 A 4 A SEGUIR ============================
 with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
@@ -537,7 +562,6 @@ with tabs[2]:
         else: st.success("Nenhum aluno ativo nesta situação.")
     conn.close()
 
-# ============================ ABA 3: HISTÓRICO ============================
 with tabs[3]:
     st.subheader("📈 Histórico Individual do Aluno")
     lista_selecao = [f"{row['codigo']} - {row['nome']} ({row['status']})" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
@@ -549,7 +573,6 @@ with tabs[3]:
         conn.close()
         if not df_hist.empty: st.dataframe(df_hist, hide_index=True)
 
-# ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -560,7 +583,6 @@ if st.session_state.eh_admin:
             with c_add2: new_nome = st.text_input("Nome Completo")
             with c_add3: new_turma = st.text_input("Turma")
             btn_add = st.form_submit_button("CADASTRAR ESTUDANTE")
-            
             if btn_add and new_cod and new_nome and new_turma:
                 res = adicionar_aluno_manual(new_cod, new_nome, new_turma)
                 if res == True: st.success(f"Estudante {new_nome} adicionado com sucesso!"); st.rerun()
