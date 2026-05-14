@@ -112,6 +112,28 @@ def importar_csv_para_bd(arquivo_csv):
     conn.close()
     return True
 
+# NOVA FUNÇÃO: INICIAR O DIA LETIVO (GERAR FALTAS PARA TODOS)
+def abrir_dia_letivo(data_str):
+    conn = conectar_bd()
+    cur = conn.cursor()
+    cur.execute("SELECT codigo FROM alunos_v2")
+    alunos = [row[0] for row in cur.fetchall()]
+    
+    faltas_geradas = 0
+    for codigo in alunos:
+        # Verifica se já existe algum registro para o aluno hoje
+        cur.execute("SELECT id FROM registros_v2 WHERE codigo_aluno = %s AND data = %s", (codigo, data_str))
+        if not cur.fetchone():
+            try:
+                # Insere a falta padrão
+                cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')", (codigo, data_str))
+                faltas_geradas += 1
+            except:
+                conn.rollback()
+    conn.commit()
+    conn.close()
+    return faltas_geradas
+
 def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     agora = datetime.now()
     hora_atual = agora.strftime("%H:%M:%S")
@@ -133,13 +155,15 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         conn.close()
         return False
         
+    # Se ele tinha falta (porque o dia foi aberto), apagamos a falta para registrar a presença
     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
+    
     try:
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
                     (codigo_estudante, data_registro, hora_atual, status))
         conn.commit()
-        if status == "PRESENTE": st.success(f"✅ Sucesso: {nome_aluno} registado às {hora_atual}")
-        else: st.warning(f"⏰ Atraso: {nome_aluno} às {hora_atual}")
+        if status == "PRESENTE": st.success(f"✅ Presença Confirmada: {nome_aluno}")
+        else: st.warning(f"⏰ Atraso Confirmado: {nome_aluno} às {hora_atual}")
         return True
     except: conn.rollback(); return False
     finally: conn.close()
@@ -177,7 +201,7 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA (COM BIPE E MEMÓRIA JS)
+# 5. COMPONENTE DA CÂMERA INTELIGENTE (BIPE NATIVO JS)
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
@@ -204,29 +228,38 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         let isProcessing = false;
         let audioCtx = null;
         
-        // Inicializa o som do Bipe na primeira interação
-        function initAudio() {{
-            if (!audioCtx) {{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }}
-            if (audioCtx.state === 'suspended') {{ audioCtx.resume(); }}
+        // Ativação do Motor de Som (precisa do clique humano)
+        function unlockAudio() {{
+            if (!audioCtx) {{
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }}
+            if (audioCtx.state === 'suspended') {{
+                audioCtx.resume();
+            }}
+            // Toca um som inaudível só para liberar a permissão do celular
+            const osc = audioCtx.createOscillator();
+            osc.connect(audioCtx.destination);
+            osc.start(0);
+            osc.stop(0.001);
         }}
 
+        // Som de Bipe Forte e Claro
         function playBeep() {{
             if(!audioCtx) return;
-            try {{
-                const oscillator = audioCtx.createOscillator();
-                const gainNode = audioCtx.createGain();
-                oscillator.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                oscillator.type = 'sine';
-                oscillator.frequency.value = 850; 
-                oscillator.start();
-                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
-                oscillator.stop(audioCtx.currentTime + 0.15);
-            }} catch(e) {{}}
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 900; // Frequência do bipe
+            oscillator.start();
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15); // Duração curta
+            oscillator.stop(audioCtx.currentTime + 0.15);
         }}
 
         const ligarCamera = () => {{
-            initAudio(); // Ativa o áudio
+            unlockAudio(); // O pulo do gato para o som funcionar!
+            
             btnStart.style.display = 'none';
             btnStop.style.display = 'inline-block';
             boxCamera.style.display = 'block';
@@ -237,9 +270,11 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                 (decodedText) => {{
                     if (!isProcessing) {{
                         isProcessing = true;
-                        playBeep(); // Toca o bipe na hora!
                         
-                        // Busca o campo de texto do Streamlit e preenche
+                        // 1. Toca o bipe IMEDIATAMENTE no celular
+                        playBeep(); 
+                        
+                        // 2. Preenche o formulário do Streamlit
                         const inputs = window.parent.document.querySelectorAll('input[type="text"]');
                         for (let i = 0; i < inputs.length; i++) {{
                             if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
@@ -247,7 +282,7 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                                 nativeSetter.call(inputs[i], decodedText);
                                 inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
                                 
-                                // Clica no botão "Processar" instantaneamente
+                                // 3. Submete os dados automaticamente
                                 const buttons = window.parent.document.querySelectorAll('button');
                                 for (let j = 0; j < buttons.length; j++) {{
                                     if (buttons[j].innerText.includes('{botao_alvo}')) {{
@@ -258,14 +293,12 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                                 break;
                             }}
                         }}
-                        
-                        // Trava a leitura por 2 segundos para o sistema respirar antes de ler o próximo aluno
+                        // Evita leitura dupla do mesmo aluno por 2 segundos
                         setTimeout(() => {{ isProcessing = false; }}, 2000);
                     }}
                 }},
                 (errorMessage) => {{}}
             ).then(() => {{
-                // Salva na memória que a câmera estava ligada
                 sessionStorage.setItem('camera_{id_camera}', 'on');
             }}).catch(err => {{
                 alert("Erro ao acessar câmera. Pode ser necessário reiniciar a permissão.");
@@ -285,7 +318,6 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         btnStart.onclick = ligarCamera;
         btnStop.onclick = desligarCamera;
 
-        // Se a página atualizar sozinha, a câmera religa automaticamente sem pedir clique!
         if (sessionStorage.getItem('camera_{id_camera}') === 'on') {{
             setTimeout(ligarCamera, 500);
         }}
@@ -384,6 +416,15 @@ with tabs[0]:
     st.session_state.config_dia[data_str_config]["hora_saida"] = hora_saida
 
     st.markdown("---")
+    
+    # NOVO BOTÃO: INICIAR DIA LETIVO (GERA AS FALTAS)
+    st.info("Antes de começar a ler as carteirinhas, abra o dia letivo. Isso garante que todos que não passarem pela catraca fiquem com falta.")
+    if st.button("📍 Abrir Dia Letivo (Gerar Lista de Faltas)", use_container_width=True):
+        faltas = abrir_dia_letivo(data_str_config)
+        st.success(f"Dia Letivo Iniciado! {faltas} alunos marcados inicialmente como Ausentes. Inicie a leitura para converter em Presenças.")
+        
+    st.markdown("---")
+
     tab_entrada, tab_saida = st.tabs(["✅ Entrada", "🚪 Saída Antecipada"])
 
     # ---------- ENTRADA ----------
@@ -393,9 +434,8 @@ with tabs[0]:
         
         gerar_componente_camera(label_in, botao_in, "entrada")
         
-        # Uso do FORM para agilizar e eliminar lentidão do Streamlit
         with st.form("form_in", clear_on_submit=True):
-            codigo_recebido = st.text_input(label_in)
+            codigo_recebido = st.text_input(label_in, placeholder="Clique aqui e use o leitor, ou digite o código e aperte Enter...")
             btn_submit_entrada = st.form_submit_button(botao_in)
             
         if btn_submit_entrada and codigo_recebido.strip():
@@ -415,7 +455,7 @@ with tabs[0]:
         gerar_componente_camera(label_out, botao_out, "saida")
         
         with st.form("form_out", clear_on_submit=True):
-            codigo_saida_recebido = st.text_input(label_out)
+            codigo_saida_recebido = st.text_input(label_out, placeholder="Clique aqui e use o leitor, ou digite o código e aperte Enter...")
             btn_submit_saida = st.form_submit_button(botao_out)
             
         if btn_submit_saida and codigo_saida_recebido.strip():
@@ -425,25 +465,34 @@ with tabs[0]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ============================ ABA 1 A 4: MANTIDAS IGUAIS ============================
+# ============================ ABA 1: GESTÃO ============================
 with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
+    st.subheader("📊 Relatório Diário")
+    c1, c2, c3, c4 = st.columns(4)
     with c1: data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
     with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="turma_filtro")
-    with c3: busca = st.text_input("Buscar por Nome", key="busca")
+    # NOVO FILTRO: STATUS DE PRESENÇA/FALTA
+    with c3: status_filtro = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="status_filtro")
+    with c4: busca = st.text_input("Buscar por Nome", key="busca")
     
     conn = conectar_bd()
-    query = "SELECT r.data, a.turma, a.nome, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"
+    query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"
     params = [data_filtro.strftime("%Y-%m-%d")]
+    
     if turma_filtro != "Todas": query += " AND a.turma = %s"; params.append(turma_filtro)
+    if status_filtro == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
+    elif status_filtro == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
     if busca: query += " AND a.nome ILIKE %s"; params.append(f"%{busca}%")
+    
+    query += " ORDER BY a.turma, a.nome"
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ============================ ABA 2: ALERTAS ============================
 with tabs[2]:
     hoje = datetime.now()
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
@@ -455,6 +504,7 @@ with tabs[2]:
         else: st.success("Nenhum aluno nesta situação.")
     conn.close()
 
+# ============================ ABA 3: HISTÓRICO ============================
 with tabs[3]:
     st.subheader("📈 Histórico Individual do Aluno")
     lista_selecao = [f"{row['codigo']} - {row['nome']}" for _, row in df_alunos.iterrows()] if not df_alunos.empty else []
@@ -466,6 +516,7 @@ with tabs[3]:
         conn.close()
         if not df_hist.empty: st.dataframe(df_hist, hide_index=True)
 
+# ============================ ABA 4: MANUTENÇÃO ============================
 if st.session_state.eh_admin:
     with tabs[4]:
         st.subheader("⚙️ Importação de Dados da Escola")
