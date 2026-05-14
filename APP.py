@@ -26,7 +26,7 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS MEGA CHAMATIVO E RESPONSIVO (CORRIGIDO PARA CELULAR)
+# 2. CSS MEGA CHAMATIVO E RESPONSIVO
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -67,7 +67,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS (COM NOVA COLUNA STATUS)
+# 3. CONEXÃO BANCO DE DADOS
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -83,7 +83,6 @@ def conectar_bd():
 def inicializar_tabelas():
     conn = conectar_bd()
     cur = conn.cursor()
-    # Tabela alunos_v2 com a nova coluna status (ATIVO por padrão)
     cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
     try:
         cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
@@ -107,7 +106,6 @@ inicializar_tabelas()
 # ------------------------------------------------------------
 def carregar_alunos():
     conn = conectar_bd()
-    # Agora trazemos o status também
     df = pd.read_sql_query("SELECT codigo, nome, turma, status FROM alunos_v2 ORDER BY turma, nome", conn)
     conn.close()
     return df
@@ -141,7 +139,6 @@ def importar_csv_para_bd(arquivo_csv):
     conn.close()
     return True
 
-# Adição Manual de Aluno
 def adicionar_aluno_manual(codigo, nome, turma):
     conn = conectar_bd()
     cur = conn.cursor()
@@ -159,7 +156,6 @@ def adicionar_aluno_manual(codigo, nome, turma):
     finally:
         conn.close()
 
-# Alteração de Status
 def alterar_status_aluno(codigo, novo_status):
     conn = conectar_bd()
     cur = conn.cursor()
@@ -170,7 +166,6 @@ def alterar_status_aluno(codigo, novo_status):
 def abrir_dia_letivo(data_str):
     conn = conectar_bd()
     cur = conn.cursor()
-    # MUDANÇA: Só gera falta para alunos ATIVOS!
     cur.execute("SELECT codigo FROM alunos_v2 WHERE status = 'ATIVO'")
     alunos = [row[0] for row in cur.fetchall()]
     
@@ -203,7 +198,6 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
         
     nome_aluno, status_aluno = resultado
     
-    # Se o aluno não estiver ATIVO, emitimos um alerta, mas o sistema pode registrar (opcional)
     if status_aluno != 'ATIVO':
         st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
     
@@ -250,22 +244,30 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
     conn.close()
     return False
 
+def limpar_todos_registros():
+    conn = conectar_bd()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM registros_v2")
+    conn.commit()
+    conn.close()
+
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA (CORRIGIDO PARA MODO RETRATO)
+# 5. COMPONENTE DA CÂMERA (NOVA POSIÇÃO DOS BOTÕES - ACIMA DA CÂMERA)
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
+    # Mudança principal: O bloco dos botões vem ANTES da câmera no HTML
     html_code = f"""
-    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:16px; overflow:hidden; border: 5px solid var(--accent); background: #000; display:none; box-shadow: 0 15px 30px rgba(0,0,0,0.3);">
-        <div id="reader-qr-{id_camera}" style="width:100%;"></div>
-    </div>
-    
-    <div style="text-align: center; margin-top: 15px; display: flex; flex-wrap: wrap; gap: 15px; justify-content: center;">
-        <button id="btn-start" style="padding: 15px 25px; background: #27ae60; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 200px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(39, 174, 96, 0.4);">
+    <div style="display: flex; justify-content: center; margin-bottom: 15px; width: 100%;">
+        <button id="btn-start" style="padding: 15px 25px; background: #27ae60; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 250px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(39, 174, 96, 0.4);">
             📷 LIGAR CÂMERA
         </button>
-        <button id="btn-stop" style="display:none; padding: 15px 25px; background: #c0392b; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 200px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(192, 57, 43, 0.4);">
-            🛑 PARAR
+        <button id="btn-stop" style="display:none; padding: 15px 25px; background: #c0392b; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: 900; width: 100%; max-width: 250px; font-size: 1.1rem; text-transform: uppercase; box-shadow: 0 6px 15px rgba(192, 57, 43, 0.4);">
+            🛑 PARAR CÂMERA
         </button>
+    </div>
+    
+    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:16px; overflow:hidden; border: 5px solid var(--accent); background: #000; display:none; box-shadow: 0 15px 30px rgba(0,0,0,0.3);">
+        <div id="reader-qr-{id_camera}" style="width:100%;"></div>
     </div>
 
     <script src="https://unpkg.com/html5-qrcode"></script>
@@ -304,7 +306,6 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
             btnStop.style.display = 'inline-block';
             boxCamera.style.display = 'block';
             
-            // Lógica inteligente de tamanho da tela para não bugar no modo retrato!
             let screenWidth = window.innerWidth || document.documentElement.clientWidth;
             let size = screenWidth < 400 ? 200 : 250; 
 
@@ -360,7 +361,8 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         btnStop.onclick = desligarCamera;
     </script>
     """
-    components.html(html_code, height=480)
+    # Aumentei a altura de 480 para 550 para evitar qualquer corte
+    components.html(html_code, height=550)
 
 # ------------------------------------------------------------
 # 6. AUTENTICAÇÃO PERSISTENTE
@@ -418,7 +420,6 @@ df_alunos = carregar_alunos()
 hoje_str = datetime.now().strftime("%Y-%m-%d")
 conn = conectar_bd()
 
-# Métrica Inteligente: Conta apenas os ATIVOS
 total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
 
 presentes_hoje = pd.read_sql_query("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", conn, params=[hoje_str]).iloc[0,0]
@@ -530,7 +531,6 @@ with tabs[2]:
     dias_uteis = [(hoje - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (hoje - timedelta(days=i)).weekday() < 5][:5]
     conn = conectar_bd()
     if dias_uteis:
-        # Alerta ignorando quem não é mais ativo!
         df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_uteis)])
         st.subheader("🚨 Alunos Ativos sem presença nos últimos 5 dias")
         if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
