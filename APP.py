@@ -26,21 +26,75 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. CSS MODERNO E RESPONSIVO
+# 2. CSS MODERNO, RESPONSIVO E CHAMATIVO (NOVO DESIGN)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-    :root { --primary: #0f2b4a; --accent: #e67e22; --success: #27ae60; --danger: #e74c3c; }
-    .stApp { background: linear-gradient(180deg, #f8fafc 0%, #e9edf2 100%); }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    
+    :root { 
+        --primary: #0f2b4a; 
+        --accent: #e67e22; 
+        --success: #27ae60; 
+        --danger: #e74c3c; 
+        --bg-color: #f0f4f8;
+    }
+    
+    .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
-    .main-title { font-family: 'Inter', sans-serif; font-weight: 800; font-size: clamp(1.8rem, 6vw, 2.5rem); color: var(--primary); text-align: center; margin:0;}
-    .sub-title { font-family: 'Inter', sans-serif; font-size: 0.9rem; color: #5f6b7a; text-align: center; margin-bottom: 1.5rem;}
-    .card { background: rgba(255,255,255,0.7); backdrop-filter: blur(10px); border-radius: 20px; padding: 1.2rem; margin-bottom: 1rem; box-shadow: 0 8px 20px rgba(0,0,0,0.04); }
-    .metric-item { background: white; border-radius: 16px; padding: 0.8rem; text-align: center; border-bottom: 4px solid var(--accent); }
-    .metric-value { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 1.8rem; color: var(--primary); }
-    .metric-label { font-size: 0.8rem; text-transform: uppercase; color: #5f6b7a; }
-    .login-card { max-width: 380px; margin: 10vh auto; background: white; border-radius: 28px; padding: 2rem; text-align: center; box-shadow: 0 25px 40px rgba(0,0,0,0.1); }
+    
+    /* Títulos */
+    .main-title { font-family: 'Inter', sans-serif; font-weight: 800; font-size: clamp(2rem, 6vw, 2.8rem); color: var(--primary); text-align: center; margin:0;}
+    .sub-title { font-family: 'Inter', sans-serif; font-size: 1rem; color: #34495e; text-align: center; margin-bottom: 1.5rem; font-weight: 600;}
+    
+    /* Cards e Métricas */
+    .card { background: white; border-radius: 20px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 10px 25px rgba(0,0,0,0.08); border: 2px solid #e1e8ed; }
+    .metric-item { background: #ffffff; border-radius: 16px; padding: 1rem; text-align: center; border-bottom: 5px solid var(--accent); box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .metric-value { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 2rem; color: var(--primary); }
+    .metric-label { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; color: #5f6b7a; }
+    
+    /* CAMPOS DE DIGITAÇÃO E SENHAS MAIS VISÍVEIS */
+    .stTextInput > div > div > input, .stSelectbox > div > div > div {
+        border: 2px solid var(--primary) !important;
+        border-radius: 12px !important;
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+        padding: 0.6rem 1rem !important;
+        box-shadow: 0 4px 6px rgba(15, 43, 74, 0.1) !important;
+    }
+    
+    /* Efeito ao clicar no campo */
+    .stTextInput > div > div > input:focus, .stSelectbox > div > div > div:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 4px rgba(230, 126, 34, 0.3) !important;
+    }
+
+    /* Botões mais chamativos */
+    .stButton > button {
+        border-radius: 12px !important;
+        font-weight: 800 !important;
+        font-size: 1.1rem !important;
+        padding: 0.6rem 1.5rem !important;
+        transition: all 0.3s ease !important;
+        border: 2px solid transparent !important;
+    }
+    
+    /* Botão de Submit do Form (Processar) */
+    [data-testid="stFormSubmitButton"] > button {
+        background: linear-gradient(135deg, var(--primary), #1a4b82) !important;
+        color: white !important;
+        box-shadow: 0 6px 15px rgba(15, 43, 74, 0.3) !important;
+    }
+    [data-testid="stFormSubmitButton"] > button:hover {
+        background: linear-gradient(135deg, #1a4b82, var(--primary)) !important;
+        transform: translateY(-2px);
+    }
+
+    /* Tela de Login */
+    .login-card { max-width: 400px; margin: 8vh auto; background: white; border-radius: 28px; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 25px 50px rgba(0,0,0,0.15); border: 3px solid var(--primary); }
+    .login-title { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 1.6rem; color: var(--primary); margin-bottom: 1.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,7 +166,6 @@ def importar_csv_para_bd(arquivo_csv):
     conn.close()
     return True
 
-# NOVA FUNÇÃO: INICIAR O DIA LETIVO (GERAR FALTAS PARA TODOS)
 def abrir_dia_letivo(data_str):
     conn = conectar_bd()
     cur = conn.cursor()
@@ -121,15 +174,12 @@ def abrir_dia_letivo(data_str):
     
     faltas_geradas = 0
     for codigo in alunos:
-        # Verifica se já existe algum registro para o aluno hoje
         cur.execute("SELECT id FROM registros_v2 WHERE codigo_aluno = %s AND data = %s", (codigo, data_str))
         if not cur.fetchone():
             try:
-                # Insere a falta padrão
                 cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro) VALUES (%s, %s, 'FALTA')", (codigo, data_str))
                 faltas_geradas += 1
-            except:
-                conn.rollback()
+            except: conn.rollback()
     conn.commit()
     conn.close()
     return faltas_geradas
@@ -144,26 +194,25 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada):
     cur.execute("SELECT nome FROM alunos_v2 WHERE codigo = %s", (codigo_estudante,))
     resultado = cur.fetchone()
     if not resultado:
-        st.error(f"❌ Código não encontrado na base: {codigo_estudante}")
+        st.error(f"❌ Código não cadastrado: {codigo_estudante}")
         conn.close()
         return False
         
     nome_aluno = resultado[0]
     cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
     if cur.fetchone():
-        st.warning(f"⚠️ {nome_aluno} já registou entrada hoje.")
+        st.warning(f"⚠️ {nome_aluno} já passou na catraca hoje.")
         conn.close()
         return False
         
-    # Se ele tinha falta (porque o dia foi aberto), apagamos a falta para registrar a presença
     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
     
     try:
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA')",
                     (codigo_estudante, data_registro, hora_atual, status))
         conn.commit()
-        if status == "PRESENTE": st.success(f"✅ Presença Confirmada: {nome_aluno}")
-        else: st.warning(f"⏰ Atraso Confirmado: {nome_aluno} às {hora_atual}")
+        if status == "PRESENTE": st.success(f"✅ {nome_aluno} - PRESENTE")
+        else: st.warning(f"⏰ {nome_aluno} - ATRASO ({hora_atual})")
         return True
     except: conn.rollback(); return False
     finally: conn.close()
@@ -184,12 +233,12 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
         cur.execute("UPDATE registros_v2 SET hora_saida = %s, motivo_saida = %s, pais_informados = %s WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", 
                     (hora_saida, motivo, pais_informados, codigo_estudante, data_registro))
         if cur.rowcount > 0:
-            st.success(f"✅ Saída de {nome_aluno} registada")
+            st.success(f"✅ Saída autorizada: {nome_aluno}")
             conn.commit()
             conn.close()
             return True
-        else: st.error("Erro: sem registo de entrada hoje para efetuar saída.")
-    else: st.info("Saída dentro do horário normal.")
+        else: st.error("Erro: Aluno não tem registro de entrada hoje.")
+    else: st.info("Saída no horário normal.")
     conn.close()
     return False
 
@@ -201,20 +250,20 @@ def limpar_todos_registros():
     conn.close()
 
 # ------------------------------------------------------------
-# 5. COMPONENTE DA CÂMERA INTELIGENTE (BIPE NATIVO JS)
+# 5. COMPONENTE DA CÂMERA BLINDADO (Não trava mais)
 # ------------------------------------------------------------
 def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
     html_code = f"""
-    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:10px; overflow:hidden; border: 3px solid #0f2b4a; background: #000; display:none;">
+    <div id="box-camera" style="width:100%; max-width:350px; margin:auto; border-radius:12px; overflow:hidden; border: 4px solid #e67e22; background: #000; display:none; box-shadow: 0 10px 20px rgba(0,0,0,0.2);">
         <div id="reader-qr-{id_camera}" style="width:100%;"></div>
     </div>
     
     <div style="text-align: center; margin-top: 15px; display: flex; gap: 10px; justify-content: center;">
-        <button id="btn-start" style="padding: 12px 24px; background: #0f2b4a; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px;">
+        <button id="btn-start" style="padding: 12px 20px; background: #27ae60; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px; font-size: 1rem; box-shadow: 0 4px 6px rgba(39, 174, 96, 0.3);">
             📷 Ligar Câmera
         </button>
-        <button id="btn-stop" style="display:none; padding: 12px 24px; background: #e74c3c; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px;">
-            🛑 Desligar
+        <button id="btn-stop" style="display:none; padding: 12px 20px; background: #e74c3c; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; max-width: 170px; font-size: 1rem; box-shadow: 0 4px 6px rgba(231, 76, 60, 0.3);">
+            🛑 Parar
         </button>
     </div>
 
@@ -228,41 +277,40 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         let isProcessing = false;
         let audioCtx = null;
         
-        // Ativação do Motor de Som (precisa do clique humano)
         function unlockAudio() {{
-            if (!audioCtx) {{
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }}
-            if (audioCtx.state === 'suspended') {{
-                audioCtx.resume();
-            }}
-            // Toca um som inaudível só para liberar a permissão do celular
-            const osc = audioCtx.createOscillator();
-            osc.connect(audioCtx.destination);
-            osc.start(0);
-            osc.stop(0.001);
+            if (!audioCtx) {{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }}
+            if (audioCtx.state === 'suspended') {{ audioCtx.resume(); }}
+            try {{
+                const osc = audioCtx.createOscillator();
+                osc.connect(audioCtx.destination);
+                osc.start(0);
+                osc.stop(0.001);
+            }} catch(e) {{}}
         }}
 
-        // Som de Bipe Forte e Claro
         function playBeep() {{
             if(!audioCtx) return;
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            oscillator.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            oscillator.type = 'sine';
-            oscillator.frequency.value = 900; // Frequência do bipe
-            oscillator.start();
-            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15); // Duração curta
-            oscillator.stop(audioCtx.currentTime + 0.15);
+            try {{
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 900; 
+                oscillator.start();
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15); 
+                oscillator.stop(audioCtx.currentTime + 0.15);
+            }} catch(e) {{ console.log("Erro no beep", e); }}
         }}
 
         const ligarCamera = () => {{
-            unlockAudio(); // O pulo do gato para o som funcionar!
-            
+            unlockAudio(); 
             btnStart.style.display = 'none';
             btnStop.style.display = 'inline-block';
             boxCamera.style.display = 'block';
+            
+            // Reseta a trava de segurança forçadamente caso tenha ficado presa
+            isProcessing = false;
             
             html5QrCode.start(
                 {{ facingMode: "environment" }},
@@ -270,38 +318,38 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                 (decodedText) => {{
                     if (!isProcessing) {{
                         isProcessing = true;
-                        
-                        // 1. Toca o bipe IMEDIATAMENTE no celular
                         playBeep(); 
                         
-                        // 2. Preenche o formulário do Streamlit
+                        let enviou = false;
                         const inputs = window.parent.document.querySelectorAll('input[type="text"]');
                         for (let i = 0; i < inputs.length; i++) {{
                             if (inputs[i].getAttribute('aria-label') && inputs[i].getAttribute('aria-label').includes('{label_alvo}')) {{
+                                
                                 let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                                 nativeSetter.call(inputs[i], decodedText);
                                 inputs[i].dispatchEvent(new Event('input', {{ bubbles: true}}));
                                 
-                                // 3. Submete os dados automaticamente
                                 const buttons = window.parent.document.querySelectorAll('button');
                                 for (let j = 0; j < buttons.length; j++) {{
                                     if (buttons[j].innerText.includes('{botao_alvo}')) {{
                                         buttons[j].click();
+                                        enviou = true;
                                         break;
                                     }}
                                 }}
                                 break;
                             }}
                         }}
-                        // Evita leitura dupla do mesmo aluno por 2 segundos
-                        setTimeout(() => {{ isProcessing = false; }}, 2000);
+                        
+                        // Failsafe: Libera a câmera para a próxima leitura após 2.5 segundos de qualquer forma
+                        setTimeout(() => {{ isProcessing = false; }}, 2500);
                     }}
                 }},
                 (errorMessage) => {{}}
             ).then(() => {{
                 sessionStorage.setItem('camera_{id_camera}', 'on');
             }}).catch(err => {{
-                alert("Erro ao acessar câmera. Pode ser necessário reiniciar a permissão.");
+                alert("Erro ao ligar a câmera. Tente recarregar a página.");
                 desligarCamera();
             }});
         }};
@@ -312,7 +360,8 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
                 btnStop.style.display = 'none';
                 boxCamera.style.display = 'none';
                 sessionStorage.setItem('camera_{id_camera}', 'off');
-            }});
+                isProcessing = false;
+            }}).catch(err => console.log(err));
         }};
 
         btnStart.onclick = ligarCamera;
@@ -323,7 +372,7 @@ def gerar_componente_camera(label_alvo, botao_alvo, id_camera):
         }}
     </script>
     """
-    components.html(html_code, height=450)
+    components.html(html_code, height=480)
 
 # ------------------------------------------------------------
 # 6. AUTENTICAÇÃO PERSISTENTE
@@ -351,10 +400,10 @@ check_auth()
 
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    if os.path.exists("logo.png"): st.image("logo.png", width=150)
-    st.markdown('<div class="login-title">Centro Educa Mais Jansen Veloso</div>', unsafe_allow_html=True)
-    senha = st.text_input("Senha", type="password")
-    if st.button("Entrar", use_container_width=True):
+    if os.path.exists("logo.png"): st.image("logo.png", width=160)
+    st.markdown('<div class="login-title">Jansen Veloso</div>', unsafe_allow_html=True)
+    senha = st.text_input("Digite sua Senha:", type="password")
+    if st.button("ACESSAR SISTEMA", use_container_width=True):
         if senha == SENHA_ADMIN: st.session_state.autenticado = True; st.session_state.eh_admin = True; set_auth_cookie(True); st.rerun()
         elif senha == SENHA_OPERADOR: st.session_state.autenticado = True; st.session_state.eh_admin = False; set_auth_cookie(False); st.rerun()
         else: st.error("Senha incorreta!")
@@ -371,14 +420,14 @@ if os.path.exists("logo.png"):
 st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {datetime.now().strftime("%d de %B de %Y")}</p>', unsafe_allow_html=True)
 
-col_logout1, col_logout2 = st.columns([4, 1])
+col_logout1, col_logout2 = st.columns([5, 1])
 with col_logout2:
-    if st.button("Sair", key="logout"):
+    if st.button("Sair do Sistema", key="logout"):
         cookies["auth_token"] = ""; cookies.save(); st.session_state.autenticado = False; st.rerun()
 
 df_alunos = carregar_alunos()
 if df_alunos.empty:
-    if st.session_state.eh_admin: st.warning("Acesse a aba MANUTENÇÃO para importar o CSV com as turmas.")
+    if st.session_state.eh_admin: st.warning("Acesse a aba MANUTENÇÃO para importar a Base de Dados.")
     else: st.error("Sistema sem dados."); st.stop()
 
 hoje_str = datetime.now().strftime("%Y-%m-%d")
@@ -417,11 +466,10 @@ with tabs[0]:
 
     st.markdown("---")
     
-    # NOVO BOTÃO: INICIAR DIA LETIVO (GERA AS FALTAS)
-    st.info("Antes de começar a ler as carteirinhas, abra o dia letivo. Isso garante que todos que não passarem pela catraca fiquem com falta.")
-    if st.button("📍 Abrir Dia Letivo (Gerar Lista de Faltas)", use_container_width=True):
+    st.info("Passo 1: Clique abaixo para gerar a lista de faltas do dia. Depois, use a câmera para dar presença.")
+    if st.button("📍 Abrir Dia Letivo (Gerar Faltas)", use_container_width=True):
         faltas = abrir_dia_letivo(data_str_config)
-        st.success(f"Dia Letivo Iniciado! {faltas} alunos marcados inicialmente como Ausentes. Inicie a leitura para converter em Presenças.")
+        st.success(f"Dia Iniciado! {faltas} alunos marcados como Ausentes.")
         
     st.markdown("---")
 
@@ -429,13 +477,14 @@ with tabs[0]:
 
     # ---------- ENTRADA ----------
     with tab_entrada:
-        label_in = "Código do Estudante (Entrada)"
-        botao_in = "Processar Entrada"
+        label_in = "Código (Entrada)"
+        botao_in = "Registrar Entrada"
         
         gerar_componente_camera(label_in, botao_in, "entrada")
         
         with st.form("form_in", clear_on_submit=True):
-            codigo_recebido = st.text_input(label_in, placeholder="Clique aqui e use o leitor, ou digite o código e aperte Enter...")
+            st.markdown("<br>", unsafe_allow_html=True)
+            codigo_recebido = st.text_input(label_in, placeholder="Clique aqui e use o leitor de mão, ou aguarde a câmera...")
             btn_submit_entrada = st.form_submit_button(botao_in)
             
         if btn_submit_entrada and codigo_recebido.strip():
@@ -449,13 +498,14 @@ with tabs[0]:
         if motivo == "Outro": motivo = st.text_input("Especifique", key="motivo_outro_val")
         pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True, key="pais_saida_val")
         
-        label_out = "Código do Estudante (Saída)"
-        botao_out = "Processar Saída"
+        label_out = "Código (Saída)"
+        botao_out = "Registrar Saída"
         
         gerar_componente_camera(label_out, botao_out, "saida")
         
         with st.form("form_out", clear_on_submit=True):
-            codigo_saida_recebido = st.text_input(label_out, placeholder="Clique aqui e use o leitor, ou digite o código e aperte Enter...")
+            st.markdown("<br>", unsafe_allow_html=True)
+            codigo_saida_recebido = st.text_input(label_out, placeholder="Aguarde a câmera ou digite...")
             btn_submit_saida = st.form_submit_button(botao_out)
             
         if btn_submit_saida and codigo_saida_recebido.strip():
@@ -472,7 +522,6 @@ with tabs[1]:
     c1, c2, c3, c4 = st.columns(4)
     with c1: data_filtro = st.date_input("Data", datetime.now(), key="data_filtro")
     with c2: turma_filtro = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="turma_filtro")
-    # NOVO FILTRO: STATUS DE PRESENÇA/FALTA
     with c3: status_filtro = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="status_filtro")
     with c4: busca = st.text_input("Buscar por Nome", key="busca")
     
