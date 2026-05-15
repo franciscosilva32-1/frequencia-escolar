@@ -23,16 +23,15 @@ except ImportError:
     FPDF = None
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL
+# 1. CONFIGURAÇÃO INICIAL E COOKIES
 # ------------------------------------------------------------
 st.set_page_config(page_title="Jansen Veloso - Gestão Escolar", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
-if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # ------------------------------------------------------------
-# 2. FUNÇÕES DE SUPORTE (TEMPO E E-MAIL)
+# 2. SUPORTE (TEMPO E E-MAIL)
 # ------------------------------------------------------------
 def obter_hora_atual(): return datetime.utcnow() - timedelta(hours=3)
 
@@ -65,21 +64,20 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 3. CSS (FUNDO ATRAENTE E FILTROS DESTACADOS)
+# 3. CSS (FUNDO PREMIUM E FILTROS DESTACADOS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
     :root { --primary: #0a1f35; --accent: #ff7b00; }
     
-    /* Fundo Gradiente Suave e Moderno */
     .stApp { background: linear-gradient(135deg, #f0f4f8 0%, #d9e2ec 100%); }
     #MainMenu, footer, header {visibility: hidden;}
     
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 3.8rem; color: var(--primary); text-align: center; text-transform: uppercase; letter-spacing: -2px; margin: 0;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.5rem; color: #64748b; text-align: center; font-weight: 700; margin-bottom: 2rem;}
     
-    /* FILTROS COM DESTAQUE MÁXIMO E FONTE FORTE */
+    /* FILTROS DESTACADOS */
     [data-baseweb="select"] > div { border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; background: white !important;}
     [data-baseweb="select"] span { color: #0a1f35 !important; font-weight: 900 !important; font-size: 1.4rem !important; }
     
@@ -90,6 +88,8 @@ st.markdown("""
     .top7-card { background: white; border-left: 12px solid var(--accent); padding: 2rem; border-radius: 15px; margin-bottom: 1rem; text-align: center; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
     .top7-name { font-size: 3.5rem; font-weight: 900; color: var(--primary); text-transform: uppercase; }
     .top7-name-hidden { font-size: 3.5rem; font-weight: 900; color: #cbd5e1; filter: blur(15px); }
+    
+    .card-panel { background: white; border-radius: 20px; padding: 2rem; border: 2px solid #e2e8f0; margin-bottom: 1rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,6 +100,7 @@ DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
+# Dicionário de abreviações exato (conforme solicitado no docx)
 DICIONARIO_ABREVIACAO = {
     "BIOLOGIA": "BIO", "ARTE": "ART", "EDUCAÇÃO FÍSICA": "EDF",
     "LÍNGUA ESPANHOLA": "ESP", "FILOSOFIA": "FIL", "FÍSICA": "FIS",
@@ -124,12 +125,12 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO (VETORIZADA - ALTA PERFORMANCE)
+# 5. LÓGICA DE NEGÓCIO (PERFORMANCE)
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
     try:
-        conn = conectar_bd(); df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
+        conn = conectar_bd(); df = pd.read_sql("SELECT * FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 def importar_csv_alunos(file):
@@ -170,7 +171,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida):
     except: return False
 
 # ------------------------------------------------------------
-# 6. DESEMPENHO ACADÉMICO E PDF
+# 6. DESEMPENHO ACADÊMICO E PDF
 # ------------------------------------------------------------
 def importar_csv_desempenho(file, periodo, area, turma):
     temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
@@ -190,7 +191,7 @@ def importar_csv_desempenho(file, periodo, area, turma):
             dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"{len(dados_l)} registos salvos."
+    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"{len(dados_l)} registros salvos."
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     if not FPDF: return None
@@ -198,7 +199,7 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_font("Arial", "B", 18); pdf.set_text_color(255,255,255); pdf.cell(0, 15, "BOLETIM DE DESEMPENHO", 0, 1, "C")
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MEDIA GERAL: {nota_g:.2f}", 0, 1)
+    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA GERAL: {nota_g:.2f}", 0, 1)
     
     # LEGENDA COM A COR ROXA PARA DUPLA
     pdf.set_font("Arial", "B", 8)
@@ -222,11 +223,11 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     return pdf.output(dest='S').encode('latin-1')
 
 # ------------------------------------------------------------
-# 7. COMPONENTE CÂMARA QR CODE
+# 7. COMPONENTE CÂMERA
 # ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
-    <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMARA {label}</button>
+    <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMERA {label}</button>
     <div id="reader-{cam_id}" style="width:100%; margin-top:10px; display:none; border-radius:10px; overflow:hidden;"></div></div>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
@@ -247,6 +248,7 @@ def gerar_camera(label, btn_label, cam_id):
 # 8. AUTH E DASHBOARD
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
+
 if not auth_cookie:
     st.markdown('<div style="max-width:400px; margin: 10vh auto; padding: 3rem; background:white; border-radius:20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align:center;">', unsafe_allow_html=True)
     if os.path.exists("logo.png"):
@@ -267,7 +269,7 @@ except Exception:
 
 df_alunos = carregar_alunos()
 
-# HEADER (CORRIGIDO PARA EVITAR O ATTRIBUTE ERROR)
+# HEADER
 c_l, c_t, c_s = st.columns([1, 4, 1])
 with c_l: 
     if os.path.exists("logo.png"):
@@ -291,9 +293,9 @@ m2.markdown(f'<div class="metric-card"><span class="m-val">{pres_hoje}</span><sp
 m3.markdown(f'<div class="metric-card"><span class="m-val">{len(df_alunos)-pres_hoje}</span><span class="m-lab">Faltas</span></div>', unsafe_allow_html=True)
 m4.markdown(f'<div class="metric-card"><span class="m-val">--</span><span class="m-lab">Média Geral</span></div>', unsafe_allow_html=True)
 
-tabs = st.tabs(["📝 Registo", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Académico"])
+tabs = st.tabs(["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Acadêmico"])
 
-# --- ABA 0: REGISTO (INCLUI JUSTIFICAR FALTAS) ---
+# --- ABA 0: REGISTRO ---
 with tabs[0]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     h_lim_e = st.time_input("Horário Limite Entrada", datetime.strptime("07:30", "%H:%M").time())
@@ -418,10 +420,10 @@ with tabs[4]:
         if st.button("PROCESSAR LISTA") and up_al:
             if importar_csv_alunos(up_al): st.success("Base de Alunos Sincronizada!"); st.rerun()
 
-# --- ABA 5: DESEMPENHO ACADÉMICO ---
+# --- ABA 5: DESEMPENHO ACADÊMICO ---
 with tabs[5]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
-    st.title("📊 Desempenho Académico")
+    st.title("📊 Desempenho Acadêmico")
     df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
     
     # Filtros com Destaque
