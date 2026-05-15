@@ -75,7 +75,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (LETRAS GIGANTES E FILTROS AJUSTADOS)
+# 2. CSS PREMIUM (FILTROS CORRIGIDOS E SEGUROS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -107,21 +107,18 @@ st.markdown("""
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
     
-    /* === CORREÇÃO DOS FILTROS: Fonte ajustada para não cortar palavras e manter forte === */
-    div[data-baseweb="select"] > div { 
+    /* === CORREÇÃO SUAVE DOS FILTROS (SEM DESTRUIR O LAYOUT) === */
+    [data-baseweb="select"] > div { 
         background-color: #ffffff !important; 
-        border: 2px solid #cbd5e1 !important; 
-        border-radius: 12px !important;
-        padding: 0.3rem !important;
+        border-color: #cbd5e1 !important; 
     }
-    div[data-baseweb="select"] span, div[data-baseweb="select"] div, div[data-baseweb="select"] li {
+    [data-baseweb="select"] span { 
         color: #000000 !important; 
-        -webkit-text-fill-color: #000000 !important;
-        font-weight: 800 !important; 
-        font-size: 1.05rem !important; /* Tamanho reduzido para não cortar! */
-        white-space: normal !important;
+        -webkit-text-fill-color: #000000 !important; 
+        font-weight: 800 !important;
     }
-    ul[data-baseweb="menu"] { background-color: #ffffff !important; border: 2px solid #cbd5e1 !important; }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
     
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
@@ -311,7 +308,6 @@ def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
     questoes_por_disc = len(col_options) // len(disciplinas)
 
     dados_longos = []
-    # OTIMIZAÇÃO MAXIMA AQUI (Dicionário em vez de iterrows corta tempo de processamento em 90%)
     records = temp_df.to_dict('records')
     for row in records:
         nome = str(row.get('Nome', '')).strip()
@@ -329,7 +325,6 @@ def importar_csv_avs_nuvem(arquivo_csv, periodo, area, turma):
 
     if not dados_longos: return False, "Nenhum dado processável."
     
-    # PROCESSAMENTO EM LOTE COM EXECUTE_VALUES (MUITO MAIS RÁPIDO QUE BATCH)
     try:
         conn = conectar_bd(); cur = conn.cursor()
         query = "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, gabarito=EXCLUDED.gabarito, acerto=EXCLUDED.acerto"
@@ -653,7 +648,7 @@ if st.session_state.eh_admin:
                     """, unsafe_allow_html=True)
 
         # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES (VELOCIDADE MÁXIMA - PDF DESACOPLADO)
+        # 🧑‍🎓 ESTUDANTES (VETORIZAÇÃO PANDAS - MÁXIMA VELOCIDADE)
         # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
@@ -669,49 +664,55 @@ if st.session_state.eh_admin:
                 with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="avs_desempenho")
                 with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente c/ erros", key="avs_check_erros")
 
+                # CÁLCULO VETORIZADO (Processa tudo numa fração de segundo)
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
-                status_stats_est = df_filtrado[df_filtrado['resposta'].isin(['BRANCO', 'DUPLA'])].groupby(['nome', 'resposta']).size().unstack(fill_value=0)
                 
-                alunos_filtrados = []
-                for _, r in resumo_est.iterrows():
-                    n = r['nome']
-                    b = status_stats_est.at[n, 'BRANCO'] if (not status_stats_est.empty and n in status_stats_est.index and 'BRANCO' in status_stats_est.columns) else 0
-                    d = status_stats_est.at[n, 'DUPLA'] if (not status_stats_est.empty and n in status_stats_est.index and 'DUPLA' in status_stats_est.columns) else 0
-                    tem_erro = b > 0 or d > 0
+                erros_df = df_filtrado[df_filtrado['resposta'].isin(['BRANCO', 'DUPLA'])]
+                if not erros_df.empty:
+                    status_stats = erros_df.groupby(['nome', 'resposta']).size().unstack(fill_value=0).reset_index()
+                else:
+                    status_stats = pd.DataFrame(columns=['nome', 'BRANCO', 'DUPLA'])
                     
-                    if busca_aluno and busca_aluno.lower() not in n.lower(): continue
-                    if filtro_erros and not tem_erro: continue
-                    if filtro_desempenho == "INSUFICIENTE" and r['Nota'] >= 6.0: continue
-                    elif filtro_desempenho == "BOM" and (r['Nota'] < 6.0 or r['Nota'] > 7.5): continue
-                    elif filtro_desempenho == "ÓTIMO" and r['Nota'] <= 7.5: continue
-                    
-                    alunos_filtrados.append({'nome': n, 'turma': r['turma'], 'nota': r['Nota'], 'brancos': b, 'duplas': d, 'total_q': r['Total']})
+                for col in ['BRANCO', 'DUPLA']:
+                    if col not in status_stats.columns: status_stats[col] = 0
+                        
+                merged_alunos = pd.merge(resumo_est, status_stats, on='nome', how='left').fillna({'BRANCO': 0, 'DUPLA': 0})
+                
+                # APLICANDO FILTROS RAPIDAMENTE
+                if busca_aluno: merged_alunos = merged_alunos[merged_alunos['nome'].str.contains(busca_aluno, case=False, na=False)]
+                if filtro_erros: merged_alunos = merged_alunos[(merged_alunos['BRANCO'] > 0) | (merged_alunos['DUPLA'] > 0)]
+                if filtro_desempenho == "INSUFICIENTE": merged_alunos = merged_alunos[merged_alunos['Nota'] < 6.0]
+                elif filtro_desempenho == "BOM": merged_alunos = merged_alunos[(merged_alunos['Nota'] >= 6.0) & (merged_alunos['Nota'] <= 7.5)]
+                elif filtro_desempenho == "ÓTIMO": merged_alunos = merged_alunos[merged_alunos['Nota'] > 7.5]
+                
+                # TRANSFORMA PARA LISTA APENAS OS 20 PRIMEIROS
+                alunos_filtrados = merged_alunos.head(20).to_dict('records')
 
-                # ----- NOVA ÁREA EXCLUSIVA DE GERAÇÃO DE PDF (Tira o peso do loop) -----
+                # ÁREA EXCLUSIVA DE GERAÇÃO DE PDF
                 st.markdown("### 🖨️ Exportação de Boletim em PDF")
-                st.info("Para não travar o sistema, escolha um estudante abaixo para gerar o PDF detalhado.")
-                aluno_pdf_sel = st.selectbox("Selecione o estudante:", [""] + [al['nome'] for al in alunos_filtrados], key="sel_pdf_indiv")
+                st.info("Escolha um estudante abaixo para gerar o PDF detalhado.")
+                nomes_disponiveis = merged_alunos['nome'].tolist()
+                aluno_pdf_sel = st.selectbox("Selecione o estudante para o PDF:", [""] + nomes_disponiveis, key="sel_pdf_indiv")
                 if aluno_pdf_sel:
-                    al_dados_pdf = next(al for al in alunos_filtrados if al['nome'] == aluno_pdf_sel)
+                    al_dados_pdf = merged_alunos[merged_alunos['nome'] == aluno_pdf_sel].iloc[0]
                     df_boletim_pdf = df_avs[df_avs['nome'] == aluno_pdf_sel]
                     if p_filtro_est != "Todos": df_boletim_pdf = df_boletim_pdf[df_boletim_pdf['periodo'] == p_filtro_est]
                     if a_filtro_est != "Todas": df_boletim_pdf = df_boletim_pdf[df_boletim_pdf['area'] == a_filtro_est]
                     
                     with st.spinner("Desenhando PDF Colorido..."):
-                        bytes_do_pdf = gerar_pdf_boletim(al_dados_pdf['nome'], al_dados_pdf['turma'], al_dados_pdf['nota'], df_boletim_pdf)
+                        bytes_do_pdf = gerar_pdf_boletim(al_dados_pdf['nome'], al_dados_pdf['turma'], al_dados_pdf['Nota'], df_boletim_pdf)
                         if bytes_do_pdf:
-                            st.download_button(f"📥 CLIQUE AQUI PARA BAIXAR O BOLETIM DE {al_dados_pdf['nome'].upper()}", bytes_do_pdf, f"Boletim_{al_dados_pdf['nome']}.pdf", "application/pdf")
+                            st.download_button(f"📥 BAIXAR O BOLETIM DE {al_dados_pdf['nome'].upper()}", bytes_do_pdf, f"Boletim_{al_dados_pdf['nome']}.pdf", "application/pdf")
                 st.markdown("---")
                 
-                # LIMITADO AOS 20 PRIMEIROS PARA MÁXIMA VELOCIDADE NA TELA
-                st.write(f"**Encontrados:** {len(alunos_filtrados)} estudante(s). *(Mostrando no máximo os 20 primeiros para não sobrecarregar a tela. Use a busca)*")
+                st.write(f"**Encontrados:** {len(merged_alunos)} estudante(s). *(Mostrando no máximo os 20 primeiros na tela para não sobrecarregar. Use a busca acima)*")
                 
-                for i, al in enumerate(alunos_filtrados[:20]): 
-                    if al['brancos'] > 0 or al['duplas'] > 0:
-                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['nota']:.2f} | ⚠️ Erros: (Brancos: {al['brancos']} | Duplas: {al['duplas']} | Tot. Questões: {al['total_q']})"
+                for i, al in enumerate(alunos_filtrados): 
+                    if al['BRANCO'] > 0 or al['DUPLA'] > 0:
+                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['Nota']:.2f} | ⚠️ Erros: (Brancos: {int(al['BRANCO'])} | Duplas: {int(al['DUPLA'])} | Tot. Questões: {al['Total']})"
                     else:
-                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['nota']:.2f} | ✅ Prova Perfeita"
+                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['Nota']:.2f} | ✅ Prova Perfeita"
                         
                     with st.expander(header_info):
                         df_boletim = df_avs[df_avs['nome'] == al['nome']]
@@ -725,11 +726,10 @@ if st.session_state.eh_admin:
                             progresso = df_boletim.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                             progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                             
-                            # GRÁFICO SUPER LEVE E NATIVO DO STREAMLIT (Corta o tempo de carregamento pela metade)
                             try:
                                 progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
                                 st.line_chart(progresso_pivot, height=250)
-                            except: pass # Evita erros caso o pivot fique vazio
+                            except: pass
                             
                             st.markdown("#### 📊 Médias por Disciplina (No Filtro Selecionado)")
                             medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
