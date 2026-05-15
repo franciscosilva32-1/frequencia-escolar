@@ -51,7 +51,6 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
     except: data_f = data
     
-    # Lógica aprimorada para diferenciar Atraso e Entrada Regular no corpo do e-mail
     if evento.startswith("ENTRADA"):
         assunto = f"🏫 Aviso de Entrada - Jansen Veloso"
         if "ATRASO" in evento:
@@ -179,13 +178,26 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF
+# 5. LÓGICA DE NEGÓCIO, CACHE E GERADORES DE PDF
 # ------------------------------------------------------------
+
+# OTIMIZAÇÃO: Tabela de Alunos puxada do banco a cada 5 minutos, ou quando forçado.
 @st.cache_data(ttl=300)
 def carregar_alunos():
     try:
         conn = conectar_bd(); df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
+
+# OTIMIZAÇÃO: Tabela GIGANTE do Desempenho salva em RAM. Elimina travamentos na digitação!
+@st.cache_data(ttl=300)
+def carregar_avaliacoes():
+    try:
+        conn = conectar_bd()
+        df = pd.read_sql("SELECT * FROM avaliacoes_avs", conn)
+        conn.close()
+        return df
+    except: 
+        return pd.DataFrame()
 
 def importar_csv_alunos(file):
     df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
@@ -194,7 +206,9 @@ def importar_csv_alunos(file):
     dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
-    conn.commit(); conn.close(); st.cache_data.clear(); return True
+    conn.commit(); conn.close()
+    carregar_alunos.clear() # Limpa APENAS o cache de alunos, para manter a fluidez do restante.
+    return True
 
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual()
@@ -208,7 +222,6 @@ def registrar_presenca(cod, data, h_limite):
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
         if res[1]: 
-            # Modificado para enviar o status junto e personalizar o e-mail
             disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
         conn.commit(); conn.close(); return res[0]
     except: return False
@@ -222,7 +235,6 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
             if res[1]: 
-                # LÓGICA DO E-MAIL: Antecipada ou Regular dependendo do horário configurado
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
@@ -248,7 +260,9 @@ def importar_csv_desempenho(file, periodo, area, turma):
             dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"{len(dados_l)} registros salvos."
+    conn.commit(); conn.close()
+    carregar_avaliacoes.clear() # Limpa o cache APENAS se novas avaliações chegarem
+    return True, f"{len(dados_l)} registros salvos."
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     if not FPDF: return None
@@ -405,15 +419,12 @@ if total_alunos > 0:
 else:
     media_geral_freq = "0%"
 
-# --- CÁLCULO DA MÉDIA ACADÊMICA ---
-try:
-    conn = conectar_bd()
-    cur = conn.cursor()
-    cur.execute("SELECT AVG(acerto) FROM avaliacoes_avs")
-    res_media = cur.fetchone()[0]
-    conn.close()
-    media_geral_acad = f"{res_media * 10:.1f}" if res_media is not None else "--"
-except:
+# --- CÁLCULO DA MÉDIA ACADÊMICA OTIMIZADO ---
+# Em vez de fazer uma consulta lenta no banco a cada clique, pegamos a "carona" no cache ultra-rápido.
+df_avaliacoes_cache = carregar_avaliacoes()
+if not df_avaliacoes_cache.empty:
+    media_geral_acad = f"{df_avaliacoes_cache['acerto'].mean() * 10:.1f}"
+else:
     media_geral_acad = "--"
 
 # --- RENDERIZAÇÃO DOS 5 CARTÕES ---
@@ -558,7 +569,9 @@ if eh_admin:
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd(); cur = conn.cursor()
                 cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                conn.commit(); conn.close(); st.cache_data.clear(); st.success("Atualizado!")
+                conn.commit(); conn.close()
+                carregar_alunos.clear() # Limpa apenas cache de alunos
+                st.success("Atualizado!")
         with col2:
             st.write("Adição Manual")
             m_cod = st.text_input("Matrícula")
@@ -567,7 +580,9 @@ if eh_admin:
             if st.button("CADASTRAR") and m_cod and m_nom:
                 conn = conectar_bd(); cur = conn.cursor()
                 cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                conn.commit(); conn.close(); st.cache_data.clear(); st.success("Cadastrado!")
+                conn.commit(); conn.close()
+                carregar_alunos.clear() # Limpa apenas cache de alunos
+                st.success("Cadastrado!")
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
         if st.button("PROCESSAR LISTA") and up_al:
@@ -579,7 +594,10 @@ if eh_admin:
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
-    df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
+    
+    # OTIMIZAÇÃO AQUI: Em vez de ir ao banco de novo (o que causava o engasgo),
+    # nós usamos o que já estava pré-carregado no cache de forma quase instantânea.
+    df_da = df_avaliacoes_cache.copy()
     
     if not df_da.empty:
         df_da['disciplina'] = df_da['disciplina'].replace({
@@ -811,9 +829,8 @@ with tabs[indice_aba]:
             st.subheader("🗑️ Limpeza Seletiva de Banco")
             st.write("Selecione um bloco de avaliação para excluir permanentemente da Nuvem:")
             
-            df_banco_avs = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
-            if not df_banco_avs.empty:
-                blocos = df_banco_avs[['periodo', 'area', 'turma']].drop_duplicates()
+            if not df_avaliacoes_cache.empty:
+                blocos = df_avaliacoes_cache[['periodo', 'area', 'turma']].drop_duplicates()
                 lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
                 bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
                 
@@ -822,6 +839,7 @@ with tabs[indice_aba]:
                     conn = conectar_bd(); cur = conn.cursor()
                     cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
                     conn.commit(); conn.close()
+                    carregar_avaliacoes.clear() # Limpa o cache após a exclusão
                     st.success("Bloco removido do servidor!"); st.rerun()
             else:
                 st.info("O banco de dados de desempenho está vazio.")
