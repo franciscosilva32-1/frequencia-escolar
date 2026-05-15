@@ -42,9 +42,10 @@ def data_formatada_ptbr():
     meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
     return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
 
+# SEGURANÇA: Credenciais ocultadas do código-fonte
 ATIVAR_EMAILS = True  
-EMAIL_ESCOLA = "cejv.cema@gmail.com" 
-SENHA_APP_ESCOLA = "jetkkkridsefalvd" 
+EMAIL_ESCOLA = st.secrets.get("EMAIL_ESCOLA", "") 
+SENHA_APP_ESCOLA = st.secrets.get("SENHA_APP_ESCOLA", "") 
 
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -58,7 +59,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     msg = MIMEMultipart(); msg['From'] = EMAIL_ESCOLA; msg['To'] = email_destino; msg['Subject'] = assunto
     msg.attach(MIMEText(texto, 'plain'))
     def enviar():
-        if ATIVAR_EMAILS:
+        if ATIVAR_EMAILS and EMAIL_ESCOLA and SENHA_APP_ESCOLA:
             try:
                 server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls(); server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
                 server.send_message(msg); server.quit()
@@ -88,7 +89,6 @@ st.markdown("""
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    /* MUDANÇA: Agora com 5 colunas para o novo card de média acadêmica */
     .metrics-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2rem; margin-bottom: 3rem; }
     @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
@@ -410,10 +410,17 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-tabs = st.tabs(["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Acadêmico"])
+# --- DEFINIÇÃO DINÂMICA DAS ABAS (OCULTAR MANUTENÇÃO PARA OPERADORES) ---
+abas_do_sistema = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
+if eh_admin:
+    abas_do_sistema.append("⚙️ Manutenção")
+abas_do_sistema.append("📑 Desempenho Acadêmico")
+
+tabs = st.tabs(abas_do_sistema)
+indice_aba = 0
 
 # --- ABA 0: REGISTRO ---
-with tabs[0]:
+with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     h_lim_e = st.time_input("Horário Limite Entrada", datetime.strptime("07:30", "%H:%M").time())
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA", "📝 JUSTIFICAR FALTAS"])
@@ -463,9 +470,10 @@ with tabs[0]:
             else: st.write("Nenhuma falta justificada ainda.")
         else: st.success("Nenhuma falta registada para esta data!")
     st.markdown('</div>', unsafe_allow_html=True)
+indice_aba += 1
 
 # --- ABA 1: GESTÃO ---
-with tabs[1]:
+with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
     with c1: dt_f = st.date_input("Data", obter_hora_atual(), key="data_relatorio")
@@ -482,9 +490,10 @@ with tabs[1]:
         st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
     except: st.info("Sem dados para exibir no momento.")
     st.markdown('</div>', unsafe_allow_html=True)
+indice_aba += 1
 
 # --- ABA 2: ALERTAS ---
-with tabs[2]:
+with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     if dias_u:
@@ -494,9 +503,10 @@ with tabs[2]:
             else: st.success("Nenhum aluno ativo nesta situação.")
         except: st.info("Aguardando...")
     st.markdown('</div>', unsafe_allow_html=True)
+indice_aba += 1
 
 # --- ABA 3: HISTÓRICO ---
-with tabs[3]:
+with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
@@ -504,11 +514,11 @@ with tabs[3]:
             conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
         except: st.warning("Erro ao carregar histórico.")
     st.markdown('</div>', unsafe_allow_html=True)
+indice_aba += 1
 
 # --- ABA 4: MANUTENÇÃO (ADMIN) ---
-with tabs[4]:
-    if not eh_admin: st.warning("Acesso restrito ao Administrador.")
-    else:
+if eh_admin:
+    with tabs[indice_aba]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
         st.subheader("📧 Gerir E-mails e Alunos")
         col1, col2 = st.columns(2)
@@ -533,9 +543,10 @@ with tabs[4]:
         if st.button("PROCESSAR LISTA") and up_al:
             if importar_csv_alunos(up_al): st.success("Base de Alunos Sincronizada!"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+    indice_aba += 1
 
 # --- ABA 5: DESEMPENHO ACADÊMICO ---
-with tabs[5]:
+with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
     df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
