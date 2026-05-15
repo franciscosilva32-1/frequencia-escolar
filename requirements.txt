@@ -1,7 +1,8 @@
 streamlit
-pandas
+pandas<2.0.0
 psycopg2-binary
 streamlit-cookies-manager
 matplotlib
 seaborn
-fpdf
+fpdf2
+plotly
