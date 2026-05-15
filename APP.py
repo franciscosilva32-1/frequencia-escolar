@@ -342,43 +342,89 @@ def excluir_dados_avs(periodo, area, turma):
         return linhas
     except: return 0
 
+# === GERADOR DE PDF INTELIGENTE RECONSTRUÍDO (PÁGINAS E MATÉRIAS) ===
 @st.cache_data(show_spinner=False)
-def gerar_pdf_boletim(aluno_nome, turma, nota, df_bol):
+def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
     if FPDF is None: return None
     pdf = FPDF()
     pdf.add_page()
     
-    # Cabeçalho
-    pdf.set_fill_color(10, 31, 53) # Azul Escuro
-    pdf.rect(0, 0, 210, 40, 'F')
-    pdf.set_font("Arial", "B", 22); pdf.set_text_color(255, 255, 255)
+    # Cabeçalho Fixo
+    pdf.set_fill_color(10, 31, 53)
+    pdf.rect(0, 0, 210, 35, 'F')
+    pdf.set_font("Arial", "B", 20); pdf.set_text_color(255, 255, 255)
     pdf.cell(0, 15, "BOLETIM DE DESEMPENHO - AVS", 0, 1, "C")
     pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Centro Educa Mais Jansen Veloso | Data: {datetime.now().strftime('%d/%m/%Y')}", 0, 1, "C")
+    pdf.cell(0, 5, f"Centro Educa Mais Jansen Veloso | Data: {datetime.now().strftime('%d/%m/%Y')}", 0, 1, "C")
     
-    pdf.ln(20)
+    pdf.ln(12)
     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno_nome}", 0, 1)
-    pdf.cell(0, 10, f"TURMA: {turma} | NOTA MEDIA: {nota:.2f}", 0, 1)
-    pdf.ln(10)
+    pdf.cell(0, 8, f"ESTUDANTE: {aluno_nome}", 0, 1)
+    pdf.cell(0, 8, f"TURMA: {turma} | NOTA MEDIA GERAL: {nota_geral:.2f}", 0, 1)
+    pdf.ln(2)
     
-    # Mapa de Questões
-    pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, "MAPA DE QUESTOES (LEGENDA: VERDE=ACERTO | VERMELHO=ERRO | LARANJA=BRANCO)", 0, 1)
+    # Legenda
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO  |  VERMELHO = ERRO  |  LARANJA = BRANCO", 0, 1)
+    pdf.ln(5)
     
-    x_start = 10; y_start = pdf.get_y(); col = 0
-    for _, q in df_bol.sort_values(['periodo', 'disciplina', 'questao']).iterrows():
-        if q['acerto'] == 1: pdf.set_fill_color(16, 185, 129) # Verde
-        elif q['resposta'] == 'BRANCO': pdf.set_fill_color(245, 158, 11) # Laranja
-        else: pdf.set_fill_color(239, 68, 68) # Vermelho
+    # Processando separadamente por PERÍODO e DISCIPLINA
+    periodos = df_bol['periodo'].unique()
+    for p in sorted(periodos):
+        df_p = df_bol[df_bol['periodo'] == p]
         
-        pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 8)
-        pdf.rect(x_start + (col * 22), y_start, 20, 12, 'F')
-        pdf.text(x_start + (col * 22) + 2, y_start + 5, f"Q{q['questao']}")
-        pdf.text(x_start + (col * 22) + 2, y_start + 10, f"R:{q['resposta']}")
+        # Cria uma faixa cinza para destacar o Período
+        pdf.set_fill_color(230, 230, 230)
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, f"  {p.upper()}", 0, 1, 'L', fill=True)
+        pdf.ln(3)
         
-        col += 1
-        if col > 7: col = 0; y_start += 15
-        if y_start > 260: pdf.add_page(); y_start = 20
+        disciplinas = df_p['disciplina'].unique()
+        for d in sorted(disciplinas):
+            df_d = df_p[df_p['disciplina'] == d]
+            
+            # Calcula a nota específica desta disciplina neste período
+            acertos_d = df_d['acerto'].sum()
+            total_d = len(df_d)
+            nota_d = (acertos_d / total_d) * 10 if total_d > 0 else 0
+            
+            # Título da Disciplina
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, f"{d.upper()} - Nota: {nota_d:.2f}", 0, 1)
+            
+            x_start = 10
+            y_start = pdf.get_y()
+            col = 0
+            
+            # Desenhando as caixinhas de questões
+            for _, q in df_d.sort_values('questao').iterrows():
+                # Proteção contra quebra de página: se chegar no fundo, cria nova página
+                if y_start > 265:
+                    pdf.add_page()
+                    y_start = pdf.get_y()
+                
+                # Cores de status
+                if q['acerto'] == 1: pdf.set_fill_color(16, 185, 129)
+                elif q['resposta'] == 'BRANCO': pdf.set_fill_color(245, 158, 11)
+                else: pdf.set_fill_color(239, 68, 68)
+                
+                pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 8)
+                pdf.rect(x_start + (col * 22), y_start, 20, 12, 'F')
+                pdf.text(x_start + (col * 22) + 2, y_start + 5, f"Q{q['questao']}")
+                pdf.text(x_start + (col * 22) + 2, y_start + 10, f"R:{q['resposta']}")
+                
+                col += 1
+                if col > 7:
+                    col = 0
+                    y_start += 15
+            
+            # Ajustando o espaço após a grade de questões para a próxima matéria
+            if col > 0:
+                y_start += 15
+            pdf.set_y(y_start + 5)
+            pdf.set_text_color(0, 0, 0) # Retorna a cor do texto para preto
+        
+        pdf.ln(5) # Espaço extra entre os períodos
         
     try:
         res_pdf = pdf.output()
