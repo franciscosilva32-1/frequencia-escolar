@@ -536,7 +536,7 @@ if st.session_state.eh_admin:
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================================================
-# 📑 ABA 5: O SEU SUPER ANALISADOR AVS 100% RESTAURADO
+# 📑 ABA 5: O SEU SUPER ANALISADOR AVS 100% RESTAURADO E INTERATIVO
 # =================================================================================
 if st.session_state.eh_admin:
     with tabs[5]:
@@ -658,7 +658,9 @@ if st.session_state.eh_admin:
                             # Gráfico Interativo do Boletim (Plotly)
                             fig_b = px.line(progresso, x='periodo', y='Nota', color='disciplina', markers=True, title="Evolução por Período")
                             fig_b.update_layout(yaxis=dict(range=[-0.5, 11]), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='Disciplina')
-                            st.plotly_chart(fig_b, use_container_width=True)
+                            
+                            # A SOLUÇÃO DO SEU ERRO (O "CPF" NO PLOTLY):
+                            st.plotly_chart(fig_b, use_container_width=True, key=f"graf_bol_{i}_{al['nome']}")
                             
                             st.markdown("#### 📊 Médias por Disciplina (No Filtro Selecionado)")
                             medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
@@ -717,7 +719,7 @@ if st.session_state.eh_admin:
                 )
                 fig_g.add_annotation(x=len(resumo_graf)-1, y=media_geral + 0.5, text=f"Média: {media_geral:.2f}", showarrow=False, font=dict(color="red", size=14))
                 
-                st.plotly_chart(fig_g, use_container_width=True)
+                st.plotly_chart(fig_g, use_container_width=True, key="grafico_desempenho_plotly")
                 
                 st.markdown("---")
                 st.subheader("⚠️ Histórico de Faltas (Área inteira em branco)")
@@ -733,7 +735,7 @@ if st.session_state.eh_admin:
                     fig_f.update_traces(texttemplate='%{text}', textposition='outside')
                     fig_f.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(dtick=1))
                     
-                    st.plotly_chart(fig_f, use_container_width=True)
+                    st.plotly_chart(fig_f, use_container_width=True, key="grafico_faltosos_plotly")
                     
                     st.write("**Lista de Alunos:**")
                     for _, f_row in faltosos.iterrows():
@@ -810,7 +812,7 @@ if st.session_state.eh_admin:
                 fig_c.update_traces(texttemplate='%{text:.1f}', textposition='outside')
                 fig_c.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
                 
-                st.plotly_chart(fig_c, use_container_width=True)
+                st.plotly_chart(fig_c, use_container_width=True, key="grafico_criticas_plotly")
                 
                 for _, row in disc_crit.iterrows():
                     st.warning(f"📌 **{row['disciplina'].upper()}** - Média: {row['Nota']:.2f}")
