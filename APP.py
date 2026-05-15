@@ -88,13 +88,16 @@ st.markdown("""
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2.5rem; }
+    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2rem; margin-bottom: 3rem; }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
-    .metric-card { background: white; padding: 2.2rem 1rem; border-radius: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.04); text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; }
-    .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 8px; }
+    
+    /* CARTÕES DE MÉTRICAS AUMENTADOS */
+    .metric-card { background: white; padding: 3rem 1.5rem; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.06); text-align: center; position: relative; overflow: hidden; border: 2px solid #e2e8f0; transition: transform 0.2s ease;}
+    .metric-card:hover { transform: translateY(-5px); }
+    .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
     .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } 
-    .m-val { font-size: 3.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
-    .m-lab { font-size: 1.2rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
+    .m-val { font-size: 5.5rem; font-weight: 900; color: #0f172a; display: block; line-height: 1.1; letter-spacing: -2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.05); }
+    .m-lab { font-size: 1.4rem; font-weight: 900; color: #475569; text-transform: uppercase; letter-spacing: 2px; margin-top: 1rem; display: block; }
     
     .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
     .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
@@ -377,12 +380,19 @@ try:
     pres_hoje = cur.fetchone()[0]; conn.close()
 except: pres_hoje = 0
 
+# --- CÁLCULO DA MÉDIA GERAL DE FREQUÊNCIA ---
+total_alunos = len(df_alunos)
+if total_alunos > 0:
+    media_geral_freq = f"{(pres_hoje / total_alunos) * 100:.1f}%"
+else:
+    media_geral_freq = "0%"
+
 st.markdown(f'''
 <div class="metrics-container">
-    <div class="metric-card m-total"><span class="m-val">{len(df_alunos)}</span><span class="m-lab">Total Alunos</span></div>
+    <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
     <div class="metric-card m-presente"><span class="m-val">{pres_hoje}</span><span class="m-lab">Presentes</span></div>
-    <div class="metric-card m-falta"><span class="m-val">{len(df_alunos)-pres_hoje}</span><span class="m-lab">Faltas</span></div>
-    <div class="metric-card m-atraso"><span class="m-val">--</span><span class="m-lab">Média Geral</span></div>
+    <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_hoje}</span><span class="m-lab">Faltas</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Média Geral</span></div>
 </div>
 ''', unsafe_allow_html=True)
 
@@ -598,7 +608,6 @@ with tabs[5]:
             mostrar_todos = (tf != "Todas") or bus_al or filtro_erros or (filtro_desempenho != "Todos")
             lista = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
             
-            # --- NOVA EXIBIÇÃO DO TOTAL DE ESTUDANTES AVALIADOS ---
             if not mostrar_todos: 
                 st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Selecione uma turma ou use os filtros para ver mais).")
             else: 
@@ -611,13 +620,11 @@ with tabs[5]:
                 with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f} {tag}"):
                     df_bol_ind = df_da[df_da.nome==a['nome']]
                     
-                    # --- NOVO: Top 3 Matérias com Notas Mais Baixas ---
                     medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
                     piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                     
                     st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
-                    # ----------------------------------------------------
                     
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
