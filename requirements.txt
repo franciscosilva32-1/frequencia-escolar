@@ -2,6 +2,6 @@ streamlit
 pandas
 psycopg2-binary
 streamlit-cookies-manager
-fpdf
+fpdf2
 plotly
 matplotlib
