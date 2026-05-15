@@ -14,11 +14,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
-import time
 import re
 import plotly.express as px
 
-# Tenta importar FPDF, compatível com fpdf2
 try:
     from fpdf import FPDF
 except ImportError:
@@ -27,7 +25,6 @@ except ImportError:
 # ------------------------------------------------------------
 # 1. CONFIGURAÇÃO INICIAL (RESTAURADO VISUAL BOM)
 # ------------------------------------------------------------
-# Restaurado título e layout original do CÓDIGO BOM.py
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
 if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
@@ -214,7 +211,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida):
     except: return False
 
 # ------------------------------------------------------------
-# 6. DESEMPENHO ACADÊMICO E PDF (FPD2 COMPATÍVEL)
+# 6. DESEMPENHO ACADÊMICO E PDF (FPDF2 COMPATÍVEL)
 # ------------------------------------------------------------
 def importar_csv_desempenho(file, periodo, area, turma):
     temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
@@ -294,15 +291,16 @@ def gerar_camera(label, btn_label, cam_id):
 auth_cookie = cookies.get("auth_token")
 
 if not auth_cookie:
-    st.markdown('<div style="max-width:400px; margin: 10vh auto; padding: 3rem; background:white; border-radius:20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align:center;">', unsafe_allow_html=True)
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"):
         st.image("logo.png", width=120)
-    st.title("LOGIN ESCOLAR")
+    st.markdown('<div class="login-title">LOGIN ESCOLAR</div>', unsafe_allow_html=True)
     passw = st.text_input("SENHA", type="password")
     if st.button("ENTRAR", use_container_width=True):
         if passw in [SENHA_ADMIN, SENHA_OPERADOR]:
             cookies["auth_token"] = base64.b64encode(json.dumps({"admin": passw==SENHA_ADMIN}).encode()).decode(); cookies.save(); st.rerun()
         else: st.error("Incorreta")
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 # --- PROTEÇÃO CONTRA COOKIES ANTIGOS (CORREÇÃO KEYERROR) ---
@@ -333,11 +331,14 @@ try:
     pres_hoje = cur.fetchone()[0]; conn.close()
 except: pres_hoje = 0
 
-m1, m2, m3, m4 = st.columns(4)
-m1.markdown(f'<div class="metrics-container"><div class="metric-card m-total"><span class="m-val">{len(df_alunos)}</span><span class="m-lab">Total Alunos</span></div></div>', unsafe_allow_html=True)
-m2.markdown(f'<div class="metrics-container"><div class="metric-card m-presente"><span class="m-val">{pres_hoje}</span><span class="m-lab">Presentes</span></div></div>', unsafe_allow_html=True)
-m3.markdown(f'<div class="metrics-container"><div class="metric-card m-falta"><span class="m-val">{len(df_alunos)-pres_hoje}</span><span class="m-lab">Faltas</span></div></div>', unsafe_allow_html=True)
-m4.markdown(f'<div class="metrics-container"><div class="metric-card m-atraso"><span class="m-val">--</span><span class="m-lab">Média Geral</span></div></div>', unsafe_allow_html=True)
+st.markdown(f'''
+<div class="metrics-container">
+    <div class="metric-card m-total"><span class="m-val">{len(df_alunos)}</span><span class="m-lab">Total Alunos</span></div>
+    <div class="metric-card m-presente"><span class="m-val">{pres_hoje}</span><span class="m-lab">Presentes</span></div>
+    <div class="metric-card m-falta"><span class="m-val">{len(df_alunos)-pres_hoje}</span><span class="m-lab">Faltas</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">--</span><span class="m-lab">Média Geral</span></div>
+</div>
+''', unsafe_allow_html=True)
 
 tabs = st.tabs(["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Acadêmico"])
 
@@ -474,6 +475,13 @@ with tabs[5]:
     st.title("📊 Desempenho Acadêmico")
     df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
     
+    # Normalização preventiva do "EMPILHAMENTO" LP e SOC
+    if not df_da.empty:
+        df_da['disciplina'] = df_da['disciplina'].replace({
+            'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 
+            'SOCIOLGIA': 'SOCIOLOGIA'
+        })
+
     # Filtros com Destaque
     cf1, cf2, cf3 = st.columns(3)
     pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"])
@@ -534,34 +542,82 @@ with tabs[5]:
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
+                        
+                    # --- RESTAURAÇÃO EXATA DO GRÁFICO DE EVOLUÇÃO E BARRAS DE MÉDIA ---
+                    st.markdown("#### 📈 Evolução ao Longo do Ano")
+                    df_bol_ind = df_da[df_da.nome==a['nome']]
+                    
+                    progresso = df_bol_ind.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+                    progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
+                    try:
+                        progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
+                        st.line_chart(progresso_pivot, height=250)
+                    except: pass
+
+                    st.markdown("#### 📊 Médias por Disciplina")
+                    medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                    for _, mb in medias_b.iterrows():
+                        st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
+                        st.progress(min(mb['Nota'] / 10, 1.0))
+
                     # Mapa de Questões Visual (Período no Título + Roxo mantido)
-                    df_ind = df_da[df_da.nome==a['nome']]
-                    for p_m in sorted(df_ind.periodo.unique()):
-                        for d_m in sorted(df_ind[df_ind.periodo==p_m].disciplina.unique()):
+                    st.markdown("#### 📋 Mapa de Questões")
+                    for p_m in sorted(df_bol_ind.periodo.unique()):
+                        for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
                             st.markdown(f"**{d_m} - {p_m}**")
-                            q_df = df_ind[(df_ind.periodo==p_m) & (df_ind.disciplina==d_m)].sort_values("questao")
+                            q_df = df_bol_ind[(df_bol_ind.periodo==p_m) & (df_bol_ind.disciplina==d_m)].sort_values("questao")
                             grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                             for _, q in q_df.iterrows():
                                 # Cor Roxa para Dupla (#8b5cf6 -> 139, 92, 246)
                                 cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
                                 grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
                             st.markdown(grid+'</div><br>', unsafe_allow_html=True)
+                            
     with stabs[2]:
         if not dff.empty:
-            tipo_g = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
-            res_g = dff.groupby('area' if tipo_g=="Área" else 'disciplina').acerto.mean().reset_index()
-            res_g['Nota'] = res_g.acerto * 10
-            # Aplica abreviações corretas (Visual BOM)
-            if tipo_g == "Disciplina":
-                res_g['Eixo'] = res_g.disciplina.apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:3].upper()))
-            else: res_g['Eixo'] = res_g.area.str.upper()
-            fig = px.bar(res_g, x='Eixo', y='Nota', text='Nota', color='Eixo')
-            fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-            st.plotly_chart(fig, use_container_width=True)
+            tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
+            col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
+            
+            # Loop para gerar UM gráfico das disciplinas para CADA período!
+            periodos_disponiveis = sorted(dff['periodo'].unique())
+            for p in periodos_disponiveis:
+                st.markdown(f"#### 📊 Desempenho: {p}")
+                dff_p = dff[dff['periodo'] == p]
+                
+                resumo_graf = dff_p.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+                resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
+                
+                # APLICANDO AS ABREVIAÇÕES (OU NÃO) CONFORME SOLICITADO
+                if tipo_grafico == "Área":
+                    resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() # SEM ABREVIAR ÁREA
+                else:
+                    resumo_graf['Abreviacao'] = resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
+                
+                resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
+                resumo_graf = resumo_graf.sort_values('Nota')
+                
+                fig_g = px.bar(resumo_graf, x='Abreviacao', y='Nota', color='Abreviacao', text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False})
+                fig_g.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+                fig_g.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                st.plotly_chart(fig_g, use_container_width=True, key=f"grafico_{p}_{tipo_grafico}")
+
+    with stabs[3]:
+        if not dff.empty:
+            st.write("Questões com maior índice de erro:")
+            q_err = dff.groupby(['disciplina','questao']).acerto.mean().reset_index()
+            q_err['erro_perc'] = (1 - q_err['acerto']) * 100
+            st.dataframe(q_err[q_err.acerto < 0.5].sort_values('acerto').style.format({'acerto': '{:.2f}', 'erro_perc': '{:.1f}%'}))
+            
     if eh_admin:
         with stabs[4]:
-            up_da = st.file_uploader("Upload Notas (CSV)", type="csv")
+            up_da = st.file_uploader("Upload de Notas (CSV)", type="csv")
             if st.button("SALVAR NOTAS") and up_da:
                 s, m = importar_csv_desempenho(up_da, pf, af, tf)
                 if s: st.success(m); st.rerun()
+            st.markdown("---")
+            if st.button("Limpar Dados Selecionados (Período/Área/Turma)"):
+                conn = conectar_bd(); cur = conn.cursor()
+                cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (pf, af, tf))
+                conn.commit(); conn.close(); st.success("Dados removidos."); st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
