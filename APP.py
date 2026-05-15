@@ -50,10 +50,21 @@ SENHA_APP_ESCOLA = st.secrets.get("SENHA_APP_ESCOLA", "")
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
     except: data_f = data
-    assunto = f"🏫 Aviso de {evento} - Jansen Veloso"
-    if evento == "ENTRADA":
-        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA na escola hoje ({data_f}) às {horario}."
-    else:
+    
+    # Lógica aprimorada para diferenciar Atraso e Entrada Regular no corpo do e-mail
+    if evento.startswith("ENTRADA"):
+        assunto = f"🏫 Aviso de Entrada - Jansen Veloso"
+        if "ATRASO" in evento:
+            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO na escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        else:
+            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA na escola hoje ({data_f}) às {horario} (Dentro do horário regular).\n\nAtenciosamente,\nEquipe Jansen Veloso."
+            
+    elif evento == "SAÍDA REGULAR":
+        assunto = f"🏫 Aviso de Saída - Jansen Veloso"
+        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou SAÍDA REGULAR da escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        
+    else: # SAÍDA ANTECIPADA
+        assunto = f"🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
         texto = f"⚠️ ATENÇÃO!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
     
     msg = MIMEMultipart(); msg['From'] = EMAIL_ESCOLA; msg['To'] = email_destino; msg['Subject'] = assunto
@@ -196,11 +207,13 @@ def registrar_presenca(cod, data, h_limite):
         if not res: conn.close(); return "erro_cod"
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
-        if res[1]: disparar_email_background(res[1], res[0], "ENTRADA", h_at, data)
+        if res[1]: 
+            # Modificado para enviar o status junto e personalizar o e-mail
+            disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
         conn.commit(); conn.close(); return res[0]
     except: return False
 
-def registrar_saida(cod, motivo, pais, data, h_saida):
+def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     try:
         conn = conectar_bd(); cur = conn.cursor()
         cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
@@ -208,7 +221,11 @@ def registrar_saida(cod, motivo, pais, data, h_saida):
         if not res: conn.close(); return False
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
-            if res[1]: disparar_email_background(res[1], res[0], "SAÍDA ANTECIPADA", h_saida, data)
+            if res[1]: 
+                # LÓGICA DO E-MAIL: Antecipada ou Regular dependendo do horário configurado
+                h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
+                evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
+                disparar_email_background(res[1], res[0], evento_email, h_saida, data)
             conn.commit(); conn.close(); return res[0]
         conn.close(); return False
     except: return False
@@ -422,8 +439,18 @@ indice_aba = 0
 # --- ABA 0: REGISTRO ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
-    h_lim_e = st.time_input("Horário Limite Entrada", datetime.strptime("07:30", "%H:%M").time())
-    t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA", "📝 JUSTIFICAR FALTAS"])
+    
+    # --- NOVO PAINEL DE CONFIGURAÇÃO DE TURNO DIÁRIO ---
+    st.markdown("#### ⚙️ Configuração do Turno Letivo")
+    st.write("Ajuste os horários de início e término do turno para que o sistema saiba registrar os atrasos e as saídas corretamente.")
+    c_cfg1, c_cfg2 = st.columns(2)
+    with c_cfg1: 
+        h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
+    with c_cfg2: 
+        h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
+    st.markdown("---")
+    
+    t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     
     with t_en:
         gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
@@ -438,11 +465,14 @@ with tabs[indice_aba]:
         gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
         with st.form("f_sa", clear_on_submit=True):
             cod_sa = st.text_input("Código Aluno (Saída)")
-            mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Outros"])
+            hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
+            mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
             if st.form_submit_button("CONFIRMAR SAÍDA") and cod_sa:
-                res = registrar_saida(cod_sa.upper(), mot, True, hoje, obter_hora_atual().strftime("%H:%M:%S"))
-                if res: st.success(f"Saída de {res} autorizada!"); st.rerun()
-                else: st.error("Erro: Aluno sem entrada hoje.")
+                res = registrar_saida(cod_sa.upper(), mot, True, hoje, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
+                if res: 
+                    st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!"); st.rerun()
+                else: 
+                    st.error("Erro: Aluno sem registro de entrada hoje.")
                 
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
