@@ -23,6 +23,8 @@ import re
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
 from matplotlib.ticker import MaxNLocator
+import plotly.express as px
+import plotly.graph_objects as go
 mplstyle.use('seaborn-v0_8-whitegrid')
 
 try:
@@ -72,7 +74,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (VISUALIZAÇÃO AMPLIADA)
+# 2. CSS PREMIUM (VISUALIZAÇÃO AMPLIADA E CORES ALTERNADAS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -81,10 +83,7 @@ st.markdown("""
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* Aumento de fonte geral na tela */
-    html, body, [class*="css"], p, span, label, div {
-        font-size: 1.15rem !important;
-    }
+    html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
 
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.8rem, 7vw, 3.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.4rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
@@ -96,7 +95,6 @@ st.markdown("""
     .m-val { font-size: 3.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
     .m-lab { font-size: 1.2rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
     
-    /* Abas ampliadas */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
     .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
     .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
@@ -104,26 +102,31 @@ st.markdown("""
     
     .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
     
-    /* Campos de texto muito mais legíveis */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
-    
-    /* Menus suspensos e seletores de data */
     div[data-baseweb="select"] > div { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; color: #000000 !important; font-weight: 800 !important; font-size: 1.4rem !important; padding: 0.5rem;}
     
-    /* Botões turbinados */
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
     
-    /* Painel de Autenticação */
     .login-card { max-width: 500px; margin: 8vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
     .login-title { font-size: 2.2rem; font-weight: 900; color: var(--primary); margin-bottom: 1.5rem; }
     
-    /* Tabelas e Caixas Expansíveis Maiores */
     [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
     .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
+
+    /* Estilo Especial para o Top 7 */
+    .top7-card { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-left: 8px solid var(--accent); padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 4px 10px rgba(0,0,0,0.05); text-align: center;}
+    .top7-medal { font-size: 2rem; font-weight: 900; color: var(--primary); margin-bottom: 0.5rem;}
+    .top7-name { font-size: 2.5rem; font-weight: 900; color: #1e293b; letter-spacing: -1px; margin: 0.5rem 0;}
+    .top7-name-hidden { font-size: 2.5rem; font-weight: 900; color: #94a3b8; filter: blur(4px); user-select: none; margin: 0.5rem 0;}
+    .top7-details { font-size: 1.3rem; color: #64748b; font-weight: 700;}
+    
+    /* Cores Alternadas nos Estudantes (Pula de 2 em 2 por causa do HTML gerado pelo Streamlit) */
+    div[data-testid="stExpander"]:nth-child(even) { background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1; }
+    div[data-testid="stExpander"]:nth-child(odd) { background-color: #e2e8f0; border-radius: 12px; border: 1px solid #94a3b8; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -157,7 +160,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 4. FUNÇÕES DE NEGÓCIO (FREQUÊNCIA E MANUTENÇÃO)
+# 4. FUNÇÕES DE NEGÓCIO
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -271,9 +274,6 @@ def limpar_todos_registros():
     try: conn = conectar_bd(); cur = conn.cursor(); cur.execute("DELETE FROM registros_v2"); conn.close()
     except: pass
 
-# =========================================================
-# 🧠 NOVO MOTOR: ANALISADOR AVS NA NUVEM
-# =========================================================
 @st.cache_data(ttl=60)
 def carregar_dados_avs():
     try:
@@ -376,12 +376,9 @@ def set_auth_cookie(eh_admin): token = base64.b64encode(json.dumps({"valido": Tr
 check_auth()
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    
-    # LOGO CENTRALIZADO NA PÁGINA DE LOGIN
     if os.path.exists("logo.png"): 
         col_log1, col_log2, col_log3 = st.columns([1, 1, 1])
         with col_log2: st.image("logo.png", use_container_width=True)
-        
     st.markdown('<div class="login-title">JANSEN VELOSO</div>', unsafe_allow_html=True)
     senha = st.text_input("DIGITE SUA SENHA:", type="password")
     if st.button("ACESSAR SISTEMA", use_container_width=True):
@@ -391,7 +388,6 @@ if not st.session_state.autenticado:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# LOGO CENTRALIZADO NA PÁGINA PRINCIPAL
 if os.path.exists("logo.png"):
     col_main1, col_main2, col_main3 = st.columns([1, 1, 1])
     with col_main2: st.image("logo.png", use_container_width=True)
@@ -407,8 +403,7 @@ try:
     conn = conectar_bd(); cur = conn.cursor()
     cur.execute('''SELECT COUNT(CASE WHEN tipo_registro='PRESENCA' THEN 1 END), COUNT(CASE WHEN tipo_registro='FALTA' THEN 1 END), COUNT(CASE WHEN tipo_registro='PRESENCA' AND status_entrada='ATRASO' THEN 1 END) FROM registros_v2 WHERE data=%s''', (hoje_str,))
     pres_hoje, falt_hoje, atras_hoje = cur.fetchone(); conn.close()
-except:
-    pres_hoje, falt_hoje, atras_hoje = 0, 0, 0
+except: pres_hoje, falt_hoje, atras_hoje = 0, 0, 0
 
 total_ativos = len(df_alunos[df_alunos['status'] == 'ATIVO']) if not df_alunos.empty else 0
 
@@ -481,12 +476,9 @@ with tabs[1]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
     with c1: dt_f = st.date_input("Data", obter_hora_atual(), key="data_relatorio")
-    
-    # VACINA: KEY EXCLUSIVO AQUI!
     with c2: t_f = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="filtro_turma_gestao")
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
-    
     try:
         query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
         if t_f != "Todas": query += " AND a.turma = %s"; params.append(t_f)
@@ -554,14 +546,13 @@ if st.session_state.eh_admin:
         PERIODOS = ["1º Período", "2º Período", "3º Período", "4º Período"]
         AREAS = ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"]
         TURMAS_LISTA = sorted(df_alunos['turma'].unique()) if not df_alunos.empty else []
+        DICIONARIO_ABREVIACAO = {"LÍNGUA PORTUGUESA": "L. PORT", "MATEMÁTICA": "MAT", "LINGUAGENS": "LING", "HUMANAS": "HUM", "NATUREZA": "NAT"}
 
         df_avs = carregar_dados_avs()
         
         # Filtros Globais
         st.markdown("##### 🔍 Filtros Globais")
         c_f1, c_f2, c_f3 = st.columns(3)
-        
-        # VACINA: KEYS EXCLUSIVAS AQUI! (Isto conserta o erro)
         with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS, key="avs_periodo")
         with c_f2: a_filtro = st.selectbox("Área", ["Todas"] + AREAS, key="avs_area")
         with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA, key="avs_turma")
@@ -571,11 +562,10 @@ if st.session_state.eh_admin:
         if a_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['area'] == a_filtro]
         if t_filtro != "Todas" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['turma'] == t_filtro]
 
-        # Sub-Abas do Analisador
         abas_avs = st.tabs(["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões", "📉 Críticas", "⚙️ Gerenciar Dados"])
         
         # -----------------------------------------------------------------
-        # 🏆 DESTAQUES
+        # 🏆 DESTAQUES (CARD MAIOR COM REVELAÇÃO)
         # -----------------------------------------------------------------
         with abas_avs[0]:
             if df_filtrado.empty: st.info("Nenhum dado encontrado para os filtros selecionados.")
@@ -594,33 +584,35 @@ if st.session_state.eh_admin:
                     else: medalha = f"⭐ {idx+1}º Lugar"
                     
                     nome = row['nome']
-                    b = status_stats.at[nome, 'BRANCO'] if (not status_stats.empty and nome in status_stats.index and 'BRANCO' in status_stats.columns) else 0
-                    d = status_stats.at[nome, 'DUPLA'] if (not status_stats.empty and nome in status_stats.index and 'DUPLA' in status_stats.columns) else 0
-                    if b > 0 or d > 0: status_str = f"⚠️ Atenção (Brancos: {b}, Duplas: {d})"
-                    else: status_str = "✅ Prova Perfeita (Sem brancos/duplas)"
+                    mostrar_nome = st.toggle("👀 Revelar Estudante", key=f"tgl_top_{idx}")
                     
-                    with st.expander(f"{medalha} - {nome} | Nota: {row['Nota']:.2f}"):
-                        st.write(f"**Turma:** {row['turma']}")
-                        st.write(f"**Status da Prova:** {status_str}")
-                        st.info("Vá até a aba 'Estudantes' para ver o Boletim detalhado deste aluno.")
-                
-                st.markdown("---")
-                st.subheader("📚 Top 3 Disciplinas (Maior Média)")
-                disc_stats = df_filtrado.groupby('disciplina').agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-                disc_stats['Nota'] = (disc_stats['Acertos'] / disc_stats['Total']) * 10
-                for _, row in disc_stats.sort_values('Nota', ascending=False).head(3).iterrows():
-                    st.success(f"**{row['disciplina'].upper()}** - Média Geral: {row['Nota']:.2f}")
+                    classe_nome = "top7-name" if mostrar_nome else "top7-name-hidden"
+                    texto_nome = nome if mostrar_nome else "🕵️‍♂️ ESTUDANTE OCULTO"
+                    
+                    st.markdown(f"""
+                    <div class="top7-card">
+                        <div class="top7-medal">{medalha}</div>
+                        <div class="{classe_nome}">{texto_nome}</div>
+                        <div class="top7-details">NOTA FINAL: {row['Nota']:.2f} &nbsp;|&nbsp; TURMA: {row['turma']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
         # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES E BOLETIM COMPLETO
+        # 🧑‍🎓 ESTUDANTES (COM FILTROS INTERNOS, DETALHES DE ERROS E CORES)
         # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
+                st.markdown("##### ⚙️ Filtros do Boletim do Estudante")
+                c_est_filt1, c_est_filt2 = st.columns(2)
+                with c_est_filt1: p_filtro_est = st.selectbox("Período (Boletim)", ["Todos"] + PERIODOS, key="bol_periodo")
+                with c_est_filt2: a_filtro_est = st.selectbox("Área (Boletim)", ["Todas"] + AREAS, key="bol_area")
+                
+                st.markdown("---")
                 c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
                 with c_est1: busca_aluno = st.text_input("Buscar por nome...", key="busca_nome_avs")
                 with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="avs_desempenho")
-                with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente com erros/brancos", key="avs_check_erros")
+                with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente c/ erros", key="avs_check_erros")
 
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
@@ -639,72 +631,93 @@ if st.session_state.eh_admin:
                     elif filtro_desempenho == "BOM" and (r['Nota'] < 6.0 or r['Nota'] > 7.5): continue
                     elif filtro_desempenho == "ÓTIMO" and r['Nota'] <= 7.5: continue
                     
-                    status_txt = f"Brancos: {b} | Duplas: {d}" if tem_erro else "✅ Perfeito"
-                    alunos_filtrados.append({'nome': n, 'turma': r['turma'], 'nota': r['Nota'], 'status': status_txt})
+                    alunos_filtrados.append({'nome': n, 'turma': r['turma'], 'nota': r['Nota'], 'brancos': b, 'duplas': d, 'total_q': r['Total']})
 
                 st.write(f"**Encontrados:** {len(alunos_filtrados)} estudante(s)")
                 
-                for al in alunos_filtrados[:50]: 
-                    with st.expander(f"🧑‍🎓 {al['nome']} ({al['turma']}) - Nota: {al['nota']:.2f}"):
-                        st.write(f"**Detalhes:** {al['status']}")
+                for i, al in enumerate(alunos_filtrados[:50]): 
+                    # CABEÇALHO SUPER INFORMATIVO NO EXPANDER
+                    if al['brancos'] > 0 or al['duplas'] > 0:
+                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['nota']:.2f} | ⚠️ Erros: (Brancos: {al['brancos']} | Duplas: {al['duplas']} | Tot. Questões: {al['total_q']})"
+                    else:
+                        header_info = f"👤 {al['nome']} | 🎯 Nota: {al['nota']:.2f} | ✅ Prova Perfeita"
+                        
+                    with st.expander(header_info):
+                        # Aplica os filtros específicos do Boletim (Período e Área) ao abrir
                         df_boletim = df_avs[df_avs['nome'] == al['nome']]
+                        if p_filtro_est != "Todos": df_boletim = df_boletim[df_boletim['periodo'] == p_filtro_est]
+                        if a_filtro_est != "Todas": df_boletim = df_boletim[df_boletim['area'] == a_filtro_est]
                         
-                        st.markdown("#### 📈 Evolução ao Longo do Ano")
-                        progresso = df_boletim.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-                        progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
-                        fig_b, ax_b = plt.subplots(figsize=(10, 3))
-                        for d_nome in progresso['disciplina'].unique():
-                            d_df = progresso[progresso['disciplina'] == d_nome]
-                            ax_b.plot(d_df['periodo'], d_df['Nota'], marker='o', label=d_nome.upper(), linewidth=2)
-                        ax_b.set_ylim(-0.5, 11); ax_b.grid(True, alpha=0.3); ax_b.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-                        st.pyplot(fig_b)
-                        
-                        st.markdown("#### 📊 Médias por Disciplina")
-                        medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                        for _, mb in medias_b.iterrows():
-                            st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
-                            st.progress(mb['Nota'] / 10)
-                        
-                        st.markdown("#### 📋 Mapa de Questões (Visual)")
-                        for disc in df_boletim['disciplina'].unique():
-                            st.markdown(f"**{disc.upper()}**")
-                            q_df = df_boletim[df_boletim['disciplina'] == disc].sort_values(["periodo", "questao"])
-                            grid_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
-                            for _, q in q_df.iterrows():
-                                cor = "#10b981" if q['acerto'] == 1 else ("#f59e0b" if q['resposta'] == 'BRANCO' else "#ef4444")
-                                grid_html += f"""
-                                <div style="background-color: {cor}; color: white; padding: 8px; border-radius: 6px; width: 80px; text-align: center; font-size: 12px; font-weight: bold;">
-                                    P{q['periodo'][:1]} Q{q['questao']}<br>R:{q['resposta']} G:{q['gabarito']}
-                                </div>"""
-                            grid_html += '</div>'
-                            st.markdown(grid_html, unsafe_allow_html=True)
-                            st.markdown("<br>", unsafe_allow_html=True)
+                        if df_boletim.empty:
+                            st.warning("O aluno não possui registros para o Período/Área selecionados.")
+                        else:
+                            st.markdown("#### 📈 Evolução ao Longo do Ano")
+                            progresso = df_boletim.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+                            progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
+                            
+                            # Gráfico Interativo do Boletim (Plotly)
+                            fig_b = px.line(progresso, x='periodo', y='Nota', color='disciplina', markers=True, title="Evolução por Período")
+                            fig_b.update_layout(yaxis=dict(range=[-0.5, 11]), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='Disciplina')
+                            st.plotly_chart(fig_b, use_container_width=True)
+                            
+                            st.markdown("#### 📊 Médias por Disciplina (No Filtro Selecionado)")
+                            medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                            for _, mb in medias_b.iterrows():
+                                st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
+                                st.progress(mb['Nota'] / 10)
+                            
+                            st.markdown("#### 📋 Mapa de Questões (Visual)")
+                            for disc in df_boletim['disciplina'].unique():
+                                st.markdown(f"**{disc.upper()}**")
+                                q_df = df_boletim[df_boletim['disciplina'] == disc].sort_values(["periodo", "questao"])
+                                grid_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
+                                for _, q in q_df.iterrows():
+                                    cor = "#10b981" if q['acerto'] == 1 else ("#f59e0b" if q['resposta'] == 'BRANCO' else "#ef4444")
+                                    grid_html += f"""
+                                    <div style="background-color: {cor}; color: white; padding: 8px; border-radius: 6px; width: 80px; text-align: center; font-size: 12px; font-weight: bold;">
+                                        P{q['periodo'][:1]} Q{q['questao']}<br>R:{q['resposta']} G:{q['gabarito']}
+                                    </div>"""
+                                grid_html += '</div>'
+                                st.markdown(grid_html, unsafe_allow_html=True)
+                                st.markdown("<br>", unsafe_allow_html=True)
 
                 if len(alunos_filtrados) > 50: st.info("Mostrando os 50 primeiros. Use a busca para encontrar estudantes específicos.")
 
         # -----------------------------------------------------------------
-        # 📈 GRÁFICOS E FALTOSOS
+        # 📈 GRÁFICOS INTERATIVOS MODERNOS (PLOTLY)
         # -----------------------------------------------------------------
         with abas_avs[2]:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
-                st.subheader("Desempenho Médio")
+                st.subheader("📊 Desempenho Médio")
                 tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True, key="avs_agrupar_grafico")
                 col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
+                
                 resumo_graf = df_filtrado.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
                 resumo_graf = resumo_graf.sort_values('Nota')
                 
-                fig_g, ax_g = plt.subplots(figsize=(10, 4), dpi=100)
-                cores_g = ['#0D6EFD', '#00D68F', '#FFAA00', '#FF3D71', '#A855F7'] * 5
-                bars = ax_g.bar(resumo_graf[col_agrup].str.upper(), resumo_graf['Nota'], color=cores_g[:len(resumo_graf)])
-                ax_g.set_ylim(0, 11)
+                # ABREVIAÇÃO NO EIXO E NOME COMPLETO NO HOVER
+                resumo_graf['Abreviacao'] = resumo_graf[col_agrup].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
+                resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
+                
                 media_geral = (df_filtrado['acerto'].sum() / len(df_filtrado)) * 10
-                ax_g.axhline(y=media_geral, color='red', linestyle='--', label=f'Média Geral: {media_geral:.2f}')
-                for bar in bars:
-                    ax_g.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
-                plt.xticks(rotation=15); ax_g.legend()
-                st.pyplot(fig_g)
+                
+                # PLOTLY BAR CHART
+                fig_g = px.bar(resumo_graf, x='Abreviacao', y='Nota', color='Abreviacao', 
+                               text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False})
+                fig_g.update_traces(texttemplate='%{text:.1f}', textposition='outside', marker_line_width=1.5, opacity=0.9)
+                fig_g.update_layout(
+                    yaxis=dict(range=[0, 11]), 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    showlegend=False,
+                    shapes=[dict(type='line', y0=media_geral, y1=media_geral, x0=-0.5, x1=len(resumo_graf)-0.5, 
+                                 line=dict(color='Red', width=2, dash='dash'))]
+                )
+                fig_g.add_annotation(x=len(resumo_graf)-1, y=media_geral + 0.5, text=f"Média: {media_geral:.2f}", showarrow=False, font=dict(color="red", size=14))
+                
+                st.plotly_chart(fig_g, use_container_width=True)
                 
                 st.markdown("---")
                 st.subheader("⚠️ Histórico de Faltas (Área inteira em branco)")
@@ -716,15 +729,11 @@ if st.session_state.eh_admin:
                 else:
                     faltosos_resumo = faltosos.groupby('periodo')['nome'].nunique().reset_index(name='Total')
                     
-                    fig_f, ax_f = plt.subplots(figsize=(8, 3), dpi=90)
-                    bars_f = ax_f.bar(faltosos_resumo['periodo'], faltosos_resumo['Total'], color="#EF4444")
-                    ax_f.set_title("Total de Faltosos por Período", weight='bold', color="#0a1f35")
-                    ax_f.yaxis.set_major_locator(MaxNLocator(integer=True)) 
+                    fig_f = px.bar(faltosos_resumo, x='periodo', y='Total', text='Total', color_discrete_sequence=['#EF4444'])
+                    fig_f.update_traces(texttemplate='%{text}', textposition='outside')
+                    fig_f.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(dtick=1))
                     
-                    for bar in bars_f:
-                        ax_f.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.1, f'{int(bar.get_height())}', ha='center', weight='bold')
-                        
-                    st.pyplot(fig_f)
+                    st.plotly_chart(fig_f, use_container_width=True)
                     
                     st.write("**Lista de Alunos:**")
                     for _, f_row in faltosos.iterrows():
@@ -791,13 +800,17 @@ if st.session_state.eh_admin:
                 disc_stats['Nota'] = (disc_stats['Acertos'] / disc_stats['Total']) * 10
                 disc_crit = disc_stats.sort_values('Nota').head(5)
                 
-                fig_c, ax_c = plt.subplots(figsize=(10, 4), dpi=100)
-                cores_c = ["#FF3D71", "#FFAA00", "#F97316", "#EAB308", "#84CC16"]
-                bars = ax_c.bar(disc_crit['disciplina'].str.upper(), disc_crit['Nota'], color=cores_c[:len(disc_crit)])
-                ax_c.set_ylim(0, 11)
-                for bar in bars:
-                    ax_c.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.2, f'{bar.get_height():.1f}', ha='center', weight='bold')
-                st.pyplot(fig_c)
+                # CRÍTICAS EM PLOTLY
+                disc_crit['Abreviacao'] = disc_crit['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
+                disc_crit['Nome Completo'] = disc_crit['disciplina'].str.upper()
+                
+                fig_c = px.bar(disc_crit, x='Abreviacao', y='Nota', color='Abreviacao', 
+                               color_discrete_sequence=["#FF3D71", "#FFAA00", "#F97316", "#EAB308", "#84CC16"],
+                               text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False})
+                fig_c.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+                fig_c.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                
+                st.plotly_chart(fig_c, use_container_width=True)
                 
                 for _, row in disc_crit.iterrows():
                     st.warning(f"📌 **{row['disciplina'].upper()}** - Média: {row['Nota']:.2f}")
