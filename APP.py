@@ -368,7 +368,15 @@ def gerar_pdf_boletim(aluno_nome, turma, nota, df_bol):
         if col > 7: col = 0; y_start += 15
         if y_start > 260: pdf.add_page(); y_start = 20
         
-    return pdf.output(dest='S').encode('latin-1')
+    try:
+        # Tenta a exportação moderna (bytearray no fpdf2)
+        resultado_pdf = pdf.output()
+        if isinstance(resultado_pdf, str):
+            return resultado_pdf.encode('latin-1')
+        return bytes(resultado_pdf)
+    except Exception:
+        # Falha de segurança (fpdf antigo)
+        return pdf.output(dest='S').encode('latin-1')
 
 # ------------------------------------------------------------
 # 5. COMPONENTE DA CÂMERA
@@ -684,7 +692,7 @@ if st.session_state.eh_admin:
                         if df_boletim.empty:
                             st.warning("O aluno não possui registros para o Período/Área selecionados.")
                         else:
-                            # GERADOR DE PDF DO BOLETIM
+                            # GERADOR DE PDF DO BOLETIM (COM CORREÇÃO PARA NOVA BIBLIOTECA)
                             pdf_bytes = gerar_pdf_boletim(al['nome'], al['turma'], al['nota'], df_boletim)
                             if pdf_bytes:
                                 st.download_button(f"📥 Baixar Boletim PDF - {al['nome']}", pdf_bytes, f"Boletim_{al['nome']}.pdf", "application/pdf", key=f"btn_pdf_bol_{i}")
@@ -784,7 +792,7 @@ if st.session_state.eh_admin:
                 col_q1.subheader("📌 3 Questões mais erradas por Turma/Disciplina")
                 
                 if FPDF is not None:
-                    if col_q2.button("📄 Exportar Relatório PDF", type="primary", key="btn_pdf_avs"):
+                    if col_q2.button("📄 Exportar Relatório PDF", type="primary", key="btn_pdf_avs_geral"):
                         pdf = FPDF()
                         pdf.add_page(); pdf.set_font("Arial", "B", 16)
                         pdf.cell(0, 10, "Relatorio de Questoes Criticas", 0, 1, "C")
@@ -803,11 +811,15 @@ if st.session_state.eh_admin:
                                         pdf.cell(0, 6, f"  Questao {int(q['questao'])} - {q['Pct_Erro']:.1f}% de erro", 0, 1)
                                     pdf.ln(2)
                         
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                            pdf.output(tmp.name)
-                            with open(tmp.name, "rb") as f: pdf_bytes = f.read()
+                        try:
+                            # Nova Biblioteca
+                            res_pdf = pdf.output()
+                            pdf_bytes = res_pdf.encode('latin-1') if isinstance(res_pdf, str) else bytes(res_pdf)
+                        except:
+                            # Biblioteca Antiga
+                            pdf_bytes = pdf.output(dest='S').encode('latin-1')
                         
-                        st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf", key="dl_pdf_avs")
+                        st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf", key="dl_pdf_avs_geral")
                 else:
                     col_q2.warning("Módulo FPDF não instalado no Streamlit.")
 
@@ -875,7 +887,7 @@ if st.session_state.eh_admin:
                 lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
                 bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
                 
-                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs"):
+                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
                     p_del, a_del, t_del = bloco_del.split(" | ")
                     linhas_apagadas = excluir_dados_avs(p_del, a_del, t_del)
                     st.success(f"{linhas_apagadas} registros excluídos com sucesso!"); st.rerun()
