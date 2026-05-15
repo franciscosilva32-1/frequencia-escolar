@@ -65,8 +65,16 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
             except: pass
     threading.Thread(target=enviar).start()
 
+def renderizar_logo_central():
+    if os.path.exists("logo.png"):
+        try:
+            with open("logo.png", "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode()
+            st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="120"></div>', unsafe_allow_html=True)
+        except: pass
+
 # ------------------------------------------------------------
-# 3. CSS (RESTAURADO TOTALMENTE DO CÓDIGO BOM.py)
+# 3. CSS (VISUAL PREMIUM E CENTRALIZADO)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -249,24 +257,47 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
     return pdf.output(dest='S').encode('latin-1')
 
+# ------------------------------------------------------------
+# 7. COMPONENTE CÂMARA (NOVO DESIGN COM CONTROLO DE LARGURA)
+# ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
-    <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMERA {label}</button>
-    <div id="reader-{cam_id}" style="width:100%; margin-top:10px; display:none; border-radius:10px; overflow:hidden;"></div></div>
+    <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+        <div style="display:flex; gap:10px; margin-bottom:15px;">
+            <button id="start-{cam_id}" style="flex:1; padding:12px; background:#10b981; color:white; border:none; border-radius:8px; font-weight:900; font-size:1rem; cursor:pointer;">🟢 LIGAR CÂMARA</button>
+            <button id="stop-{cam_id}" style="flex:1; padding:12px; background:#ef4444; color:white; border:none; border-radius:8px; font-weight:900; font-size:1rem; cursor:pointer;">🔴 DESLIGAR</button>
+        </div>
+        <div id="reader-{cam_id}" style="width:100%; display:none; border-radius:10px; overflow:hidden; border: 3px solid #0a1f35; background: #000;"></div>
+    </div>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
-        const scanner = new Html5Qrcode("reader-{cam_id}");
+        let scanner_{cam_id};
         document.getElementById("start-{cam_id}").onclick = () => {{
             document.getElementById("reader-{cam_id}").style.display = "block";
-            scanner.start({{ facingMode: "environment" }}, {{ fps: 15, qrbox: 250 }}, (txt) => {{
+            if(!scanner_{cam_id}) scanner_{cam_id} = new Html5Qrcode("reader-{cam_id}");
+            scanner_{cam_id}.start({{ facingMode: "environment" }}, {{ fps: 15, qrbox: 250 }}, (txt) => {{
                 const input = window.parent.document.querySelectorAll('input[aria-label*="{label}"]')[0];
-                input.value = txt; input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                setTimeout(() => {{ window.parent.document.querySelectorAll('button').forEach(b => {{ if(b.innerText.includes("{btn_label}")) b.click(); }}); }}, 500);
-                scanner.stop(); document.getElementById("reader-{cam_id}").style.display = "none";
-            }});
-        }}
+                if(input) {{
+                    input.value = txt; 
+                    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    setTimeout(() => {{ 
+                        window.parent.document.querySelectorAll('button').forEach(b => {{ 
+                            if(b.innerText.includes("{btn_label}")) b.click(); 
+                        }}); 
+                    }}, 500);
+                }}
+                scanner_{cam_id}.stop().then(() => {{ document.getElementById("reader-{cam_id}").style.display = "none"; }});
+            }}).catch(err => console.error(err));
+        }};
+        document.getElementById("stop-{cam_id}").onclick = () => {{
+            if(scanner_{cam_id}) {{
+                scanner_{cam_id}.stop().then(() => {{
+                    document.getElementById("reader-{cam_id}").style.display = "none";
+                }}).catch(err => console.error(err));
+            }}
+        }};
     </script>
-    """, height=350)
+    """, height=450)
 
 # ------------------------------------------------------------
 # 8. AUTH E DASHBOARD
@@ -294,14 +325,14 @@ except Exception:
 
 df_alunos = carregar_alunos()
 
-c_l, c_t, c_s = st.columns([1, 4, 1])
-with c_l: 
-    if os.path.exists("logo.png"): st.image("logo.png", width=100)
-with c_t:
-    st.markdown('<p class="main-title">SISTEMA DE FREQUÊNCIA</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
-with c_s: 
+# --- HEADER COM LOGO E TÍTULO CENTRALIZADOS ---
+c_out1, c_out2 = st.columns([10, 1])
+with c_out2:
     if st.button("SAIR"): cookies["auth_token"] = ""; cookies.save(); st.rerun()
+
+renderizar_logo_central()
+st.markdown('<p class="main-title">SISTEMA DE FREQUÊNCIA</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 
 hoje = obter_hora_atual().strftime("%Y-%m-%d")
 try:
@@ -464,7 +495,8 @@ with tabs[5]:
     if af != "Todas": dff = dff[dff.area==af]
     if tf != "Todas": dff = dff[dff.turma==tf]
     
-    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões"]
+    # Adicionada nova aba: 🚫 Faltosos
+    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões"]
     if eh_admin: sub_da.append("⚙️ Gerenciar Dados")
     stabs = st.tabs(sub_da)
     
@@ -478,52 +510,37 @@ with tabs[5]:
                 texto_nome = r['nome'] if rev else "OCULTO"
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA: {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
     
+    # Processamento compartilhado para Faltas e Erros (Usado na aba 1 e 2)
+    alertas_estudante = {}
+    if not dff.empty:
+        area_stats = dff.groupby(['nome', 'turma', 'periodo', 'area']).agg(
+            Total=('questao', 'count'),
+            Brancos=('resposta', lambda x: (x == 'BRANCO').sum()),
+            Duplas=('resposta', lambda x: (x == 'DUPLA').sum())
+        ).reset_index()
+
+        area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
+
+        for nome, group in area_stats.groupby('nome'):
+            alertas = []
+            faltas = group[group['Faltou']]
+            
+            if not faltas.empty:
+                for _, r_f in faltas.iterrows():
+                    alertas.append(f"FALTOU {r_f['area']} ({r_f['periodo']})")
+            
+            if group['Duplas'].sum() > 0:
+                alertas.append("MARCAÇÃO DUPLA")
+                
+            presentes = group[~group['Faltou']]
+            if presentes['Brancos'].sum() > 0:
+                alertas.append("EM BRANCO")
+
+            if alertas:
+                alertas_estudante[nome] = " | ".join(alertas)
+    
     with stabs[1]:
         if not dff.empty:
-            # --- NOVA LÓGICA DE FALTOSOS E ERROS POR ÁREA (COMPLETA E PRECISA) ---
-            area_stats = dff.groupby(['nome', 'turma', 'area']).agg(
-                Total=('questao', 'count'),
-                Brancos=('resposta', lambda x: (x == 'BRANCO').sum()),
-                Duplas=('resposta', lambda x: (x == 'DUPLA').sum())
-            ).reset_index()
-
-            # Estudante faltou se deixou 100% de uma área em branco
-            area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
-
-            alertas_estudante = {}
-            estudantes_faltosos = []
-
-            for nome, group in area_stats.groupby('nome'):
-                alertas = []
-                areas_falta = group[group['Faltou']]['area'].tolist()
-                
-                # Trata faltas por Área
-                if areas_falta:
-                    for a in areas_falta:
-                        alertas.append(f"FALTOU {a}")
-                        estudantes_faltosos.append({'nome': nome, 'turma': group.iloc[0]['turma'], 'area': a})
-                
-                # Trata Erros de Marcação (Duplas)
-                if group['Duplas'].sum() > 0:
-                    alertas.append("MARCAÇÃO DUPLA")
-                    
-                # Trata Erros de Marcação (Em Branco parcial - ignorando as áreas que ele faltou 100%)
-                areas_presente = group[~group['Faltou']]
-                if areas_presente['Brancos'].sum() > 0:
-                    alertas.append("EM BRANCO")
-
-                # Constrói a string final do alerta para este aluno
-                if alertas:
-                    alertas_estudante[nome] = " | ".join(alertas)
-            
-            # Painel Vermelho de Faltosos
-            if estudantes_faltosos:
-                st.error(f"⚠️ **ESTUDANTES FALTOSOS NESTA AVALIAÇÃO ({len(estudantes_faltosos)})** - *Deixaram o gabarito totalmente em branco em áreas específicas*")
-                cols_f = st.columns(3)
-                for i, r_f in enumerate(estudantes_faltosos):
-                    cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) - {r_f['area']}")
-                st.markdown("---")
-            
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
             c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
             with c_est1: bus_al = st.text_input("Buscar Nome:")
@@ -548,7 +565,6 @@ with tabs[5]:
             else: st.info(f"Encontrados: {len(res_al)} estudantes.")
             
             for a in lista:
-                # Insere o Alerta na barra de nome do estudante
                 alerta_str = alertas_estudante.get(a['nome'], "")
                 tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                 
@@ -585,6 +601,20 @@ with tabs[5]:
                             
     with stabs[2]:
         if not dff.empty:
+            estudantes_faltosos = area_stats[area_stats['Faltou']]
+            if not estudantes_faltosos.empty:
+                st.error(f"⚠️ **REGISTO DE FALTAS ({len(estudantes_faltosos)})**")
+                st.write("Estudantes que deixaram 100% do gabarito em branco em uma ou mais áreas específicas:")
+                
+                # Exibindo os faltosos em 3 colunas para um layout agradável
+                cols_f = st.columns(3)
+                for i, r_f in enumerate(estudantes_faltosos.to_dict('records')):
+                    cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) <br> <span style='color:#ef4444;'>Falta em: **{r_f['area']}** ({r_f['periodo']})</span>", unsafe_allow_html=True)
+            else:
+                st.success("✨ Nenhum estudante faltou na avaliação selecionada (de acordo com os filtros atuais).")
+
+    with stabs[3]:
+        if not dff.empty:
             tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
             col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
             
@@ -609,7 +639,7 @@ with tabs[5]:
                 fig_g.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
                 st.plotly_chart(fig_g, use_container_width=True, key=f"grafico_{p}_{tipo_grafico}")
 
-    with stabs[3]:
+    with stabs[4]:
         if not dff.empty:
             st.subheader("❌ Questões com Maior Índice de Erro")
             st.write("Visão detalhada das questões onde as turmas apresentaram maior dificuldade (taxa de erro > 50%).")
@@ -625,7 +655,7 @@ with tabs[5]:
             st.dataframe(q_err[['turma', 'disciplina', 'questao', 'Taxa de Erro (%)']].style.format({'Taxa de Erro (%)': '{:.1f}%'}), use_container_width=True, hide_index=True)
             
     if eh_admin:
-        with stabs[4]:
+        with stabs[5]:
             st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
             st.write("Somente administradores podem enviar ou excluir dados do banco.")
             
