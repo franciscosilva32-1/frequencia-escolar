@@ -70,7 +70,6 @@ def renderizar_logo_central():
         try:
             with open("logo.png", "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode()
-            # Ajustado para um tamanho um pouco maior e mais imponente (170px)
             st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
         except: pass
 
@@ -165,7 +164,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF
+# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF (À PROVA DE ERROS)
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -256,7 +255,10 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
                 col += 1
                 if col > 7: col, y = 0, y+15
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
-    return pdf.output(dest='S').encode('latin-1')
+    
+    # Proteção de conversão de Bytes (Resolve o AttributeError do fpdf2)
+    out = pdf.output(dest='S')
+    return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
 def gerar_pdf_relatorio_critico(df_critico):
     if not FPDF: return None
@@ -287,7 +289,10 @@ def gerar_pdf_relatorio_critico(df_critico):
                 pdf.cell(10)
                 pdf.cell(0, 6, f"Questao {r['questao']} - Taxa de Erro: {r['Taxa de Erro (%)']:.1f}%", 0, 1)
         pdf.ln(5)
-    return pdf.output(dest='S').encode('latin-1')
+        
+    # Proteção de conversão de Bytes (Resolve o AttributeError do fpdf2)
+    out = pdf.output(dest='S')
+    return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
@@ -523,7 +528,6 @@ with tabs[5]:
     if af != "Todas": dff = dff[dff.area==af]
     if tf != "Todas": dff = dff[dff.turma==tf]
     
-    # Adicionada nova aba: Questões Críticas
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
     if eh_admin: sub_da.append("⚙️ Gerenciar Dados")
     stabs = st.tabs(sub_da)
@@ -671,21 +675,16 @@ with tabs[5]:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
             st.write("Visão direta das **3 questões com maior índice de erro** em cada disciplina. Essencial para revisões pedagógicas direcionadas.")
             
-            # Lógica para pegar exatamente as 3 piores questões por matéria de cada turma
             q_err = dff.groupby(['turma', 'disciplina', 'questao']).agg(
                 Total=('questao', 'count'),
                 Acertos=('acerto', 'sum')
             ).reset_index()
             q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
             
-            # Ordenando as que têm as piores taxas de erro por disciplina de cada turma
             q_err = q_err.sort_values(['turma', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, False])
-            
-            # Puxa APENAS as 3 primeiras de cada grupo que tenham mais de 0% de erro
             q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].groupby(['turma', 'disciplina']).head(3)
             
             if not q_err_top3.empty:
-                # Gerador em Botão Simples do PDF
                 pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
                 if pdf_data:
                     st.download_button("📥 BAIXAR RELATÓRIO EM PDF", data=pdf_data, file_name="Questoes_Criticas.pdf", mime="application/pdf")
