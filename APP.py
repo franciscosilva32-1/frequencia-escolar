@@ -109,16 +109,8 @@ st.markdown("""
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
     
-    /* === CORREÇÃO SUAVE DOS FILTROS (SEM DESTRUIR O LAYOUT) === */
-    [data-baseweb="select"] > div { 
-        background-color: #ffffff !important; 
-        border-color: #cbd5e1 !important; 
-    }
-    [data-baseweb="select"] span { 
-        color: #000000 !important; 
-        -webkit-text-fill-color: #000000 !important; 
-        font-weight: 800 !important;
-    }
+    [data-baseweb="select"] > div { background-color: #ffffff !important; border-color: #cbd5e1 !important; }
+    [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 800 !important; }
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
     
@@ -132,21 +124,19 @@ st.markdown("""
     [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
     .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
 
-    /* === IMPACTO VISUAL: O NOVO TOP 7 GIGANTE === */
     .top7-card { background: linear-gradient(135deg, #ffffff, #f8fafc); border-left: 12px solid var(--accent); padding: 3rem 1.5rem; border-radius: 20px; margin-bottom: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center;}
     .top7-medal { font-size: 3.8rem !important; font-weight: 900; color: var(--primary); margin-bottom: 0.5rem; letter-spacing: -1px;}
     .top7-name { font-size: 4.5rem !important; font-weight: 900; color: var(--primary); letter-spacing: -2px; margin: 1.5rem 0; line-height: 1.1; text-transform: uppercase;}
     .top7-name-hidden { font-size: 4.5rem !important; font-weight: 900; color: #94a3b8; filter: blur(12px); user-select: none; margin: 1.5rem 0; line-height: 1.1;}
     .top7-details { font-size: 1.8rem !important; color: #64748b; font-weight: 800; background: #e2e8f0; display: inline-block; padding: 0.5rem 1.5rem; border-radius: 30px;}
     
-    /* Cores Alternadas nos Estudantes */
     div[data-testid="stExpander"]:nth-child(even) { background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1; margin-bottom: 10px;}
     div[data-testid="stExpander"]:nth-child(odd) { background-color: #e2e8f0; border-radius: 12px; border: 1px solid #94a3b8; margin-bottom: 10px;}
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 3. CONEXÃO BANCO DE DADOS
+# 3. CONEXÃO E OTIMIZAÇÃO DO BANCO DE DADOS (COM ÍNDICES)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -163,11 +153,16 @@ def inicializar_tabelas():
     try:
         conn = conectar_bd()
         cur = conn.cursor()
+        # Criação das Tabelas
         cur.execute('''CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT)''')
         cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
         cur.execute("ALTER TABLE alunos_v2 ADD COLUMN IF NOT EXISTS email_responsavel TEXT")
         cur.execute('''CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))''')
         cur.execute('''CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))''')
+        
+        # OTIMIZAÇÃO (ÍNDICES) RECOMENDADOS PELO CHATGPT
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_busca ON avaliacoes_avs(periodo, area, turma)")
         conn.close()
     except Exception as e:
         pass 
@@ -187,21 +182,37 @@ def carregar_alunos():
     except Exception:
         return pd.DataFrame(columns=['codigo', 'nome', 'turma', 'status', 'email_responsavel'])
 
+# === OTIMIZAÇÃO MÁXIMA DA IMPORTAÇÃO DE ALUNOS (Substituindo iterrows por execute_values) ===
 def importar_csv_para_bd(arquivo_csv):
     conteudo = arquivo_csv.read()
     try: texto = conteudo.decode('utf-8-sig')
     except: texto = conteudo.decode('latin-1')
     df = pd.read_csv(io.StringIO(texto), sep=';')
+    
     def normalizar_coluna(nome_col): return ''.join(c for c in unicodedata.normalize('NFD', str(nome_col)) if unicodedata.category(c) != 'Mn').strip().upper()
     df.columns = [normalizar_coluna(col) for col in df.columns]
+    
     if 'CODIGO' not in df.columns or 'NOME' not in df.columns or 'TURMA' not in df.columns: return False
-    conn = conectar_bd(); cur = conn.cursor()
-    for _, row in df.iterrows():
-        codigo, nome, turma = str(row['CODIGO']).strip().upper(), str(row['NOME']).strip().upper(), str(row['TURMA']).strip().upper()
-        if codigo == 'NAN' or nome == 'NAN': continue
-        try: cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES (%s, %s, %s, 'ATIVO') ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma", (codigo, nome, turma))
-        except: pass
-    conn.close(); st.cache_data.clear(); return True
+    
+    dados_alunos = []
+    records = df.to_dict('records')
+    for row in records:
+        codigo = str(row.get('CODIGO', '')).strip().upper()
+        nome = str(row.get('NOME', '')).strip().upper()
+        turma = str(row.get('TURMA', '')).strip().upper()
+        
+        if codigo == 'NAN' or nome == 'NAN' or not codigo or not nome: continue
+        dados_alunos.append((codigo, nome, turma, 'ATIVO'))
+        
+    if not dados_alunos: return False
+
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        query = "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome, turma = EXCLUDED.turma"
+        execute_values(cur, query, dados_alunos, page_size=1000)
+        conn.close(); st.cache_data.clear(); return True
+    except Exception as e:
+        return False
 
 def adicionar_aluno_manual(codigo, nome, turma):
     conn = conectar_bd(); cur = conn.cursor()
@@ -245,7 +256,7 @@ def registrar_presenca(codigo_estudante, data_registro, hora_limite_entrada, hor
         if not resultado: st.error(f"❌ Código não cadastrado: {codigo_estudante}"); conn.close(); return False
         nome_aluno, status_aluno, email_resp = resultado
         if status_aluno != 'ATIVO': st.warning(f"⚠️ Atenção: {nome_aluno} está marcado como {status_aluno}.")
-        cur.execute("SELECT * FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
+        cur.execute("SELECT id FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo_estudante, data_registro))
         if cur.fetchone(): st.warning(f"⚠️ {nome_aluno} já tem presença registrada hoje."); conn.close(); return False
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'FALTA'", (codigo_estudante, data_registro))
         
@@ -279,13 +290,15 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
     except: return False
 
 # =========================================================
-# 🧠 ANALISADOR AVS NA NUVEM (OTIMIZADO PARA SUPER VELOCIDADE)
+# 🧠 ANALISADOR AVS NA NUVEM (OTIMIZADO)
 # =========================================================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def carregar_dados_avs():
     try:
         conn = conectar_bd()
-        df = pd.read_sql_query("SELECT * FROM avaliacoes_avs", conn)
+        # OTIMIZAÇÃO: Não usa mais SELECT *. Específica apenas as colunas necessárias para reduzir memória.
+        query = "SELECT periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto FROM avaliacoes_avs"
+        df = pd.read_sql_query(query, conn)
         conn.close()
         return df
     except Exception: 
@@ -342,7 +355,7 @@ def excluir_dados_avs(periodo, area, turma):
         return linhas
     except: return 0
 
-# === GERADOR DE PDF INTELIGENTE RECONSTRUÍDO (PÁGINAS E MATÉRIAS) ===
+# === GERADOR DE PDF INTELIGENTE (MÚLTIPLAS PÁGINAS) ===
 @st.cache_data(show_spinner=False)
 def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
     if FPDF is None: return None
@@ -373,7 +386,6 @@ def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
     for p in sorted(periodos):
         df_p = df_bol[df_bol['periodo'] == p]
         
-        # Cria uma faixa cinza para destacar o Período
         pdf.set_fill_color(230, 230, 230)
         pdf.set_font("Arial", "B", 14)
         pdf.cell(0, 10, f"  {p.upper()}", 0, 1, 'L', fill=True)
@@ -383,12 +395,13 @@ def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
         for d in sorted(disciplinas):
             df_d = df_p[df_p['disciplina'] == d]
             
-            # Calcula a nota específica desta disciplina neste período
             acertos_d = df_d['acerto'].sum()
             total_d = len(df_d)
             nota_d = (acertos_d / total_d) * 10 if total_d > 0 else 0
             
-            # Título da Disciplina
+            # Controle de Quebra de Página para o Título da Matéria
+            if pdf.get_y() > 250: pdf.add_page()
+            
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 8, f"{d.upper()} - Nota: {nota_d:.2f}", 0, 1)
             
@@ -396,14 +409,13 @@ def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
             y_start = pdf.get_y()
             col = 0
             
-            # Desenhando as caixinhas de questões
-            for _, q in df_d.sort_values('questao').iterrows():
-                # Proteção contra quebra de página: se chegar no fundo, cria nova página
+            # Usa to_dict para eliminar o iterrows até na geração de PDF (Otimização extra)
+            questoes = df_d.sort_values('questao').to_dict('records')
+            for q in questoes:
                 if y_start > 265:
                     pdf.add_page()
                     y_start = pdf.get_y()
                 
-                # Cores de status
                 if q['acerto'] == 1: pdf.set_fill_color(16, 185, 129)
                 elif q['resposta'] == 'BRANCO': pdf.set_fill_color(245, 158, 11)
                 else: pdf.set_fill_color(239, 68, 68)
@@ -418,13 +430,11 @@ def gerar_pdf_boletim(aluno_nome, turma, nota_geral, df_bol):
                     col = 0
                     y_start += 15
             
-            # Ajustando o espaço após a grade de questões para a próxima matéria
-            if col > 0:
-                y_start += 15
+            if col > 0: y_start += 15
             pdf.set_y(y_start + 5)
-            pdf.set_text_color(0, 0, 0) # Retorna a cor do texto para preto
+            pdf.set_text_color(0, 0, 0) 
         
-        pdf.ln(5) # Espaço extra entre os períodos
+        pdf.ln(5) 
         
     try:
         res_pdf = pdf.output()
@@ -474,7 +484,6 @@ check_auth()
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"): 
-        # LOGO REDUZIDA (Tamanho colunas: 1.5, 1, 1.5)
         col_log1, col_log2, col_log3 = st.columns([1.5, 1, 1.5])
         with col_log2: st.image("logo.png", use_container_width=True)
     st.markdown('<div class="login-title">JANSEN VELOSO</div>', unsafe_allow_html=True)
@@ -487,7 +496,6 @@ if not st.session_state.autenticado:
     st.stop()
 
 if os.path.exists("logo.png"):
-    # LOGO REDUZIDA NA TELA PRINCIPAL (Tamanho colunas: 1.5, 1, 1.5)
     col_main1, col_main2, col_main3 = st.columns([1.5, 1, 1.5])
     with col_main2: st.image("logo.png", use_container_width=True)
 
@@ -634,7 +642,8 @@ if st.session_state.eh_admin:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("⚙️ Importação em Massa (CSV)")
         up_admin = st.file_uploader("Arquivo CSV Alunos", type=["csv"], key="csv_alunos_up")
         if up_admin:
-            if importar_csv_para_bd(up_admin): st.success("Atualizado!"); st.rerun()
+            with st.spinner("Processando em lote de alta velocidade..."):
+                if importar_csv_para_bd(up_admin): st.success("Atualizado rapidamente!"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================================================
@@ -652,7 +661,6 @@ if st.session_state.eh_admin:
 
         df_avs = carregar_dados_avs()
         
-        # Filtros Globais
         st.markdown("##### 🔍 Filtros Globais")
         c_f1, c_f2, c_f3 = st.columns(3)
         with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS, key="avs_periodo")
@@ -667,7 +675,7 @@ if st.session_state.eh_admin:
         abas_avs = st.tabs(["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões", "📉 Críticas", "⚙️ Gerenciar Dados"])
         
         # -----------------------------------------------------------------
-        # 🏆 DESTAQUES (IMPACTO VISUAL - FONTES GIGANTES)
+        # 🏆 DESTAQUES
         # -----------------------------------------------------------------
         with abas_avs[0]:
             if df_filtrado.empty: st.info("Nenhum dado encontrado para os filtros selecionados.")
@@ -677,7 +685,8 @@ if st.session_state.eh_admin:
                 resumo['Nota'] = (resumo['Acertos'] / resumo['Total']) * 10
                 resumo = resumo.sort_values(by='Nota', ascending=False).head(7).reset_index(drop=True)
                 
-                for idx, row in resumo.iterrows():
+                # Usando to_dict em vez de iterrows para micro-otimização
+                for idx, row in enumerate(resumo.to_dict('records')):
                     if idx == 0: medalha = "🥇 1º LUGAR"
                     elif idx == 1: medalha = "🥈 2º LUGAR"
                     elif idx == 2: medalha = "🥉 3º LUGAR"
@@ -698,7 +707,7 @@ if st.session_state.eh_admin:
                     """, unsafe_allow_html=True)
 
         # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES (VETORIZAÇÃO PANDAS - MÁXIMA VELOCIDADE)
+        # 🧑‍🎓 ESTUDANTES
         # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
@@ -714,7 +723,6 @@ if st.session_state.eh_admin:
                 with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="avs_desempenho")
                 with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente c/ erros", key="avs_check_erros")
 
-                # CÁLCULO VETORIZADO (Processa tudo numa fração de segundo)
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
                 
@@ -729,14 +737,12 @@ if st.session_state.eh_admin:
                         
                 merged_alunos = pd.merge(resumo_est, status_stats, on='nome', how='left').fillna({'BRANCO': 0, 'DUPLA': 0})
                 
-                # APLICANDO FILTROS RAPIDAMENTE
                 if busca_aluno: merged_alunos = merged_alunos[merged_alunos['nome'].str.contains(busca_aluno, case=False, na=False)]
                 if filtro_erros: merged_alunos = merged_alunos[(merged_alunos['BRANCO'] > 0) | (merged_alunos['DUPLA'] > 0)]
                 if filtro_desempenho == "INSUFICIENTE": merged_alunos = merged_alunos[merged_alunos['Nota'] < 6.0]
                 elif filtro_desempenho == "BOM": merged_alunos = merged_alunos[(merged_alunos['Nota'] >= 6.0) & (merged_alunos['Nota'] <= 7.5)]
                 elif filtro_desempenho == "ÓTIMO": merged_alunos = merged_alunos[merged_alunos['Nota'] > 7.5]
                 
-                # ÁREA EXCLUSIVA DE GERAÇÃO DE PDF
                 st.markdown("### 🖨️ Exportação de Boletim em PDF")
                 st.info("Escolha um estudante abaixo para gerar o PDF detalhado.")
                 nomes_disponiveis = merged_alunos['nome'].tolist()
@@ -753,7 +759,6 @@ if st.session_state.eh_admin:
                             st.download_button(f"📥 BAIXAR O BOLETIM DE {al_dados_pdf['nome'].upper()}", bytes_do_pdf, f"Boletim_{al_dados_pdf['nome']}.pdf", "application/pdf")
                 st.markdown("---")
                 
-                # DECISÃO INTELIGENTE DE EXIBIÇÃO: Mostrar todos se turma específica for selecionada
                 if t_filtro != "Todas" or busca_aluno:
                     alunos_filtrados = merged_alunos.to_dict('records')
                     st.write(f"**Encontrados:** {len(merged_alunos)} estudante(s).")
