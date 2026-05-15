@@ -14,6 +14,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
+import time
 import re
 import plotly.express as px
 
@@ -23,7 +24,7 @@ except ImportError:
     FPDF = None
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL (RESTAURADO VISUAL BOM)
+# 1. CONFIGURAÇÃO INICIAL E COOKIES
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
@@ -76,11 +77,9 @@ st.markdown("""
     
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
 
-    /* NOME GIGANTE DA ESCOLA / SISTEMA (Visual BOM) */
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    /* Metrics (Visual BOM) */
     .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2.5rem; }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
     .metric-card { background: white; padding: 2.2rem 1rem; border-radius: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.04); text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; }
@@ -89,39 +88,32 @@ st.markdown("""
     .m-val { font-size: 3.8rem; font-weight: 900; color: #1e293b; display: block; line-height: 1.2; }
     .m-lab { font-size: 1.2rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.5rem; display: block; }
     
-    /* Tabs (Visual BOM) */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
     .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
     .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
     .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
     
-    /* Panels (Visual BOM) */
     .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
     
-    /* Inputs (Visual BOM) */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
     
-    /* Selects (Restaurado Visual BOM: spans black, weight 800) */
-    [data-baseweb="select"] > div { background-color: #ffffff !important; border-color: #cbd5e1 !important; }
-    [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 800 !important; font-size: 1.3rem !important;}
+    [data-baseweb="select"] > div { background-color: #ffffff !important; border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; }
+    [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.4rem !important;}
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
     
-    /* Buttons (Visual BOM) */
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
     
-    /* Login Card (Visual BOM) */
     .login-card { max-width: 500px; margin: 8vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
     .login-title { font-size: 2.2rem; font-weight: 900; color: var(--primary); margin-bottom: 1.5rem; }
     
     [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
     .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
 
-    /* Top 7 Cards (Restaurado Visual BOM: Large names, accent border) */
     .top7-card { background: linear-gradient(135deg, #ffffff, #f8fafc); border-left: 12px solid var(--accent); padding: 3rem 1.5rem; border-radius: 20px; margin-bottom: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center;}
     .top7-medal { font-size: 3.8rem !important; font-weight: 900; color: var(--primary); margin-bottom: 0.5rem; letter-spacing: -1px;}
     .top7-name { font-size: 4.5rem !important; font-weight: 900; color: var(--primary); letter-spacing: -2px; margin: 1.5rem 0; line-height: 1.1; text-transform: uppercase;}
@@ -140,7 +132,6 @@ DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
-# Dicionário de abreviações exato (conforme solicitado no docx)
 DICIONARIO_ABREVIACAO = {
     "BIOLOGIA": "BIO", "ARTE": "ART", "EDUCAÇÃO FÍSICA": "EDF",
     "LÍNGUA ESPANHOLA": "ESP", "FILOSOFIA": "FIL", "FÍSICA": "FIS",
@@ -165,7 +156,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO (PERFORMANCE VETORIZADA)
+# 5. LÓGICA DE NEGÓCIO
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -210,9 +201,6 @@ def registrar_saida(cod, motivo, pais, data, h_saida):
         conn.close(); return False
     except: return False
 
-# ------------------------------------------------------------
-# 6. DESEMPENHO ACADÊMICO E PDF (FPDF2 COMPATÍVEL)
-# ------------------------------------------------------------
 def importar_csv_desempenho(file, periodo, area, turma):
     temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
     temp_df.columns = [str(c).strip() for c in temp_df.columns]
@@ -241,7 +229,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
     pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA GERAL: {nota_g:.2f}", 0, 1)
     
-    # LEGENDA COM A COR ROXA PARA DUPLA
     pdf.set_font("Arial", "B", 8)
     pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1)
     pdf.ln(2)
@@ -254,7 +241,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
             x, y, col = 10, pdf.get_y(), 0
             for q in df_d.sort_values('questao').to_dict('records'):
                 if y > 265: pdf.add_page(); y = 20
-                # Cor Roxa para Dupla (#8b5cf6 -> 139, 92, 246)
                 c = (16,185,129) if q['acerto']==1 else ((245,158,11) if q['resposta']=='BRANCO' else ((139,92,246) if q['resposta']=='DUPLA' else (239,68,68)))
                 pdf.set_fill_color(*c); pdf.rect(x+(col*22), y, 20, 12, 'F'); pdf.set_text_color(255,255,255); pdf.set_font("Arial","B",8)
                 pdf.text(x+(col*22)+2, y+5, f"Q{q['questao']}"); pdf.text(x+(col*22)+2, y+10, f"R:{q['resposta']}")
@@ -263,9 +249,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
     return pdf.output(dest='S').encode('latin-1')
 
-# ------------------------------------------------------------
-# 7. COMPONENTE CÂMERA
-# ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMERA {label}</button>
@@ -286,7 +269,7 @@ def gerar_camera(label, btn_label, cam_id):
     """, height=350)
 
 # ------------------------------------------------------------
-# 8. AUTH E DASHBOARD (CORREÇÃO KEYERROR INCLUÍDA)
+# 8. AUTH E DASHBOARD
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
 
@@ -303,28 +286,23 @@ if not auth_cookie:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# --- PROTEÇÃO CONTRA COOKIES ANTIGOS (CORREÇÃO KEYERROR) ---
 try:
     user = json.loads(base64.b64decode(auth_cookie).decode())
     eh_admin = user.get('admin', user.get('eh_admin', False)) 
 except Exception:
-    # Se o cookie estiver corrompido, limpa e recarrega
     cookies["auth_token"] = ""; cookies.save(); st.rerun()
 
 df_alunos = carregar_alunos()
 
-# HEADER (CORREÇÃO ATTRIBUTEERROR INCLUÍDA)
 c_l, c_t, c_s = st.columns([1, 4, 1])
 with c_l: 
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=100)
+    if os.path.exists("logo.png"): st.image("logo.png", width=100)
 with c_t:
     st.markdown('<p class="main-title">SISTEMA DE FREQUÊNCIA</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 with c_s: 
     if st.button("SAIR"): cookies["auth_token"] = ""; cookies.save(); st.rerun()
 
-# MÉTRICAS (Restaurado Visual BOM)
 hoje = obter_hora_atual().strftime("%Y-%m-%d")
 try:
     conn = conectar_bd(); cur = conn.cursor(); cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (hoje,))
@@ -342,7 +320,7 @@ st.markdown(f'''
 
 tabs = st.tabs(["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Acadêmico"])
 
-# --- ABA 0: REGISTRO (INCLUI JUSTIFICAR FALTAS) ---
+# --- ABA 0: REGISTRO ---
 with tabs[0]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     h_lim_e = st.time_input("Horário Limite Entrada", datetime.strptime("07:30", "%H:%M").time())
@@ -383,20 +361,15 @@ with tabs[0]:
                     conn = conectar_bd(); cur = conn.cursor()
                     cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just))
                     conn.commit(); conn.close()
-                    st.success("Justificativa salva com sucesso!")
-                    st.rerun()
-                    
+                    st.success("Justificativa salva com sucesso!"); st.rerun()
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
             if not faltas_justificadas.empty:
                 for _, f in faltas_justificadas.iterrows():
                     st.info(f"👤 {f['nome']} - Justificativa: **{f['motivo_saida']}**")
-            else:
-                st.write("Nenhuma falta justificada ainda.")
-        else:
-            st.success("Nenhuma falta registada para esta data!")
-
+            else: st.write("Nenhuma falta justificada ainda.")
+        else: st.success("Nenhuma falta registada para esta data!")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- ABA 1: GESTÃO ---
@@ -475,14 +448,12 @@ with tabs[5]:
     st.title("📊 Desempenho Acadêmico")
     df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
     
-    # Normalização preventiva do "EMPILHAMENTO" LP e SOC
     if not df_da.empty:
         df_da['disciplina'] = df_da['disciplina'].replace({
             'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 
             'SOCIOLGIA': 'SOCIOLOGIA'
         })
 
-    # Filtros com Destaque
     cf1, cf2, cf3 = st.columns(3)
     pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"])
     af = cf2.selectbox("Área", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
@@ -502,7 +473,6 @@ with tabs[5]:
             top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
             for idx, r in enumerate(top7.to_dict('records')):
                 rev = st.toggle("Revelar", key=f"rev_{idx}")
-                # Restaurado Visual BOM das medalhas e nomes gigantes
                 medalha = "🥇 1º LUGAR" if idx == 0 else ("🥈 2º LUGAR" if idx == 1 else ("🥉 3º LUGAR" if idx == 2 else f"⭐ {idx+1}º LUGAR"))
                 classe_nome = "top7-name" if rev else "top7-name-hidden"
                 texto_nome = r['nome'] if rev else "OCULTO"
@@ -510,6 +480,20 @@ with tabs[5]:
     
     with stabs[1]:
         if not dff.empty:
+            # --- RESTAURADO: ALERTA DE ESTUDANTES FALTOSOS (100% EM BRANCO) ---
+            brancos_por_aluno = dff.groupby(['nome', 'turma']).agg(
+                Total=('questao', 'count'),
+                Brancos=('resposta', lambda x: (x == 'BRANCO').sum())
+            ).reset_index()
+            faltosos = brancos_por_aluno[brancos_por_aluno['Total'] == brancos_por_aluno['Brancos']]
+            
+            if not faltosos.empty:
+                st.error(f"⚠️ **ESTUDANTES FALTOSOS NESTA AVALIAÇÃO ({len(faltosos)})** - *Deixaram o gabarito totalmente em branco*")
+                cols_f = st.columns(3)
+                for i, r_f in enumerate(faltosos.to_dict('records')):
+                    cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']})")
+                st.markdown("---")
+            
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
             c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
             with c_est1: bus_al = st.text_input("Buscar Nome:")
@@ -519,8 +503,6 @@ with tabs[5]:
                 filtro_erros = st.checkbox("Somente c/ erros")
 
             res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
-            
-            # Análise de erros para o filtro
             erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
             
             if bus_al: res_al = res_al[res_al.nome.str.contains(bus_al.upper())]
@@ -529,7 +511,6 @@ with tabs[5]:
             elif filtro_desempenho == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
             elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
 
-            # MOSTRAR TODOS se houver algum filtro aplicado (Restaurado lógica BOM)
             mostrar_todos = (tf != "Todas") or bus_al or filtro_erros or (filtro_desempenho != "Todos")
             lista = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
             
@@ -537,16 +518,13 @@ with tabs[5]:
             else: st.info(f"Encontrados: {len(res_al)} estudantes.")
             
             for a in lista:
-                # Restaurado Visual BOM expanders
                 with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f}"):
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                         
-                    # --- RESTAURAÇÃO EXATA DO GRÁFICO DE EVOLUÇÃO E BARRAS DE MÉDIA ---
                     st.markdown("#### 📈 Evolução ao Longo do Ano")
                     df_bol_ind = df_da[df_da.nome==a['nome']]
-                    
                     progresso = df_bol_ind.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                     progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                     try:
@@ -560,7 +538,6 @@ with tabs[5]:
                         st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
                         st.progress(min(mb['Nota'] / 10, 1.0))
 
-                    # Mapa de Questões Visual (Período no Título + Roxo mantido)
                     st.markdown("#### 📋 Mapa de Questões")
                     for p_m in sorted(df_bol_ind.periodo.unique()):
                         for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
@@ -568,7 +545,6 @@ with tabs[5]:
                             q_df = df_bol_ind[(df_bol_ind.periodo==p_m) & (df_bol_ind.disciplina==d_m)].sort_values("questao")
                             grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                             for _, q in q_df.iterrows():
-                                # Cor Roxa para Dupla (#8b5cf6 -> 139, 92, 246)
                                 cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
                                 grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
                             st.markdown(grid+'</div><br>', unsafe_allow_html=True)
@@ -578,7 +554,6 @@ with tabs[5]:
             tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
             col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
             
-            # Loop para gerar UM gráfico das disciplinas para CADA período!
             periodos_disponiveis = sorted(dff['periodo'].unique())
             for p in periodos_disponiveis:
                 st.markdown(f"#### 📊 Desempenho: {p}")
@@ -587,9 +562,8 @@ with tabs[5]:
                 resumo_graf = dff_p.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
                 
-                # APLICANDO AS ABREVIAÇÕES (OU NÃO) CONFORME SOLICITADO
                 if tipo_grafico == "Área":
-                    resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() # SEM ABREVIAR ÁREA
+                    resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() 
                 else:
                     resumo_graf['Abreviacao'] = resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
                 
@@ -603,21 +577,55 @@ with tabs[5]:
 
     with stabs[3]:
         if not dff.empty:
-            st.write("Questões com maior índice de erro:")
-            q_err = dff.groupby(['disciplina','questao']).acerto.mean().reset_index()
-            q_err['erro_perc'] = (1 - q_err['acerto']) * 100
-            st.dataframe(q_err[q_err.acerto < 0.5].sort_values('acerto').style.format({'acerto': '{:.2f}', 'erro_perc': '{:.1f}%'}))
+            # --- RESTAURADO: QUESTÕES MAIS ERRADAS POR TURMA E DISCIPLINA ---
+            st.subheader("❌ Questões com Maior Índice de Erro")
+            st.write("Visão detalhada das questões onde as turmas apresentaram maior dificuldade (taxa de erro > 50%).")
+            
+            q_err = dff.groupby(['turma', 'disciplina', 'questao']).agg(
+                Total=('questao', 'count'),
+                Acertos=('acerto', 'sum')
+            ).reset_index()
+            q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
+            q_err = q_err.sort_values('Taxa de Erro (%)', ascending=False)
+            q_err = q_err[q_err['Taxa de Erro (%)'] > 50] 
+            
+            st.dataframe(q_err[['turma', 'disciplina', 'questao', 'Taxa de Erro (%)']].style.format({'Taxa de Erro (%)': '{:.1f}%'}), use_container_width=True, hide_index=True)
             
     if eh_admin:
         with stabs[4]:
-            up_da = st.file_uploader("Upload de Notas (CSV)", type="csv")
-            if st.button("SALVAR NOTAS") and up_da:
-                s, m = importar_csv_desempenho(up_da, pf, af, tf)
-                if s: st.success(m); st.rerun()
+            # --- RESTAURADO: GERENCIAMENTO DE DADOS (UPLOAD E DELETE IDENTICOS) ---
+            st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
+            st.write("Somente administradores podem enviar ou excluir dados do banco.")
+            
+            c_up1, c_up2, c_up3 = st.columns(3)
+            with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
+            with c_up2: a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
+            with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="tup")
+            
+            arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
+            if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
+                with st.spinner("Processando e injetando dados em lote..."):
+                    sucesso, msg = importar_csv_desempenho(arquivo_avs, p_up, a_up, t_up)
+                    if sucesso: st.success(msg); st.rerun()
+                    else: st.error(msg)
+                
             st.markdown("---")
-            if st.button("Limpar Dados Selecionados (Período/Área/Turma)"):
-                conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (pf, af, tf))
-                conn.commit(); conn.close(); st.success("Dados removidos."); st.rerun()
+            st.subheader("🗑️ Limpeza Seletiva de Banco")
+            st.write("Selecione um bloco de avaliação para excluir permanentemente da Nuvem:")
+            
+            df_banco_avs = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
+            if not df_banco_avs.empty:
+                blocos = df_banco_avs[['periodo', 'area', 'turma']].drop_duplicates()
+                lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
+                bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
+                
+                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
+                    p_del, a_del, t_del = bloco_del.split(" | ")
+                    conn = conectar_bd(); cur = conn.cursor()
+                    cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
+                    conn.commit(); conn.close()
+                    st.success("Bloco removido do servidor!"); st.rerun()
+            else:
+                st.info("O banco de dados de desempenho está vazio.")
 
     st.markdown('</div>', unsafe_allow_html=True)
