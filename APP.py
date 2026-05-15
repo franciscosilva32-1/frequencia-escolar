@@ -757,4 +757,32 @@ with tabs[5]:
             c_up1, c_up2, c_up3 = st.columns(3)
             with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
             with c_up2: a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
-            with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="
+            with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="tup")
+            
+            arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
+            if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
+                with st.spinner("Processando e injetando dados em lote..."):
+                    sucesso, msg = importar_csv_desempenho(arquivo_avs, p_up, a_up, t_up)
+                    if sucesso: st.success(msg); st.rerun()
+                    else: st.error(msg)
+                
+            st.markdown("---")
+            st.subheader("🗑️ Limpeza Seletiva de Banco")
+            st.write("Selecione um bloco de avaliação para excluir permanentemente da Nuvem:")
+            
+            df_banco_avs = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
+            if not df_banco_avs.empty:
+                blocos = df_banco_avs[['periodo', 'area', 'turma']].drop_duplicates()
+                lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
+                bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
+                
+                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
+                    p_del, a_del, t_del = bloco_del.split(" | ")
+                    conn = conectar_bd(); cur = conn.cursor()
+                    cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
+                    conn.commit(); conn.close()
+                    st.success("Bloco removido do servidor!"); st.rerun()
+            else:
+                st.info("O banco de dados de desempenho está vazio.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
