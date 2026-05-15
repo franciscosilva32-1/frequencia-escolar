@@ -75,7 +75,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (VISUALIZAÇÃO AMPLIADA E CORES ALTERNADAS)
+# 2. CSS PREMIUM (VISUALIZAÇÃO AMPLIADA E FILTROS CORRIGIDOS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -107,9 +107,19 @@ st.markdown("""
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
     
-    /* CORREÇÃO DOS FILTROS: Fundo branco e texto preto forte */
-    div[data-baseweb="select"] > div { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; color: #000000 !important; font-weight: 800 !important; font-size: 1.4rem !important; padding: 0.5rem;}
-    div[data-baseweb="select"] * { color: #000000 !important; font-weight: 800 !important; }
+    /* === CORREÇÃO DEFINITIVA DOS FILTROS (SELECTBOX) === */
+    div[data-baseweb="select"] > div { 
+        background-color: #ffffff !important; 
+        border: 2px solid #cbd5e1 !important; 
+        border-radius: 12px !important;
+    }
+    div[data-baseweb="select"] span, div[data-baseweb="select"] div, div[data-baseweb="select"] li {
+        color: #000000 !important; 
+        -webkit-text-fill-color: #000000 !important;
+        font-weight: 800 !important; 
+        font-size: 1.4rem !important;
+    }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; border: 2px solid #cbd5e1 !important; }
     
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
@@ -268,7 +278,7 @@ def registrar_saida(codigo_estudante, motivo, pais_informados, data_registro, ho
     except: return False
 
 # =========================================================
-# 🧠 ANALISADOR AVS NA NUVEM (COM EXECUTE_BATCH PARA VELOCIDADE)
+# 🧠 ANALISADOR AVS NA NUVEM
 # =========================================================
 @st.cache_data(ttl=60)
 def carregar_dados_avs():
@@ -369,13 +379,10 @@ def gerar_pdf_boletim(aluno_nome, turma, nota, df_bol):
         if y_start > 260: pdf.add_page(); y_start = 20
         
     try:
-        # Tenta a exportação moderna (bytearray no fpdf2)
-        resultado_pdf = pdf.output()
-        if isinstance(resultado_pdf, str):
-            return resultado_pdf.encode('latin-1')
-        return bytes(resultado_pdf)
+        res_pdf = pdf.output()
+        if isinstance(res_pdf, str): return res_pdf.encode('latin-1')
+        return bytes(res_pdf)
     except Exception:
-        # Falha de segurança (fpdf antigo)
         return pdf.output(dest='S').encode('latin-1')
 
 # ------------------------------------------------------------
@@ -581,7 +588,7 @@ if st.session_state.eh_admin:
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================================================
-# 📑 ABA 5: O SEU SUPER ANALISADOR AVS 100% RESTAURADO E INTERATIVO
+# 📑 ABA 5: O SEU SUPER ANALISADOR AVS 100% RESTAURADO E VELOZ
 # =================================================================================
 if st.session_state.eh_admin:
     with tabs[5]:
@@ -641,7 +648,7 @@ if st.session_state.eh_admin:
                     """, unsafe_allow_html=True)
 
         # -----------------------------------------------------------------
-        # 🧑‍🎓 ESTUDANTES (COM PDF E MAPA COLORIDO)
+        # 🧑‍🎓 ESTUDANTES (COM PDF, MAPA COLORIDO E GRÁFICO SUPER LEVE)
         # -----------------------------------------------------------------
         with abas_avs[1]:
             if df_filtrado.empty: st.info("Sem dados.")
@@ -692,7 +699,6 @@ if st.session_state.eh_admin:
                         if df_boletim.empty:
                             st.warning("O aluno não possui registros para o Período/Área selecionados.")
                         else:
-                            # GERADOR DE PDF DO BOLETIM (COM CORREÇÃO PARA NOVA BIBLIOTECA)
                             pdf_bytes = gerar_pdf_boletim(al['nome'], al['turma'], al['nota'], df_boletim)
                             if pdf_bytes:
                                 st.download_button(f"📥 Baixar Boletim PDF - {al['nome']}", pdf_bytes, f"Boletim_{al['nome']}.pdf", "application/pdf", key=f"btn_pdf_bol_{i}")
@@ -701,9 +707,9 @@ if st.session_state.eh_admin:
                             progresso = df_boletim.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                             progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                             
-                            fig_b = px.line(progresso, x='periodo', y='Nota', color='disciplina', markers=True, title="Evolução por Período")
-                            fig_b.update_layout(yaxis=dict(range=[-0.5, 11]), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='Disciplina')
-                            st.plotly_chart(fig_b, use_container_width=True, key=f"graf_bol_{i}_{al['nome']}")
+                            # GRÁFICO ULTRA RÁPIDO NATIVO DO STREAMLIT (Resolve 100% a lentidão)
+                            progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
+                            st.line_chart(progresso_pivot, height=250)
                             
                             st.markdown("#### 📊 Médias por Disciplina (No Filtro Selecionado)")
                             medias_b = df_boletim.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
@@ -729,7 +735,7 @@ if st.session_state.eh_admin:
                 if len(alunos_filtrados) > 50: st.info("Mostrando os 50 primeiros. Use a busca para encontrar estudantes específicos.")
 
         # -----------------------------------------------------------------
-        # 📈 GRÁFICOS INTERATIVOS MODERNOS (PLOTLY)
+        # 📈 GRÁFICOS INTERATIVOS MODERNOS (PLOTLY - MANTIDO AQUI POIS É UM SÓ)
         # -----------------------------------------------------------------
         with abas_avs[2]:
             if df_filtrado.empty: st.info("Sem dados.")
@@ -812,11 +818,9 @@ if st.session_state.eh_admin:
                                     pdf.ln(2)
                         
                         try:
-                            # Nova Biblioteca
                             res_pdf = pdf.output()
                             pdf_bytes = res_pdf.encode('latin-1') if isinstance(res_pdf, str) else bytes(res_pdf)
                         except:
-                            # Biblioteca Antiga
                             pdf_bytes = pdf.output(dest='S').encode('latin-1')
                         
                         st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf", key="dl_pdf_avs_geral")
