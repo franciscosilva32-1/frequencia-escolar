@@ -480,18 +480,48 @@ with tabs[5]:
     
     with stabs[1]:
         if not dff.empty:
-            # --- RESTAURADO: ALERTA DE ESTUDANTES FALTOSOS (100% EM BRANCO) ---
-            brancos_por_aluno = dff.groupby(['nome', 'turma']).agg(
+            # --- NOVA LÓGICA DE FALTOSOS E ERROS POR ÁREA (COMPLETA E PRECISA) ---
+            area_stats = dff.groupby(['nome', 'turma', 'area']).agg(
                 Total=('questao', 'count'),
-                Brancos=('resposta', lambda x: (x == 'BRANCO').sum())
+                Brancos=('resposta', lambda x: (x == 'BRANCO').sum()),
+                Duplas=('resposta', lambda x: (x == 'DUPLA').sum())
             ).reset_index()
-            faltosos = brancos_por_aluno[brancos_por_aluno['Total'] == brancos_por_aluno['Brancos']]
+
+            # Estudante faltou se deixou 100% de uma área em branco
+            area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
+
+            alertas_estudante = {}
+            estudantes_faltosos = []
+
+            for nome, group in area_stats.groupby('nome'):
+                alertas = []
+                areas_falta = group[group['Faltou']]['area'].tolist()
+                
+                # Trata faltas por Área
+                if areas_falta:
+                    for a in areas_falta:
+                        alertas.append(f"FALTOU {a}")
+                        estudantes_faltosos.append({'nome': nome, 'turma': group.iloc[0]['turma'], 'area': a})
+                
+                # Trata Erros de Marcação (Duplas)
+                if group['Duplas'].sum() > 0:
+                    alertas.append("MARCAÇÃO DUPLA")
+                    
+                # Trata Erros de Marcação (Em Branco parcial - ignorando as áreas que ele faltou 100%)
+                areas_presente = group[~group['Faltou']]
+                if areas_presente['Brancos'].sum() > 0:
+                    alertas.append("EM BRANCO")
+
+                # Constrói a string final do alerta para este aluno
+                if alertas:
+                    alertas_estudante[nome] = " | ".join(alertas)
             
-            if not faltosos.empty:
-                st.error(f"⚠️ **ESTUDANTES FALTOSOS NESTA AVALIAÇÃO ({len(faltosos)})** - *Deixaram o gabarito totalmente em branco*")
+            # Painel Vermelho de Faltosos
+            if estudantes_faltosos:
+                st.error(f"⚠️ **ESTUDANTES FALTOSOS NESTA AVALIAÇÃO ({len(estudantes_faltosos)})** - *Deixaram o gabarito totalmente em branco em áreas específicas*")
                 cols_f = st.columns(3)
-                for i, r_f in enumerate(faltosos.to_dict('records')):
-                    cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']})")
+                for i, r_f in enumerate(estudantes_faltosos):
+                    cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) - {r_f['area']}")
                 st.markdown("---")
             
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
@@ -518,7 +548,11 @@ with tabs[5]:
             else: st.info(f"Encontrados: {len(res_al)} estudantes.")
             
             for a in lista:
-                with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f}"):
+                # Insere o Alerta na barra de nome do estudante
+                alerta_str = alertas_estudante.get(a['nome'], "")
+                tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
+                
+                with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f} {tag}"):
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
@@ -577,7 +611,6 @@ with tabs[5]:
 
     with stabs[3]:
         if not dff.empty:
-            # --- RESTAURADO: QUESTÕES MAIS ERRADAS POR TURMA E DISCIPLINA ---
             st.subheader("❌ Questões com Maior Índice de Erro")
             st.write("Visão detalhada das questões onde as turmas apresentaram maior dificuldade (taxa de erro > 50%).")
             
@@ -593,7 +626,6 @@ with tabs[5]:
             
     if eh_admin:
         with stabs[4]:
-            # --- RESTAURADO: GERENCIAMENTO DE DADOS (UPLOAD E DELETE IDENTICOS) ---
             st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
             st.write("Somente administradores podem enviar ou excluir dados do banco.")
             
