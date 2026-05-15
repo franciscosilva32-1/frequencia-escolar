@@ -75,7 +75,7 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 2. CSS PREMIUM (FILTROS CORRIGIDOS E SEGUROS)
+# 2. CSS PREMIUM (FILTROS CORRIGIDOS E TÍTULOS GIGANTES)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -86,8 +86,10 @@ st.markdown("""
     
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
 
-    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(2.8rem, 7vw, 3.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -1px;}
-    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.4rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
+    /* NOME GIGANTE DA ESCOLA / SISTEMA */
+    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
+    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
+    
     .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2.5rem; }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
     .metric-card { background: white; padding: 2.2rem 1rem; border-radius: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.04); text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; }
@@ -426,7 +428,8 @@ check_auth()
 if not st.session_state.autenticado:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"): 
-        col_log1, col_log2, col_log3 = st.columns([1, 1, 1])
+        # LOGO REDUZIDA (Tamanho colunas: 1.5, 1, 1.5)
+        col_log1, col_log2, col_log3 = st.columns([1.5, 1, 1.5])
         with col_log2: st.image("logo.png", use_container_width=True)
     st.markdown('<div class="login-title">JANSEN VELOSO</div>', unsafe_allow_html=True)
     senha = st.text_input("DIGITE SUA SENHA:", type="password")
@@ -438,10 +441,11 @@ if not st.session_state.autenticado:
     st.stop()
 
 if os.path.exists("logo.png"):
-    col_main1, col_main2, col_main3 = st.columns([1, 1, 1])
+    # LOGO REDUZIDA NA TELA PRINCIPAL (Tamanho colunas: 1.5, 1, 1.5)
+    col_main1, col_main2, col_main3 = st.columns([1.5, 1, 1.5])
     with col_main2: st.image("logo.png", use_container_width=True)
 
-st.markdown('<p class="main-title">Sistema de Frequência</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">SISTEMA DE FREQUÊNCIA</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">Centro Educa Mais Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 c1, c2 = st.columns([8, 1]); c2.button("SAIR", on_click=lambda: (cookies.update({"auth_token": ""}), cookies.save(), st.rerun()))
 
@@ -686,9 +690,6 @@ if st.session_state.eh_admin:
                 elif filtro_desempenho == "BOM": merged_alunos = merged_alunos[(merged_alunos['Nota'] >= 6.0) & (merged_alunos['Nota'] <= 7.5)]
                 elif filtro_desempenho == "ÓTIMO": merged_alunos = merged_alunos[merged_alunos['Nota'] > 7.5]
                 
-                # TRANSFORMA PARA LISTA APENAS OS 20 PRIMEIROS
-                alunos_filtrados = merged_alunos.head(20).to_dict('records')
-
                 # ÁREA EXCLUSIVA DE GERAÇÃO DE PDF
                 st.markdown("### 🖨️ Exportação de Boletim em PDF")
                 st.info("Escolha um estudante abaixo para gerar o PDF detalhado.")
@@ -706,7 +707,13 @@ if st.session_state.eh_admin:
                             st.download_button(f"📥 BAIXAR O BOLETIM DE {al_dados_pdf['nome'].upper()}", bytes_do_pdf, f"Boletim_{al_dados_pdf['nome']}.pdf", "application/pdf")
                 st.markdown("---")
                 
-                st.write(f"**Encontrados:** {len(merged_alunos)} estudante(s). *(Mostrando no máximo os 20 primeiros na tela para não sobrecarregar. Use a busca acima)*")
+                # DECISÃO INTELIGENTE DE EXIBIÇÃO: Mostrar todos se turma específica for selecionada
+                if t_filtro != "Todas" or busca_aluno:
+                    alunos_filtrados = merged_alunos.to_dict('records')
+                    st.write(f"**Encontrados:** {len(merged_alunos)} estudante(s).")
+                else:
+                    alunos_filtrados = merged_alunos.head(20).to_dict('records')
+                    st.write(f"**Encontrados:** {len(merged_alunos)} estudante(s). *(Mostrando apenas os 20 primeiros. Selecione uma TURMA ESPECÍFICA no filtro geral acima para ver a turma inteira de uma vez!)*")
                 
                 for i, al in enumerate(alunos_filtrados): 
                     if al['BRANCO'] > 0 or al['DUPLA'] > 0:
