@@ -259,7 +259,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     out = pdf.output(dest='S')
     return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
-# Atualizado para a nova estrutura de PDF: Turma -> Período -> Disciplina -> Top 3
 def gerar_pdf_relatorio_critico(df_critico):
     if not FPDF: return None
     pdf = FPDF()
@@ -595,23 +594,36 @@ with tabs[5]:
             elif filtro_desempenho == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
             elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
 
+            total_estudantes_avaliados = len(res_al)
             mostrar_todos = (tf != "Todas") or bus_al or filtro_erros or (filtro_desempenho != "Todos")
             lista = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
             
-            if not mostrar_todos: st.info("A exibir os 20 primeiros. Selecione uma turma ou use os filtros acima para ver a lista completa.")
-            else: st.info(f"Encontrados: {len(res_al)} estudantes.")
+            # --- NOVA EXIBIÇÃO DO TOTAL DE ESTUDANTES AVALIADOS ---
+            if not mostrar_todos: 
+                st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Selecione uma turma ou use os filtros para ver mais).")
+            else: 
+                st.info(f"📊 **Total de estudantes avaliados / encontrados:** {total_estudantes_avaliados}.")
             
             for a in lista:
                 alerta_str = alertas_estudante.get(a['nome'], "")
                 tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                 
                 with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f} {tag}"):
+                    df_bol_ind = df_da[df_da.nome==a['nome']]
+                    
+                    # --- NOVO: Top 3 Matérias com Notas Mais Baixas ---
+                    medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                    piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
+                    piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
+                    
+                    st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
+                    # ----------------------------------------------------
+                    
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                         
                     st.markdown("#### 📈 Evolução ao Longo do Ano")
-                    df_bol_ind = df_da[df_da.nome==a['nome']]
                     progresso = df_bol_ind.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                     progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                     try:
@@ -680,17 +692,13 @@ with tabs[5]:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
             st.write("Visão direta das **3 questões com maior índice de erro**. Essencial para revisões pedagógicas direcionadas.")
             
-            # --- NOVA ESTRUTURA HIERÁRQUICA: TURMA -> PERÍODO -> DISCIPLINA ---
             q_err = dff.groupby(['turma', 'periodo', 'disciplina', 'questao']).agg(
                 Total=('questao', 'count'),
                 Acertos=('acerto', 'sum')
             ).reset_index()
             q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
             
-            # Ordenar para trazer as mais erradas primeiro
             q_err = q_err.sort_values(['turma', 'periodo', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, True, False])
-            
-            # Pegar as Top 3 maiores que 0% de erro
             q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].groupby(['turma', 'periodo', 'disciplina']).head(3)
             
             if not q_err_top3.empty:
@@ -700,7 +708,6 @@ with tabs[5]:
                 
                 st.markdown("---")
                 
-                # Renderização Visual Hierárquica na Interface
                 for t in sorted(q_err_top3['turma'].unique()):
                     st.markdown(f"### 🏫 Turma: **{t}**")
                     df_t = q_err_top3[q_err_top3['turma'] == t]
