@@ -88,14 +88,15 @@ st.markdown("""
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     
-    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2rem; margin-bottom: 3rem; }
+    /* MUDANÇA: Agora com 5 colunas para o novo card de média acadêmica */
+    .metrics-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2rem; margin-bottom: 3rem; }
+    @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
     
-    /* CARTÕES DE MÉTRICAS AUMENTADOS */
     .metric-card { background: white; padding: 3rem 1.5rem; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.06); text-align: center; position: relative; overflow: hidden; border: 2px solid #e2e8f0; transition: transform 0.2s ease;}
     .metric-card:hover { transform: translateY(-5px); }
     .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
-    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } 
+    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } .m-acad::before { background: #8b5cf6; }
     .m-val { font-size: 5.5rem; font-weight: 900; color: #0f172a; display: block; line-height: 1.1; letter-spacing: -2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.05); }
     .m-lab { font-size: 1.4rem; font-weight: 900; color: #475569; text-transform: uppercase; letter-spacing: 2px; margin-top: 1rem; display: block; }
     
@@ -387,12 +388,25 @@ if total_alunos > 0:
 else:
     media_geral_freq = "0%"
 
+# --- CÁLCULO DA MÉDIA ACADÊMICA ---
+try:
+    conn = conectar_bd()
+    cur = conn.cursor()
+    cur.execute("SELECT AVG(acerto) FROM avaliacoes_avs")
+    res_media = cur.fetchone()[0]
+    conn.close()
+    media_geral_acad = f"{res_media * 10:.1f}" if res_media is not None else "--"
+except:
+    media_geral_acad = "--"
+
+# --- RENDERIZAÇÃO DOS 5 CARTÕES ---
 st.markdown(f'''
 <div class="metrics-container">
     <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
     <div class="metric-card m-presente"><span class="m-val">{pres_hoje}</span><span class="m-lab">Presentes</span></div>
     <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_hoje}</span><span class="m-lab">Faltas</span></div>
-    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Média Geral</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência Diária</span></div>
+    <div class="metric-card m-acad"><span class="m-val">{media_geral_acad}</span><span class="m-lab">Média Acadêmica</span></div>
 </div>
 ''', unsafe_allow_html=True)
 
@@ -743,32 +757,4 @@ with tabs[5]:
             c_up1, c_up2, c_up3 = st.columns(3)
             with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
             with c_up2: a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
-            with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="tup")
-            
-            arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
-            if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
-                with st.spinner("Processando e injetando dados em lote..."):
-                    sucesso, msg = importar_csv_desempenho(arquivo_avs, p_up, a_up, t_up)
-                    if sucesso: st.success(msg); st.rerun()
-                    else: st.error(msg)
-                
-            st.markdown("---")
-            st.subheader("🗑️ Limpeza Seletiva de Banco")
-            st.write("Selecione um bloco de avaliação para excluir permanentemente da Nuvem:")
-            
-            df_banco_avs = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
-            if not df_banco_avs.empty:
-                blocos = df_banco_avs[['periodo', 'area', 'turma']].drop_duplicates()
-                lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
-                bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
-                
-                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
-                    p_del, a_del, t_del = bloco_del.split(" | ")
-                    conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
-                    conn.commit(); conn.close()
-                    st.success("Bloco removido do servidor!"); st.rerun()
-            else:
-                st.info("O banco de dados de desempenho está vazio.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
+            with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="
