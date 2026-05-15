@@ -137,7 +137,6 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 if not DATABASE_URL: st.error("DATABASE_URL não configurada."); st.stop()
 
 def conectar_bd():
-    # AQUI ESTÁ A MÁGICA: O autocommit=True OBRIGA a limpar a conexão do Supabase
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = True 
     return conn
@@ -153,7 +152,7 @@ def inicializar_tabelas():
         cur.execute('''CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))''')
         conn.close()
     except Exception as e:
-        pass # Se der erro, não trava o app na largada.
+        pass 
 
 inicializar_tabelas()
 
@@ -445,7 +444,7 @@ with tabs[0]:
         modo_rapido = st.toggle("⚡ Modo Fila Rápida", value=True)
         gerar_componente_camera("Código Estudante (Entrada)", "Registrar Entrada", "entrada")
         with st.form("form_in", clear_on_submit=True):
-            codigo_recebido = st.text_input("Código Estudante (Entrada)", placeholder="Use o leitor ou digite...")
+            codigo_recebido = st.text_input("Código Estudante (Entrada)", placeholder="Use o leitor ou digite...", key="input_cod_entrada")
             if st.form_submit_button("Registrar Entrada") and codigo_recebido.strip():
                 aluno_codigo = codigo_recebido.strip().upper()
                 if modo_rapido:
@@ -467,12 +466,12 @@ with tabs[0]:
                     st.session_state.fila_offline = []; st.success(f"🎉 Sincronização concluída! {sucessos} salvos."); st.rerun()
 
     with tab_saida:
-        motivo = st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"])
-        if motivo == "Outro": motivo = st.text_input("Especifique")
+        motivo = st.selectbox("Motivo", ["Consulta médica", "Mal-estar", "Outro"], key="motivo_saida")
+        if motivo == "Outro": motivo = st.text_input("Especifique", key="motivo_outro")
         pais = st.radio("Pais informados?", ["Sim", "Não"], horizontal=True)
         gerar_componente_camera("Código Estudante (Saída)", "Registrar Saída", "saida")
         with st.form("form_out", clear_on_submit=True):
-            codigo_saida_recebido = st.text_input("Código Estudante (Saída)", placeholder="Leia...")
+            codigo_saida_recebido = st.text_input("Código Estudante (Saída)", placeholder="Leia...", key="input_cod_saida")
             if st.form_submit_button("Registrar Saída") and codigo_saida_recebido.strip():
                 registrar_saida(codigo_saida_recebido.strip().upper(), motivo, pais == "Sim", data_str_config, obter_hora_atual().strftime("%H:%M:%S"), hora_saida); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -481,10 +480,13 @@ with tabs[0]:
 with tabs[1]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
-    with c1: dt_f = st.date_input("Data", obter_hora_atual())
-    with c2: t_f = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"])
-    with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"])
-    with c4: b_f = st.text_input("Buscar Nome")
+    with c1: dt_f = st.date_input("Data", obter_hora_atual(), key="data_relatorio")
+    
+    # VACINA: KEY EXCLUSIVO AQUI!
+    with c2: t_f = st.selectbox("Turma", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="filtro_turma_gestao")
+    with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
+    with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
+    
     try:
         query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
         if t_f != "Todas": query += " AND a.turma = %s"; params.append(t_f)
@@ -509,7 +511,7 @@ with tabs[2]:
 
 with tabs[3]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
-    aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [])
+    aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
         try:
             conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
@@ -519,8 +521,8 @@ with tabs[3]:
 if st.session_state.eh_admin:
     with tabs[4]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📧 Atualizar E-mail do Responsável")
-        aluno_email_sel = st.selectbox("Busque pelo Aluno", [""] + [f"{r['codigo']} - {r['nome']} | {r.get('email_responsavel', 'Sem E-mail')}" for _, r in df_alunos.iterrows()])
-        novo_email = st.text_input("Digite o E-mail")
+        aluno_email_sel = st.selectbox("Busque pelo Aluno", [""] + [f"{r['codigo']} - {r['nome']} | {r.get('email_responsavel', 'Sem E-mail')}" for _, r in df_alunos.iterrows()], key="atualiza_email_aluno")
+        novo_email = st.text_input("Digite o E-mail", key="novo_email_input")
         if st.button("SALVAR E-MAIL", type="primary") and aluno_email_sel and novo_email:
             if atualizar_email_aluno(aluno_email_sel.split(" - ")[0], novo_email): st.success("Salvo!"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
@@ -528,15 +530,15 @@ if st.session_state.eh_admin:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("➕ Adicionar Estudante Manualmente")
         with st.form("form_add"):
             c1, c2, c3 = st.columns([1,2,1])
-            with c1: cod = st.text_input("Matrícula")
-            with c2: nome = st.text_input("Nome")
-            with c3: turma = st.text_input("Turma")
+            with c1: cod = st.text_input("Matrícula", key="add_mat")
+            with c2: nome = st.text_input("Nome", key="add_nome")
+            with c3: turma = st.text_input("Turma", key="add_turma")
             if st.form_submit_button("CADASTRAR") and cod and nome and turma:
                 adicionar_aluno_manual(cod, nome, turma); st.success("Adicionado!"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("⚙️ Importação em Massa (CSV)")
-        up_admin = st.file_uploader("Arquivo CSV Alunos", type=["csv"])
+        up_admin = st.file_uploader("Arquivo CSV Alunos", type=["csv"], key="csv_alunos_up")
         if up_admin:
             if importar_csv_para_bd(up_admin): st.success("Atualizado!"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
@@ -558,9 +560,11 @@ if st.session_state.eh_admin:
         # Filtros Globais
         st.markdown("##### 🔍 Filtros Globais")
         c_f1, c_f2, c_f3 = st.columns(3)
-        with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS)
-        with c_f2: a_filtro = st.selectbox("Área", ["Todas"] + AREAS)
-        with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA)
+        
+        # VACINA: KEYS EXCLUSIVAS AQUI! (Isto conserta o erro)
+        with c_f1: p_filtro = st.selectbox("Período", ["Todos"] + PERIODOS, key="avs_periodo")
+        with c_f2: a_filtro = st.selectbox("Área", ["Todas"] + AREAS, key="avs_area")
+        with c_f3: t_filtro = st.selectbox("Turma", ["Todas"] + TURMAS_LISTA, key="avs_turma")
         
         df_filtrado = df_avs.copy()
         if p_filtro != "Todos" and not df_filtrado.empty: df_filtrado = df_filtrado[df_filtrado['periodo'] == p_filtro]
@@ -614,9 +618,9 @@ if st.session_state.eh_admin:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
                 c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
-                with c_est1: busca_aluno = st.text_input("Buscar por nome...")
-                with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
-                with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente com erros/brancos")
+                with c_est1: busca_aluno = st.text_input("Buscar por nome...", key="busca_nome_avs")
+                with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="avs_desempenho")
+                with c_est3: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente com erros/brancos", key="avs_check_erros")
 
                 resumo_est = df_filtrado.groupby(['nome', 'turma']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
                 resumo_est['Nota'] = (resumo_est['Acertos'] / resumo_est['Total']) * 10
@@ -685,7 +689,7 @@ if st.session_state.eh_admin:
             if df_filtrado.empty: st.info("Sem dados.")
             else:
                 st.subheader("Desempenho Médio")
-                tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
+                tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True, key="avs_agrupar_grafico")
                 col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
                 resumo_graf = df_filtrado.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
@@ -736,7 +740,7 @@ if st.session_state.eh_admin:
                 col_q1.subheader("📌 3 Questões mais erradas por Turma/Disciplina")
                 
                 if FPDF is not None:
-                    if col_q2.button("📄 Exportar Relatório PDF", type="primary"):
+                    if col_q2.button("📄 Exportar Relatório PDF", type="primary", key="btn_pdf_avs"):
                         pdf = FPDF()
                         pdf.add_page(); pdf.set_font("Arial", "B", 16)
                         pdf.cell(0, 10, "Relatorio de Questoes Criticas", 0, 1, "C")
@@ -759,7 +763,7 @@ if st.session_state.eh_admin:
                             pdf.output(tmp.name)
                             with open(tmp.name, "rb") as f: pdf_bytes = f.read()
                         
-                        st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf")
+                        st.download_button("⬇️ Baixar PDF", data=pdf_bytes, file_name="questoes_criticas.pdf", mime="application/pdf", key="dl_pdf_avs")
                 else:
                     col_q2.warning("Módulo FPDF não instalado no Streamlit.")
 
@@ -808,8 +812,8 @@ if st.session_state.eh_admin:
             with c_up2: a_up = st.selectbox("Área:", AREAS, key="aup")
             with c_up3: t_up = st.selectbox("Turma:", TURMAS_LISTA, key="tup")
             
-            arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"])
-            if st.button("PROCESSAR E SALVAR", type="primary") and arquivo_avs:
+            arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
+            if st.button("PROCESSAR E SALVAR", type="primary", key="btn_salvar_avs") and arquivo_avs:
                 sucesso, msg = importar_csv_avs_nuvem(arquivo_avs, p_up, a_up, t_up)
                 if sucesso: st.success(msg); st.rerun()
                 else: st.error(msg)
@@ -821,9 +825,9 @@ if st.session_state.eh_admin:
             if not df_avs.empty:
                 blocos = df_avs[['periodo', 'area', 'turma']].drop_duplicates()
                 lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
-                bloco_del = st.selectbox("Blocos importados:", lista_blocos)
+                bloco_del = st.selectbox("Blocos importados:", lista_blocos, key="bloco_excluir_avs")
                 
-                if st.button("EXCLUIR BLOCO SELECIONADO"):
+                if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs"):
                     p_del, a_del, t_del = bloco_del.split(" | ")
                     linhas_apagadas = excluir_dados_avs(p_del, a_del, t_del)
                     st.success(f"{linhas_apagadas} registros excluídos com sucesso!"); st.rerun()
