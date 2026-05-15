@@ -164,7 +164,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF (À PROVA DE ERROS)
+# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -256,10 +256,10 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
                 if col > 7: col, y = 0, y+15
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
     
-    # Proteção de conversão de Bytes (Resolve o AttributeError do fpdf2)
     out = pdf.output(dest='S')
     return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
+# Atualizado para a nova estrutura de PDF: Turma -> Período -> Disciplina -> Top 3
 def gerar_pdf_relatorio_critico(df_critico):
     if not FPDF: return None
     pdf = FPDF()
@@ -275,22 +275,27 @@ def gerar_pdf_relatorio_critico(df_critico):
     for t in sorted(df_critico['turma'].unique()):
         pdf.set_fill_color(230, 230, 230)
         pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, f" TURMA: {t}", 0, 1, fill=True)
+        pdf.cell(0, 10, f" Turma: {t}", 0, 1, fill=True)
         df_t = df_critico[df_critico['turma'] == t]
         
-        for d in sorted(df_t['disciplina'].unique()):
+        for p in sorted(df_t['periodo'].unique()):
             pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 8, f"   {d}", 0, 1)
-            df_d = df_t[df_t['disciplina'] == d]
-            
-            pdf.set_font("Arial", "", 11)
-            for _, r in df_d.iterrows():
-                if pdf.get_y() > 270: pdf.add_page()
-                pdf.cell(10)
-                pdf.cell(0, 6, f"Questao {r['questao']} - Taxa de Erro: {r['Taxa de Erro (%)']:.1f}%", 0, 1)
+            pdf.cell(0, 8, f"   Periodo: {p}", 0, 1)
+            df_p = df_t[df_t['periodo'] == p]
+
+            for d in sorted(df_p['disciplina'].unique()):
+                pdf.set_font("Arial", "B", 11)
+                pdf.cell(0, 6, f"      Disciplinas: {d}", 0, 1)
+                df_d = df_p[df_p['disciplina'] == d]
+                
+                pdf.set_font("Arial", "", 10)
+                for _, r in df_d.iterrows():
+                    if pdf.get_y() > 270: pdf.add_page()
+                    pdf.cell(15)
+                    pdf.cell(0, 5, f"- Questao {r['questao']}: {r['Taxa de Erro (%)']:.1f}% de erro", 0, 1)
+                pdf.ln(2)
         pdf.ln(5)
         
-    # Proteção de conversão de Bytes (Resolve o AttributeError do fpdf2)
     out = pdf.output(dest='S')
     return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
@@ -673,23 +678,46 @@ with tabs[5]:
     with stabs[4]:
         if not dff.empty:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
-            st.write("Visão direta das **3 questões com maior índice de erro** em cada disciplina. Essencial para revisões pedagógicas direcionadas.")
+            st.write("Visão direta das **3 questões com maior índice de erro**. Essencial para revisões pedagógicas direcionadas.")
             
-            q_err = dff.groupby(['turma', 'disciplina', 'questao']).agg(
+            # --- NOVA ESTRUTURA HIERÁRQUICA: TURMA -> PERÍODO -> DISCIPLINA ---
+            q_err = dff.groupby(['turma', 'periodo', 'disciplina', 'questao']).agg(
                 Total=('questao', 'count'),
                 Acertos=('acerto', 'sum')
             ).reset_index()
             q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
             
-            q_err = q_err.sort_values(['turma', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, False])
-            q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].groupby(['turma', 'disciplina']).head(3)
+            # Ordenar para trazer as mais erradas primeiro
+            q_err = q_err.sort_values(['turma', 'periodo', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, True, False])
+            
+            # Pegar as Top 3 maiores que 0% de erro
+            q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].groupby(['turma', 'periodo', 'disciplina']).head(3)
             
             if not q_err_top3.empty:
                 pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
                 if pdf_data:
                     st.download_button("📥 BAIXAR RELATÓRIO EM PDF", data=pdf_data, file_name="Questoes_Criticas.pdf", mime="application/pdf")
                 
-                st.dataframe(q_err_top3[['turma', 'disciplina', 'questao', 'Taxa de Erro (%)']].style.format({'Taxa de Erro (%)': '{:.1f}%'}), use_container_width=True, hide_index=True)
+                st.markdown("---")
+                
+                # Renderização Visual Hierárquica na Interface
+                for t in sorted(q_err_top3['turma'].unique()):
+                    st.markdown(f"### 🏫 Turma: **{t}**")
+                    df_t = q_err_top3[q_err_top3['turma'] == t]
+                    
+                    for p in sorted(df_t['periodo'].unique()):
+                        st.markdown(f"#### 📅 Período: **{p}**")
+                        df_p = df_t[df_t['periodo'] == p]
+                        
+                        st.markdown("**Disciplinas:**")
+                        for d in sorted(df_p['disciplina'].unique()):
+                            df_d = df_p[df_p['disciplina'] == d]
+                            
+                            st.markdown(f"- **{d}**")
+                            for _, r in df_d.iterrows():
+                                st.write(f"  - Questão {r['questao']} (Erro: **{r['Taxa de Erro (%)']:.1f}%**)")
+                        st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("---")
             else:
                 st.success("Não foram detectados erros de marcação para estes filtros!")
             
