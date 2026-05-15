@@ -70,7 +70,8 @@ def renderizar_logo_central():
         try:
             with open("logo.png", "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode()
-            st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="120"></div>', unsafe_allow_html=True)
+            # Ajustado para um tamanho um pouco maior e mais imponente (170px)
+            st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
         except: pass
 
 # ------------------------------------------------------------
@@ -164,7 +165,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO
+# 5. LÓGICA DE NEGÓCIO E GERADORES DE PDF
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -257,9 +258,37 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
     return pdf.output(dest='S').encode('latin-1')
 
-# ------------------------------------------------------------
-# 7. COMPONENTE CÂMARA (NOVO DESIGN COM CONTROLO DE LARGURA)
-# ------------------------------------------------------------
+def gerar_pdf_relatorio_critico(df_critico):
+    if not FPDF: return None
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_fill_color(10, 31, 53)
+    pdf.rect(0, 0, 210, 35, 'F')
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(0, 15, "QUESTOES CRITICAS (TOP 3 ERROS)", 0, 1, "C")
+    pdf.ln(20)
+    pdf.set_text_color(0, 0, 0)
+    
+    for t in sorted(df_critico['turma'].unique()):
+        pdf.set_fill_color(230, 230, 230)
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, f" TURMA: {t}", 0, 1, fill=True)
+        df_t = df_critico[df_critico['turma'] == t]
+        
+        for d in sorted(df_t['disciplina'].unique()):
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, f"   {d}", 0, 1)
+            df_d = df_t[df_t['disciplina'] == d]
+            
+            pdf.set_font("Arial", "", 11)
+            for _, r in df_d.iterrows():
+                if pdf.get_y() > 270: pdf.add_page()
+                pdf.cell(10)
+                pdf.cell(0, 6, f"Questao {r['questao']} - Taxa de Erro: {r['Taxa de Erro (%)']:.1f}%", 0, 1)
+        pdf.ln(5)
+    return pdf.output(dest='S').encode('latin-1')
+
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
@@ -325,7 +354,6 @@ except Exception:
 
 df_alunos = carregar_alunos()
 
-# --- HEADER COM LOGO E TÍTULO CENTRALIZADOS ---
 c_out1, c_out2 = st.columns([10, 1])
 with c_out2:
     if st.button("SAIR"): cookies["auth_token"] = ""; cookies.save(); st.rerun()
@@ -495,8 +523,8 @@ with tabs[5]:
     if af != "Todas": dff = dff[dff.area==af]
     if tf != "Todas": dff = dff[dff.turma==tf]
     
-    # Adicionada nova aba: 🚫 Faltosos
-    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões"]
+    # Adicionada nova aba: Questões Críticas
+    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
     if eh_admin: sub_da.append("⚙️ Gerenciar Dados")
     stabs = st.tabs(sub_da)
     
@@ -510,7 +538,7 @@ with tabs[5]:
                 texto_nome = r['nome'] if rev else "OCULTO"
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA: {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
     
-    # Processamento compartilhado para Faltas e Erros (Usado na aba 1 e 2)
+    # Processamento compartilhado para Faltas e Erros
     alertas_estudante = {}
     if not dff.empty:
         area_stats = dff.groupby(['nome', 'turma', 'periodo', 'area']).agg(
@@ -606,7 +634,6 @@ with tabs[5]:
                 st.error(f"⚠️ **REGISTO DE FALTAS ({len(estudantes_faltosos)})**")
                 st.write("Estudantes que deixaram 100% do gabarito em branco em uma ou mais áreas específicas:")
                 
-                # Exibindo os faltosos em 3 colunas para um layout agradável
                 cols_f = st.columns(3)
                 for i, r_f in enumerate(estudantes_faltosos.to_dict('records')):
                     cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) <br> <span style='color:#ef4444;'>Falta em: **{r_f['area']}** ({r_f['periodo']})</span>", unsafe_allow_html=True)
@@ -641,18 +668,31 @@ with tabs[5]:
 
     with stabs[4]:
         if not dff.empty:
-            st.subheader("❌ Questões com Maior Índice de Erro")
-            st.write("Visão detalhada das questões onde as turmas apresentaram maior dificuldade (taxa de erro > 50%).")
+            st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
+            st.write("Visão direta das **3 questões com maior índice de erro** em cada disciplina. Essencial para revisões pedagógicas direcionadas.")
             
+            # Lógica para pegar exatamente as 3 piores questões por matéria de cada turma
             q_err = dff.groupby(['turma', 'disciplina', 'questao']).agg(
                 Total=('questao', 'count'),
                 Acertos=('acerto', 'sum')
             ).reset_index()
             q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
-            q_err = q_err.sort_values('Taxa de Erro (%)', ascending=False)
-            q_err = q_err[q_err['Taxa de Erro (%)'] > 50] 
             
-            st.dataframe(q_err[['turma', 'disciplina', 'questao', 'Taxa de Erro (%)']].style.format({'Taxa de Erro (%)': '{:.1f}%'}), use_container_width=True, hide_index=True)
+            # Ordenando as que têm as piores taxas de erro por disciplina de cada turma
+            q_err = q_err.sort_values(['turma', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, False])
+            
+            # Puxa APENAS as 3 primeiras de cada grupo que tenham mais de 0% de erro
+            q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].groupby(['turma', 'disciplina']).head(3)
+            
+            if not q_err_top3.empty:
+                # Gerador em Botão Simples do PDF
+                pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
+                if pdf_data:
+                    st.download_button("📥 BAIXAR RELATÓRIO EM PDF", data=pdf_data, file_name="Questoes_Criticas.pdf", mime="application/pdf")
+                
+                st.dataframe(q_err_top3[['turma', 'disciplina', 'questao', 'Taxa de Erro (%)']].style.format({'Taxa de Erro (%)': '{:.1f}%'}), use_container_width=True, hide_index=True)
+            else:
+                st.success("Não foram detectados erros de marcação para estes filtros!")
             
     if eh_admin:
         with stabs[5]:
