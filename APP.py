@@ -23,16 +23,15 @@ except ImportError:
     FPDF = None
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL
+# 1. CONFIGURAÇÃO INICIAL E COOKIES
 # ------------------------------------------------------------
 st.set_page_config(page_title="Jansen Veloso - Gestão Escolar", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
-if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # ------------------------------------------------------------
-# 2. FUNÇÕES DE SUPORTE (TEMPO E E-MAIL)
+# 2. SUPORTE (TEMPO E E-MAIL)
 # ------------------------------------------------------------
 def obter_hora_atual(): return datetime.utcnow() - timedelta(hours=3)
 
@@ -65,21 +64,20 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     threading.Thread(target=enviar).start()
 
 # ------------------------------------------------------------
-# 3. CSS (FUNDO ATRAENTE E FILTROS DESTACADOS)
+# 3. CSS (FUNDO PREMIUM E FILTROS DESTACADOS)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
     :root { --primary: #0a1f35; --accent: #ff7b00; }
     
-    /* Fundo Gradiente Suave e Moderno */
     .stApp { background: linear-gradient(135deg, #f0f4f8 0%, #d9e2ec 100%); }
     #MainMenu, footer, header {visibility: hidden;}
     
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: 3.8rem; color: var(--primary); text-align: center; text-transform: uppercase; letter-spacing: -2px; margin: 0;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.5rem; color: #64748b; text-align: center; font-weight: 700; margin-bottom: 2rem;}
     
-    /* FILTROS COM DESTAQUE MÁXIMO E FONTE FORTE */
+    /* FILTROS DESTACADOS */
     [data-baseweb="select"] > div { border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; background: white !important;}
     [data-baseweb="select"] span { color: #0a1f35 !important; font-weight: 900 !important; font-size: 1.4rem !important; }
     
@@ -90,6 +88,8 @@ st.markdown("""
     .top7-card { background: white; border-left: 12px solid var(--accent); padding: 2rem; border-radius: 15px; margin-bottom: 1rem; text-align: center; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
     .top7-name { font-size: 3.5rem; font-weight: 900; color: var(--primary); text-transform: uppercase; }
     .top7-name-hidden { font-size: 3.5rem; font-weight: 900; color: #cbd5e1; filter: blur(15px); }
+    
+    .card-panel { background: white; border-radius: 20px; padding: 2rem; border: 2px solid #e2e8f0; margin-bottom: 1rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,12 +124,12 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO (VETORIZADA - ALTA PERFORMANCE)
+# 5. LÓGICA DE NEGÓCIO (PERFORMANCE)
 # ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def carregar_alunos():
     try:
-        conn = conectar_bd(); df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
+        conn = conectar_bd(); df = pd.read_sql("SELECT * FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 def importar_csv_alunos(file):
@@ -170,7 +170,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida):
     except: return False
 
 # ------------------------------------------------------------
-# 6. DESEMPENHO ACADÉMICO E PDF
+# 6. DESEMPENHO ACADÊMICO E PDF
 # ------------------------------------------------------------
 def importar_csv_desempenho(file, periodo, area, turma):
     temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
@@ -190,7 +190,7 @@ def importar_csv_desempenho(file, periodo, area, turma):
             dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"{len(dados_l)} registos salvos."
+    conn.commit(); conn.close(); st.cache_data.clear(); return True, f"{len(dados_l)} registros salvos."
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     if not FPDF: return None
@@ -198,9 +198,8 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_font("Arial", "B", 18); pdf.set_text_color(255,255,255); pdf.cell(0, 15, "BOLETIM DE DESEMPENHO", 0, 1, "C")
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MEDIA GERAL: {nota_g:.2f}", 0, 1)
+    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA GERAL: {nota_g:.2f}", 0, 1)
     
-    # LEGENDA COM A COR ROXA PARA DUPLA
     pdf.set_font("Arial", "B", 8)
     pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1)
     pdf.ln(2)
@@ -222,11 +221,11 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     return pdf.output(dest='S').encode('latin-1')
 
 # ------------------------------------------------------------
-# 7. COMPONENTE CÂMARA QR CODE
+# 7. COMPONENTE CÂMERA
 # ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
-    <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMARA {label}</button>
+    <div style="text-align:center;"><button id="start-{cam_id}" style="padding:15px; background:#10b981; color:white; border:none; border-radius:10px; width:100%; font-weight:bold; cursor:pointer;">📷 LIGAR CÂMERA {label}</button>
     <div id="reader-{cam_id}" style="width:100%; margin-top:10px; display:none; border-radius:10px; overflow:hidden;"></div></div>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
@@ -244,9 +243,10 @@ def gerar_camera(label, btn_label, cam_id):
     """, height=350)
 
 # ------------------------------------------------------------
-# 8. AUTH E DASHBOARD
+# 8. AUTH E DASHBOARD (FIXED KEYERROR)
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
+
 if not auth_cookie:
     st.markdown('<div style="max-width:400px; margin: 10vh auto; padding: 3rem; background:white; border-radius:20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align:center;">', unsafe_allow_html=True)
     st.image("logo.png", width=120) if os.path.exists("logo.png") else None
@@ -258,7 +258,12 @@ if not auth_cookie:
         else: st.error("Incorreta")
     st.stop()
 
-user = json.loads(base64.b64decode(auth_cookie).decode()); eh_admin = user['admin']
+try:
+    user = json.loads(base64.b64decode(auth_cookie).decode())
+    eh_admin = user.get('admin', user.get('eh_admin', False)) 
+except Exception:
+    cookies["auth_token"] = ""; cookies.save(); st.rerun()
+
 df_alunos = carregar_alunos()
 
 # HEADER
@@ -272,8 +277,10 @@ with c_s:
 
 # MÉTRICAS
 hoje = obter_hora_atual().strftime("%Y-%m-%d")
-conn = conectar_bd(); cur = conn.cursor(); cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (hoje,))
-pres_hoje = cur.fetchone()[0]; conn.close()
+try:
+    conn = conectar_bd(); cur = conn.cursor(); cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (hoje,))
+    pres_hoje = cur.fetchone()[0]; conn.close()
+except: pres_hoje = 0
 
 m1, m2, m3, m4 = st.columns(4)
 m1.markdown(f'<div class="metric-card"><span class="m-val">{len(df_alunos)}</span><span class="m-lab">Total Alunos</span></div>', unsafe_allow_html=True)
@@ -283,12 +290,11 @@ m4.markdown(f'<div class="metric-card"><span class="m-val">--</span><span class=
 
 tabs = st.tabs(["📝 Registo", "📊 Gestão", "🚨 Alertas", "📈 Histórico", "⚙️ Manutenção", "📑 Desempenho Académico"])
 
-# --- ABA 0: REGISTO (INCLUI JUSTIFICAR FALTAS) ---
+# --- ABA 0: REGISTO ---
 with tabs[0]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     h_lim_e = st.time_input("Horário Limite Entrada", datetime.strptime("07:30", "%H:%M").time())
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 SAÍDA ANTECIPADA", "📝 JUSTIFICAR FALTAS"])
-    
     with t_en:
         gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
         with st.form("f_en", clear_on_submit=True):
@@ -297,7 +303,6 @@ with tabs[0]:
                 res = registrar_presenca(cod_en.upper(), hoje, h_lim_e)
                 if res == "erro_cod": st.error("Código não encontrado.")
                 elif res: st.success(f"Bem-vindo, {res}!")
-                
     with t_sa:
         gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
         with st.form("f_sa", clear_on_submit=True):
@@ -307,37 +312,18 @@ with tabs[0]:
                 res = registrar_saida(cod_sa.upper(), mot, True, hoje, obter_hora_atual().strftime("%H:%M:%S"))
                 if res: st.success(f"Saída de {res} autorizada!"); st.rerun()
                 else: st.error("Erro: Aluno sem entrada hoje.")
-                
     with t_jf:
-        st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", obter_hora_atual().date())
-        conn = conectar_bd()
-        df_faltas = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[d_just])
-        conn.close()
-        
+        df_faltas = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conectar_bd(), params=[d_just])
         if not df_faltas.empty:
             with st.form("form_justificar"):
                 al_falta_sel = st.selectbox("Selecione o Estudante Faltoso", [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_faltas.iterrows()])
-                motivo_falta = st.selectbox("Justificativa", ["Atestado Médico", "Problemas Familiares", "Problemas de Transporte", "Outros"])
+                motivo_falta = st.selectbox("Justificativa", ["Atestado Médico", "Problemas Familiares", "Transporte", "Outros"])
                 if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
-                    cod_f = al_falta_sel.split(" - ")[0]
                     conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just))
-                    conn.commit(); conn.close()
-                    st.success("Justificativa salva com sucesso!")
-                    st.rerun()
-                    
-            st.markdown("---")
-            st.write("**Faltas já justificadas nesta data:**")
-            faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
-            if not faltas_justificadas.empty:
-                for _, f in faltas_justificadas.iterrows():
-                    st.info(f"👤 {f['nome']} - Justificativa: **{f['motivo_saida']}**")
-            else:
-                st.write("Nenhuma falta justificada ainda.")
-        else:
-            st.success("Nenhuma falta registada para esta data!")
-
+                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, al_falta_sel.split(" - ")[0], d_just))
+                    conn.commit(); conn.close(); st.success("Salvo!"); st.rerun()
+        else: st.success("Sem faltas nesta data.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- ABA 4: MANUTENÇÃO (ADMIN) ---
@@ -354,7 +340,6 @@ with tabs[4]:
                 cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
                 conn.commit(); conn.close(); st.cache_data.clear(); st.success("Atualizado!")
         with col2:
-            st.write("Adição Manual")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
             m_tur = st.text_input("Turma")
@@ -365,118 +350,77 @@ with tabs[4]:
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
         if st.button("PROCESSAR LISTA") and up_al:
-            if importar_csv_alunos(up_al): st.success("Base de Alunos Sincronizada!"); st.rerun()
+            if importar_csv_alunos(up_al): st.success("Sincronizado!"); st.rerun()
 
 # --- ABA 5: DESEMPENHO ACADÉMICO ---
 with tabs[5]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Académico")
     df_da = pd.read_sql("SELECT * FROM avaliacoes_avs", conectar_bd())
-    
-    # Filtros com Destaque
     cf1, cf2, cf3 = st.columns(3)
     pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"])
     af = cf2.selectbox("Área", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
     tf = cf3.selectbox("Turma", ["Todas"] + sorted(df_alunos.turma.unique()))
-    
     dff = df_da.copy()
     if pf != "Todos": dff = dff[dff.periodo==pf]
     if af != "Todas": dff = dff[dff.area==af]
     if tf != "Todas": dff = dff[dff.turma==tf]
-    
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "📈 Gráficos", "📋 Questões"]
     if eh_admin: sub_da.append("⚙️ Gerenciar Dados")
     stabs = st.tabs(sub_da)
-    
     with stabs[0]:
         if not dff.empty:
             top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
             for idx, r in enumerate(top7.to_dict('records')):
                 rev = st.toggle("Revelar", key=f"rev_{idx}")
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">⭐ {idx+1}º LUGAR</div><div class="{"top7-name" if rev else "top7-name-hidden"}">{r["nome"] if rev else "OCULTO"}</div><div class="top7-details">NOTA: {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
-    
     with stabs[1]:
         if not dff.empty:
-            c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
-            with c_est1: bus_al = st.text_input("Buscar Nome:")
-            with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
-            with c_est3: 
-                st.markdown("<br>", unsafe_allow_html=True)
-                filtro_erros = st.checkbox("Somente c/ erros")
-
+            c1, c2, c3 = st.columns([2,1,1])
+            bus_al = c1.text_input("Buscar Nome:")
+            fil_d = c2.selectbox("Desempenho", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
+            fil_e = c3.checkbox("Somente c/ erros")
             res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
-            
-            # Análise de erros para o filtro
-            erros_df = dff[dff['resposta'].isin(['BRANCO', 'DUPLA'])]
-            if not erros_df.empty: status_stats = erros_df.groupby('nome').size().reset_index(name='qtd_erros')
-            else: status_stats = pd.DataFrame(columns=['nome', 'qtd_erros'])
-            res_al = pd.merge(res_al, status_stats, on='nome', how='left').fillna({'qtd_erros': 0})
-            
+            # Filtro de erros
+            erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
             if bus_al: res_al = res_al[res_al.nome.str.contains(bus_al.upper())]
-            if filtro_erros: res_al = res_al[res_al['qtd_erros'] > 0]
-            if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al['acerto']*10 < 6.0]
-            elif filtro_desempenho == "BOM": res_al = res_al[(res_al['acerto']*10 >= 6.0) & (res_al['acerto']*10 <= 7.5)]
-            elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al['acerto']*10 > 7.5]
-
-            # MOSTRAR TODOS se houver algum filtro aplicado
-            mostrar_todos = (tf != "Todas") or bus_al or filtro_erros or (filtro_desempenho != "Todos")
-            lista_ex = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
+            if fil_e: res_al = res_al[res_al.nome.isin(erros_n)]
+            if fil_d == "INSUFICIENTE": res_al = res_al[res_al.acerto*10 < 6.0]
+            elif fil_d == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
+            elif fil_d == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
             
-            if not mostrar_todos: st.info("A exibir os 20 primeiros. Selecione uma turma ou use os filtros acima para ver a lista completa.")
-            else: st.info(f"Encontrados: {len(res_al)} estudantes.")
-            
-            for a in lista_ex:
+            mostrar_todos = (tf != "Todas") or bus_al or fil_e or (fil_d != "Todos")
+            lista = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
+            for a in lista:
                 with st.expander(f"👤 {a['nome']} | Nota: {a['acerto']*10:.2f}"):
                     if st.button("GERAR PDF", key=f"p_{a['nome']}"):
                         b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
-                        
-                    st.markdown("#### 📋 Mapa de Questões")
-                    df_bol_ind = df_da[df_da.nome==a['nome']]
-                    if pf != "Todos": df_bol_ind = df_bol_ind[df_bol_ind.periodo==pf]
-                    if af != "Todas": df_bol_ind = df_bol_ind[df_bol_ind.area==af]
-                    
-                    # AGRUPAMENTO POR PERÍODO E DISCIPLINA NO MAPA VISUAL
-                    for p_map in sorted(df_bol_ind['periodo'].unique()):
-                        for disc in sorted(df_bol_ind[df_bol_ind['periodo'] == p_map]['disciplina'].unique()):
-                            st.markdown(f"**{disc.upper()} - {p_map}**")
-                            q_df = df_bol_ind[(df_bol_ind['periodo'] == p_map) & (df_bol_ind['disciplina'] == disc)].sort_values("questao")
-                            grid_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
+                    # Mapa de Questões Visual
+                    df_ind = df_da[df_da.nome==a['nome']]
+                    for p_m in sorted(df_ind.periodo.unique()):
+                        for d_m in sorted(df_ind[df_ind.periodo==p_m].disciplina.unique()):
+                            st.markdown(f"**{d_m} - {p_m}**")
+                            q_df = df_ind[(df_ind.periodo==p_m) & (df_ind.disciplina==d_m)].sort_values("questao")
+                            grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                             for _, q in q_df.iterrows():
-                                cor = "#10b981" if q['acerto'] == 1 else ("#f59e0b" if q['resposta'] == 'BRANCO' else ("#8b5cf6" if q['resposta'] == 'DUPLA' else "#ef4444"))
-                                grid_html += f"""
-                                <div style="background-color: {cor}; color: white; padding: 8px; border-radius: 6px; width: 80px; text-align: center; font-size: 12px; font-weight: bold;">
-                                    Q{q['questao']}<br>R:{q['resposta']} G:{q['gabarito']}
-                                </div>"""
-                            grid_html += '</div>'
-                            st.markdown(grid_html, unsafe_allow_html=True)
-                            st.markdown("<br>", unsafe_allow_html=True)
-
+                                cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
+                                grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
+                            st.markdown(grid+'</div><br>', unsafe_allow_html=True)
     with stabs[2]:
         if not dff.empty:
-            tipo_grafico = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
-            col_agrup = 'area' if tipo_grafico == "Área" else 'disciplina'
-            
-            resumo_graf = dff.groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-            resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
-            
-            # APLICANDO AS ABREVIAÇÕES (OU NÃO) CONFORME SOLICITADO
-            if tipo_grafico == "Área":
-                resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() # SEM ABREVIAR ÁREA
-            else:
-                resumo_graf['Abreviacao'] = resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
-            
-            resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
-            resumo_graf = resumo_graf.sort_values('Nota')
-            
-            fig_g = px.bar(resumo_graf, x='Abreviacao', y='Nota', color='Abreviacao', text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False})
-            fig_g.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-            fig_g.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
-            st.plotly_chart(fig_g, use_container_width=True)
-
+            tipo_g = st.radio("Agrupar por:", ["Área", "Disciplina"], horizontal=True)
+            res_g = dff.groupby('area' if tipo_g=="Área" else 'disciplina').acerto.mean().reset_index()
+            res_g['Nota'] = res_g.acerto * 10
+            if tipo_g == "Disciplina":
+                res_g['Eixo'] = res_g.disciplina.apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:3].upper()))
+            else: res_g['Eixo'] = res_g.area.str.upper()
+            fig = px.bar(res_g, x='Eixo', y='Nota', text='Nota', color='Eixo')
+            fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+            st.plotly_chart(fig, use_container_width=True)
     if eh_admin:
         with stabs[4]:
-            up_da = st.file_uploader("Upload de Notas (CSV)", type="csv")
+            up_da = st.file_uploader("Upload Notas (CSV)", type="csv")
             if st.button("SALVAR NOTAS") and up_da:
                 s, m = importar_csv_desempenho(up_da, pf, af, tf)
                 if s: st.success(m); st.rerun()
