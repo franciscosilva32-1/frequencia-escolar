@@ -172,17 +172,15 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(periodo, area, turma)")
-        conn.commit()
-    except Exception:
-        if 'conn' in locals(): conn.rollback()
-    finally:
-        if 'conn' in locals(): conn.close()
+        conn.commit(); conn.close()
+    except: pass
 
 inicializar_tabelas()
 
 # ------------------------------------------------------------
 # 5. LÓGICA DE NEGÓCIO, CACHE E GERADORES DE PDF
 # ------------------------------------------------------------
+
 @st.cache_data(ttl=300)
 def carregar_alunos():
     try:
@@ -200,29 +198,15 @@ def carregar_avaliacoes():
         return pd.DataFrame()
 
 def importar_csv_alunos(file):
-    try:
-        # Lendo e traduzindo o CSV independentemente se veio com acentos do Excel ou não
-        file_bytes = file.read()
-        try:
-            conteudo_str = file_bytes.decode('utf-8-sig')
-        except UnicodeDecodeError:
-            conteudo_str = file_bytes.decode('latin1')
-
-        df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
-        def norm(c): return ''.join(x for x in unicodedata.normalize('NFD', str(c)) if unicodedata.category(x) != 'Mn').strip().upper()
-        df.columns = [norm(col) for col in df.columns]
-        dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
-        
-        conn = conectar_bd(); cur = conn.cursor()
-        execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
-        conn.commit()
-        carregar_alunos.clear() 
-        return True
-    except Exception as e:
-        if 'conn' in locals(): conn.rollback()
-        return False
-    finally:
-        if 'conn' in locals(): conn.close()
+    df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
+    def norm(c): return ''.join(x for x in unicodedata.normalize('NFD', str(c)) if unicodedata.category(x) != 'Mn').strip().upper()
+    df.columns = [norm(col) for col in df.columns]
+    dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
+    conn = conectar_bd(); cur = conn.cursor()
+    execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
+    conn.commit(); conn.close()
+    carregar_alunos.clear() 
+    return True
 
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual()
@@ -235,15 +219,10 @@ def registrar_presenca(cod, data, h_limite):
         if not res: conn.close(); return "erro_cod"
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
-        conn.commit()
         if res[1]: 
             disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
-        return res[0]
-    except Exception:
-        if 'conn' in locals(): conn.rollback()
-        return False
-    finally:
-        if 'conn' in locals(): conn.close()
+        conn.commit(); conn.close(); return res[0]
+    except: return False
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     try:
@@ -253,60 +232,35 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
         if not res: conn.close(); return False
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
-            conn.commit()
             if res[1]: 
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
-            return res[0]
-        return False
-    except Exception:
-        if 'conn' in locals(): conn.rollback()
-        return False
-    finally:
-        if 'conn' in locals(): conn.close()
+            conn.commit(); conn.close(); return res[0]
+        conn.close(); return False
+    except: return False
 
 def importar_csv_desempenho(file, periodo, area, turma):
-    try:
-        # Lendo e traduzindo o CSV independentemente se veio com acentos do Excel ou não
-        file_bytes = file.read()
-        try:
-            conteudo_str = file_bytes.decode('utf-8-sig')
-        except UnicodeDecodeError:
-            conteudo_str = file_bytes.decode('latin1')
-
-        temp_df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
-        temp_df.columns = [str(c).strip() for c in temp_df.columns]
-        
-        col_qs = [c for c in temp_df.columns if re.search(r'^Q\s*\d+\s*Options', c, re.IGNORECASE)]
-        idx_not = next((i for i, c in enumerate(temp_df.columns) if 'Not attempted' in c), -1)
-        idx_f = temp_df.columns.get_loc(col_qs[0])
-        discs = [str(c).strip().upper() for c in temp_df.columns[idx_not+1:idx_f] if 'AV' not in str(c).upper()] if idx_not != -1 else [area.upper()]
-        q_p_d = len(col_qs) // len(discs); dados_l = []
-        for row in temp_df.to_dict('records'):
-            n = str(row.get('Nome', '')).strip()
-            if not n or n.lower() == 'nan': continue
-            for i, cq in enumerate(col_qs):
-                d_i = min(i // q_p_d, len(discs)-1); rb = row.get(cq)
-                r = 'BRANCO' if pd.isna(rb) or str(rb).strip() == '' else (str(rb).strip().upper() if len(str(rb).strip())==1 else 'DUPLA')
-                g = str(row.get(cq.replace('Options', 'Key'), '')).strip().upper()
-                dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
-        
-        conn = conectar_bd()
-        cur = conn.cursor()
-        try:
-            execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-            conn.commit()
-            carregar_avaliacoes.clear() 
-            return True, f"{len(dados_l)} registros processados e salvos com sucesso."
-        except Exception as db_err:
-            conn.rollback()
-            return False, f"O formato do banco rejeitou a operação (InFailedSqlTransaction). Verifique se o CSV está correto. Detalhe: {db_err}"
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        return False, f"Erro ao ler ou interpretar a planilha: {e}"
+    temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
+    temp_df.columns = [str(c).strip() for c in temp_df.columns]
+    col_qs = [c for c in temp_df.columns if re.search(r'^Q\s*\d+\s*Options', c, re.IGNORECASE)]
+    idx_not = next((i for i, c in enumerate(temp_df.columns) if 'Not attempted' in c), -1)
+    idx_f = temp_df.columns.get_loc(col_qs[0])
+    discs = [str(c).strip().upper() for c in temp_df.columns[idx_not+1:idx_f] if 'AV' not in str(c).upper()] if idx_not != -1 else [area.upper()]
+    q_p_d = len(col_qs) // len(discs); dados_l = []
+    for row in temp_df.to_dict('records'):
+        n = str(row.get('Nome', '')).strip()
+        if not n or n.lower() == 'nan': continue
+        for i, cq in enumerate(col_qs):
+            d_i = min(i // q_p_d, len(discs)-1); rb = row.get(cq)
+            r = 'BRANCO' if pd.isna(rb) or str(rb).strip() == '' else (str(rb).strip().upper() if len(str(rb).strip())==1 else 'DUPLA')
+            g = str(row.get(cq.replace('Options', 'Key'), '')).strip().upper()
+            dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
+    conn = conectar_bd(); cur = conn.cursor()
+    execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
+    conn.commit(); conn.close()
+    carregar_avaliacoes.clear() 
+    return True, f"{len(dados_l)} registros salvos."
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     if not FPDF: return None
@@ -314,7 +268,7 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
     pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_font("Arial", "B", 18); pdf.set_text_color(255,255,255); pdf.cell(0, 15, "BOLETIM DE DESEMPENHO", 0, 1, "C")
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA GERAL: {nota_g:.2f}", 0, 1)
+    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA: {nota_g:.2f}", 0, 1)
     
     pdf.set_font("Arial", "B", 8)
     pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1)
@@ -464,7 +418,6 @@ else:
     media_geral_freq = "0%"
 
 # --- CÁLCULO DA MÉDIA ACADÊMICA OTIMIZADO ---
-# Em vez de fazer uma consulta lenta no banco a cada clique, pegamos a "carona" no cache ultra-rápido.
 df_avaliacoes_cache = carregar_avaliacoes()
 if not df_avaliacoes_cache.empty:
     media_geral_acad = f"{df_avaliacoes_cache['acerto'].mean() * 10:.1f}"
@@ -482,7 +435,7 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-# --- DEFINIÇÃO DINÂMICA DAS ABAS (OCULTAR MANUTENÇÃO PARA OPERADORES) ---
+# --- DEFINIÇÃO DINÂMICA DAS ABAS ---
 abas_do_sistema = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
 if eh_admin:
     abas_do_sistema.append("⚙️ Manutenção")
@@ -495,7 +448,6 @@ indice_aba = 0
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     
-    # --- NOVO PAINEL DE CONFIGURAÇÃO DE TURNO DIÁRIO ---
     st.markdown("#### ⚙️ Configuração do Turno Letivo")
     st.write("Ajuste os horários de início e término do turno para que o sistema saiba registrar os atrasos e as saídas corretamente.")
     c_cfg1, c_cfg2 = st.columns(2)
@@ -542,16 +494,10 @@ with tabs[indice_aba]:
                 motivo_falta = st.selectbox("Justificativa", ["Atestado Médico", "Problemas Familiares", "Problemas de Transporte", "Outros"])
                 if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
                     cod_f = al_falta_sel.split(" - ")[0]
-                    try:
-                        conn = conectar_bd(); cur = conn.cursor()
-                        cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just))
-                        conn.commit()
-                        st.success("Justificativa salva com sucesso!"); st.rerun()
-                    except Exception:
-                        if 'conn' in locals(): conn.rollback()
-                        st.error("Erro ao salvar justificativa.")
-                    finally:
-                        if 'conn' in locals(): conn.close()
+                    conn = conectar_bd(); cur = conn.cursor()
+                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just))
+                    conn.commit(); conn.close()
+                    st.success("Justificativa salva com sucesso!"); st.rerun()
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
@@ -617,39 +563,26 @@ if eh_admin:
             al_email = st.selectbox("Selecione o Aluno", [""] + [f"{r['codigo']} - {r['nome']}" for _, r in df_alunos.iterrows()])
             novo_e = st.text_input("Novo E-mail do Responsável")
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
-                try:
-                    conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                    conn.commit()
-                    carregar_alunos.clear() 
-                    st.success("Atualizado!")
-                except Exception:
-                    if 'conn' in locals(): conn.rollback()
-                    st.error("Erro ao atualizar e-mail.")
-                finally:
-                    if 'conn' in locals(): conn.close()
+                conn = conectar_bd(); cur = conn.cursor()
+                cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                conn.commit(); conn.close()
+                carregar_alunos.clear() 
+                st.success("Atualizado!")
         with col2:
             st.write("Adição Manual")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
             m_tur = st.text_input("Turma")
             if st.button("CADASTRAR") and m_cod and m_nom:
-                try:
-                    conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                    conn.commit()
-                    carregar_alunos.clear() 
-                    st.success("Cadastrado!")
-                except Exception:
-                    if 'conn' in locals(): conn.rollback()
-                    st.error("Erro ao cadastrar estudante.")
-                finally:
-                    if 'conn' in locals(): conn.close()
+                conn = conectar_bd(); cur = conn.cursor()
+                cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                conn.commit(); conn.close()
+                carregar_alunos.clear() 
+                st.success("Cadastrado!")
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
         if st.button("PROCESSAR LISTA") and up_al:
             if importar_csv_alunos(up_al): st.success("Base de Alunos Sincronizada!"); st.rerun()
-            else: st.error("Falha ao sincronizar lista. Verifique o formato do arquivo.")
         st.markdown('</div>', unsafe_allow_html=True)
     indice_aba += 1
 
@@ -658,8 +591,6 @@ with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
     
-    # OTIMIZAÇÃO AQUI: Em vez de ir ao banco de novo (o que causava o engasgo),
-    # nós usamos o que já estava pré-carregado no cache de forma quase instantânea.
     df_da = df_avaliacoes_cache.copy()
     
     if not df_da.empty:
@@ -690,9 +621,8 @@ with tabs[indice_aba]:
                 medalha = "🥇 1º LUGAR" if idx == 0 else ("🥈 2º LUGAR" if idx == 1 else ("🥉 3º LUGAR" if idx == 2 else f"⭐ {idx+1}º LUGAR"))
                 classe_nome = "top7-name" if rev else "top7-name-hidden"
                 texto_nome = r['nome'] if rev else "OCULTO"
-                st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA: {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA (FILTRADA): {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
     
-    # Processamento compartilhado para Faltas e Erros
     alertas_estudante = {}
     if not dff.empty:
         area_stats = dff.groupby(['nome', 'turma', 'periodo', 'area']).agg(
@@ -753,34 +683,40 @@ with tabs[indice_aba]:
                 alerta_str = alertas_estudante.get(a['nome'], "")
                 tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                 
-                with st.expander(f"👤 {a['nome']} | Nota GERAL: {a['acerto']*10:.2f} {tag}"):
-                    df_bol_ind = df_da[df_da.nome==a['nome']]
+                with st.expander(f"👤 {a['nome']} | Nota (Filtros Atuais): {a['acerto']*10:.2f} {tag}"):
+                    
+                    # 🟢 CORREÇÃO APLICADA AQUI: 
+                    # df_bol_ind = Tabela Filtrada para as médias, questões e PDF.
+                    # df_historico_aluno = Tabela Geral apenas para o gráfico evolutivo.
+                    df_bol_ind = dff[dff.nome==a['nome']]
+                    df_historico_aluno = df_da[df_da.nome==a['nome']]
                     
                     medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
                     piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                     
-                    st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
+                    if not piores_3.empty:
+                        st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
                     
-                    if st.button("GERAR PDF", key=f"p_{a['nome']}"):
-                        b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_da[df_da.nome==a['nome']])
+                    if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"p_{a['nome']}"):
+                        b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind)
                         st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                         
-                    st.markdown("#### 📈 Evolução ao Longo do Ano")
-                    progresso = df_bol_ind.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+                    st.markdown("#### 📈 Evolução ao Longo do Ano (Completo)")
+                    progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                     progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                     try:
                         progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
                         st.line_chart(progresso_pivot, height=250)
                     except: pass
 
-                    st.markdown("#### 📊 Médias por Disciplina")
+                    st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
                     medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     for _, mb in medias_b.iterrows():
                         st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
                         st.progress(min(mb['Nota'] / 10, 1.0))
 
-                    st.markdown("#### 📋 Mapa de Questões")
+                    st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
                     for p_m in sorted(df_bol_ind.periodo.unique()):
                         for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
                             st.markdown(f"**{d_m} - {p_m}**")
@@ -885,11 +821,8 @@ with tabs[indice_aba]:
             if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
                 with st.spinner("Processando e injetando dados em lote..."):
                     sucesso, msg = importar_csv_desempenho(arquivo_avs, p_up, a_up, t_up)
-                    if sucesso: 
-                        st.success(msg)
-                        st.rerun()
-                    else: 
-                        st.error(msg)
+                    if sucesso: st.success(msg); st.rerun()
+                    else: st.error(msg)
                 
             st.markdown("---")
             st.subheader("🗑️ Limpeza Seletiva de Banco")
@@ -902,17 +835,11 @@ with tabs[indice_aba]:
                 
                 if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
                     p_del, a_del, t_del = bloco_del.split(" | ")
-                    try:
-                        conn = conectar_bd(); cur = conn.cursor()
-                        cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
-                        conn.commit()
-                        carregar_avaliacoes.clear() 
-                        st.success("Bloco removido do servidor!"); st.rerun()
-                    except Exception as e:
-                        if 'conn' in locals(): conn.rollback()
-                        st.error(f"Erro ao excluir bloco: {e}")
-                    finally:
-                        if 'conn' in locals(): conn.close()
+                    conn = conectar_bd(); cur = conn.cursor()
+                    cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
+                    conn.commit(); conn.close()
+                    carregar_avaliacoes.clear() 
+                    st.success("Bloco removido do servidor!"); st.rerun()
             else:
                 st.info("O banco de dados de desempenho está vazio.")
 
