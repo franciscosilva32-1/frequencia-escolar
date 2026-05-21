@@ -17,11 +17,18 @@ import threading
 import time
 import re
 import plotly.express as px
+import tempfile
 
 try:
     from fpdf import FPDF
 except ImportError:
     FPDF = None
+
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
 # 1. CONFIGURAÇÃO INICIAL E COOKIES
@@ -262,18 +269,21 @@ def importar_csv_desempenho(file, periodo, area, turma):
     carregar_avaliacoes.clear() 
     return True, f"{len(dados_l)} registros salvos."
 
-def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
+def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: return None
     pdf = FPDF(); pdf.add_page()
+    
+    # Cabeçalho
     pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_font("Arial", "B", 18); pdf.set_text_color(255,255,255); pdf.cell(0, 15, "BOLETIM DE DESEMPENHO", 0, 1, "C")
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA: {nota_g:.2f}", 0, 1)
+    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA (Filtro): {nota_g:.2f}", 0, 1)
     
     pdf.set_font("Arial", "B", 8)
     pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1)
     pdf.ln(2)
     
+    # Blocos de Questões Filtradas
     for p in sorted(df_b.periodo.unique()):
         pdf.set_fill_color(230,230,230); pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, f"  {p}", 0, 1, fill=True)
         for d in sorted(df_b[df_b.periodo==p].disciplina.unique()):
@@ -288,7 +298,47 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b):
                 col += 1
                 if col > 7: col, y = 0, y+15
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
-    
+
+    # 🟢 NOVO: GRÁFICO DE EVOLUÇÃO (Completo) NO PDF 🟢
+    if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
+        # Puxa o progresso completo
+        progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+        progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
+        progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
+        
+        # Desenha o gráfico (Forte/Grosso)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for col in progresso_pivot.columns:
+            # linewidth=5 e markersize=12 para deixar a linha bem forte e visível
+            ax.plot(progresso_pivot.index, progresso_pivot[col], marker='o', linewidth=5, markersize=12, label=col)
+        
+        ax.set_title("Evolucao Geral ao Longo do Ano", fontweight='bold', fontsize=18)
+        ax.set_ylabel("Nota", fontweight='bold', fontsize=14)
+        ax.set_xlabel("Periodo", fontweight='bold', fontsize=14)
+        ax.set_ylim(0, 10.5)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12) # Legenda do lado de fora
+        plt.tight_layout()
+        
+        # Salva em arquivo temporário invisível
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+            plt.savefig(tmp.name, format='png', dpi=300, bbox_inches='tight')
+            tmp_img_name = tmp.name
+        plt.close(fig)
+        
+        # Adiciona no PDF em uma página nova
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, "EVOLUCAO AO LONGO DO ANO (HISTORICO COMPLETO)", 0, 1, "C")
+        pdf.ln(5)
+        
+        # Cola a imagem renderizada
+        pdf.image(tmp_img_name, x=10, w=190)
+        
+        # Apaga o arquivo temporário da memória do servidor para não pesar
+        try: os.remove(tmp_img_name)
+        except: pass
+
     out = pdf.output(dest='S')
     return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
@@ -617,8 +667,6 @@ with tabs[indice_aba]:
         if not dff.empty:
             top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
             for idx, r in enumerate(top7.to_dict('records')):
-                
-                # 🟢 BLOQUEIO DO BOTÃO REVELAR APENAS PARA ADMIN 🟢
                 if eh_admin:
                     rev = st.toggle("Revelar", key=f"rev_{idx}")
                 else:
@@ -701,9 +749,13 @@ with tabs[indice_aba]:
                     if not piores_3.empty:
                         st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
                     
+                    # PASSA AGORA OS DOIS DADOS: O DO FILTRO E O HISTÓRICO COMPLETO
                     if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"p_{a['nome']}"):
-                        b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind)
-                        st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
+                        b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                        if b_pdf:
+                            st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
+                        else:
+                            st.error("Erro ao gerar PDF.")
                         
                     st.markdown("#### 📈 Evolução ao Longo do Ano (Completo)")
                     progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
