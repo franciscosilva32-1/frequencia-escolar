@@ -617,7 +617,13 @@ with tabs[indice_aba]:
         if not dff.empty:
             top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
             for idx, r in enumerate(top7.to_dict('records')):
-                rev = st.toggle("Revelar", key=f"rev_{idx}")
+                
+                # 🟢 BLOQUEIO DO BOTÃO REVELAR APENAS PARA ADMIN 🟢
+                if eh_admin:
+                    rev = st.toggle("Revelar", key=f"rev_{idx}")
+                else:
+                    rev = False
+                    
                 medalha = "🥇 1º LUGAR" if idx == 0 else ("🥈 2º LUGAR" if idx == 1 else ("🥉 3º LUGAR" if idx == 2 else f"⭐ {idx+1}º LUGAR"))
                 classe_nome = "top7-name" if rev else "top7-name-hidden"
                 texto_nome = r['nome'] if rev else "OCULTO"
@@ -685,9 +691,6 @@ with tabs[indice_aba]:
                 
                 with st.expander(f"👤 {a['nome']} | Nota (Filtros Atuais): {a['acerto']*10:.2f} {tag}"):
                     
-                    # 🟢 CORREÇÃO APLICADA AQUI: 
-                    # df_bol_ind = Tabela Filtrada para as médias, questões e PDF.
-                    # df_historico_aluno = Tabela Geral apenas para o gráfico evolutivo.
                     df_bol_ind = dff[dff.nome==a['nome']]
                     df_historico_aluno = df_da[df_da.nome==a['nome']]
                     
