@@ -19,6 +19,7 @@ import re
 import plotly.express as px
 import tempfile
 import numpy as np
+import zipfile
 
 try:
     from fpdf import FPDF
@@ -740,53 +741,88 @@ with tabs[indice_aba]:
             else: 
                 st.info(f"📊 **Total de estudantes avaliados / encontrados:** {total_estudantes_avaliados}.")
             
-            for a in lista:
-                alerta_str = alertas_estudante.get(a['nome'], "")
-                tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
+            # 🟢 NOVO: OPÇÃO DE GERAR TODOS EM LOTE 🟢
+            st.markdown("---")
+            gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)")
+            
+            if gerar_em_lote:
+                st.warning(f"Você está prestes a gerar **{len(lista)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
                 
-                with st.expander(f"👤 {a['nome']} | Nota (Filtros Atuais): {a['acerto']*10:.2f} {tag}"):
-                    
-                    df_bol_ind = dff[dff.nome==a['nome']]
-                    df_historico_aluno = df_da[df_da.nome==a['nome']]
-                    
-                    medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                    piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
-                    piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
-                    
-                    if not piores_3.empty:
-                        st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
-                    
-                    if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"p_{a['nome']}"):
-                        b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
-                        if b_pdf:
-                            st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
-                        else:
-                            st.error("Erro ao gerar PDF.")
+                if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
+                    with st.spinner(f"Gerando {len(lista)} boletins. Por favor, aguarde..."):
+                        zip_buffer = io.BytesIO()
                         
-                    st.markdown("#### 📈 Evolução ao Longo do Ano (Completo)")
-                    progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-                    progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
-                    try:
-                        progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
-                        st.line_chart(progresso_pivot, height=250)
-                    except: pass
-
-                    st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
-                    medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                    for _, mb in medias_b.iterrows():
-                        st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
-                        st.progress(min(mb['Nota'] / 10, 1.0))
-
-                    st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
-                    for p_m in sorted(df_bol_ind.periodo.unique()):
-                        for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
-                            st.markdown(f"**{d_m} - {p_m}**")
-                            q_df = df_bol_ind[(df_bol_ind.periodo==p_m) & (df_bol_ind.disciplina==d_m)].sort_values("questao")
-                            grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
-                            for _, q in q_df.iterrows():
-                                cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
-                                grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
-                            st.markdown(grid+'</div><br>', unsafe_allow_html=True)
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            for a in lista:
+                                df_bol_ind = dff[dff.nome==a['nome']]
+                                df_historico_aluno = df_da[df_da.nome==a['nome']]
+                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                                
+                                if pdf_bytes:
+                                    # Limpa o nome do aluno para não dar erro no Windows/Mac ao extrair o ZIP
+                                    safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+                                    zip_file.writestr(f"Boletim_{a['turma']}_{safe_name}.pdf", pdf_bytes)
+                        
+                        st.session_state['zip_boletins'] = zip_buffer.getvalue()
+                
+                # Se o arquivo já foi processado e salvo na memória, libera o botão de Download
+                if 'zip_boletins' in st.session_state:
+                    st.success("✅ Arquivo ZIP gerado com sucesso! Clique no botão abaixo para salvar em seu computador.")
+                    st.download_button(
+                        label="📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS",
+                        data=st.session_state['zip_boletins'],
+                        file_name=f"Boletins_Lote_{tf.replace(' ', '_')}.zip",
+                        mime="application/zip"
+                    )
+            else:
+                # 🟢 SE NÃO ESTIVER MARCADO, MOSTRA A LISTA EXPANSÍVEL PADRÃO 🟢
+                for a in lista:
+                    alerta_str = alertas_estudante.get(a['nome'], "")
+                    tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
+                    
+                    with st.expander(f"👤 {a['nome']} | Nota (Filtros Atuais): {a['acerto']*10:.2f} {tag}"):
+                        
+                        df_bol_ind = dff[dff.nome==a['nome']]
+                        df_historico_aluno = df_da[df_da.nome==a['nome']]
+                        
+                        medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                        piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
+                        piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
+                        
+                        if not piores_3.empty:
+                            st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
+                        
+                        if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"p_{a['nome']}"):
+                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                            if b_pdf:
+                                st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
+                            else:
+                                st.error("Erro ao gerar PDF.")
+                            
+                        st.markdown("#### 📈 Evolução ao Longo do Ano (Completo)")
+                        progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
+                        progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
+                        try:
+                            progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
+                            st.line_chart(progresso_pivot, height=250)
+                        except: pass
+    
+                        st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
+                        medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                        for _, mb in medias_b.iterrows():
+                            st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
+                            st.progress(min(mb['Nota'] / 10, 1.0))
+    
+                        st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
+                        for p_m in sorted(df_bol_ind.periodo.unique()):
+                            for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
+                                st.markdown(f"**{d_m} - {p_m}**")
+                                q_df = df_bol_ind[(df_bol_ind.periodo==p_m) & (df_bol_ind.disciplina==d_m)].sort_values("questao")
+                                grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
+                                for _, q in q_df.iterrows():
+                                    cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
+                                    grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
+                                st.markdown(grid+'</div><br>', unsafe_allow_html=True)
                             
     with stabs[2]:
         if not dff.empty:
