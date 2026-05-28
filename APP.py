@@ -207,7 +207,13 @@ def carregar_avaliacoes():
         return pd.DataFrame()
 
 def importar_csv_alunos(file):
-    df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
+    conteudo_bytes = file.read()
+    try:
+        conteudo_str = conteudo_bytes.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        conteudo_str = conteudo_bytes.decode('latin-1')
+        
+    df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
     def norm(c): return ''.join(x for x in unicodedata.normalize('NFD', str(c)) if unicodedata.category(x) != 'Mn').strip().upper()
     df.columns = [norm(col) for col in df.columns]
     dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
@@ -250,7 +256,13 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     except: return False
 
 def importar_csv_desempenho(file, periodo, area, turma):
-    temp_df = pd.read_csv(io.StringIO(file.read().decode('utf-8-sig')), sep=';')
+    conteudo_bytes = file.read()
+    try:
+        conteudo_str = conteudo_bytes.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        conteudo_str = conteudo_bytes.decode('latin-1')
+
+    temp_df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
     temp_df.columns = [str(c).strip() for c in temp_df.columns]
     col_qs = [c for c in temp_df.columns if re.search(r'^Q\s*\d+\s*Options', c, re.IGNORECASE)]
     idx_not = next((i for i, c in enumerate(temp_df.columns) if 'Not attempted' in c), -1)
