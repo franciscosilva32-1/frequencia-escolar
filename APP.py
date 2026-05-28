@@ -313,34 +313,27 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
                 if col > 7: col, y = 0, y+15
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
 
-    # 🟢 GRÁFICO DE EVOLUÇÃO APRIMORADO COM CORES ÚNICAS E ABREVIAÇÕES 🟢
+    # GRÁFICO DE EVOLUÇÃO
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
         progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
         progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
         
         fig, ax = plt.subplots(figsize=(10, 6))
-        
-        # Gerando uma paleta de 20 cores distintas para garantir exclusividade
         cores = plt.cm.tab20(np.linspace(0, 1, len(progresso_pivot.columns)))
         
         for i, col in enumerate(progresso_pivot.columns):
             cor = cores[i]
             abreviacao = DICIONARIO_ABREVIACAO.get(col, col[:4].upper())
-            
-            # Desenhando a linha forte
             ax.plot(progresso_pivot.index, progresso_pivot[col], marker='o', linewidth=5, markersize=12, label=col, color=cor)
-            
-            # Escrevendo a abreviação em cima de cada ponto da linha
             for x_val, y_val in zip(progresso_pivot.index, progresso_pivot[col]):
                 if pd.notna(y_val):
-                    # y_val + 0.3 levanta o texto um pouquinho para não sobrepor a bolinha
                     ax.text(x_val, y_val + 0.3, abreviacao, color=cor, fontsize=10, fontweight='bold', ha='center', va='bottom')
         
         ax.set_title("Evolucao Geral ao Longo do Ano", fontweight='bold', fontsize=18)
         ax.set_ylabel("Nota", fontweight='bold', fontsize=14)
         ax.set_xlabel("Periodo", fontweight='bold', fontsize=14)
-        ax.set_ylim(0, 11) # Limite ligeiramente maior para o texto caber sem cortar
+        ax.set_ylim(0, 11) 
         ax.grid(True, linestyle='--', alpha=0.7)
         ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12) 
         plt.tight_layout()
@@ -480,21 +473,18 @@ try:
     pres_hoje = cur.fetchone()[0]; conn.close()
 except: pres_hoje = 0
 
-# --- CÁLCULO DA MÉDIA GERAL DE FREQUÊNCIA ---
 total_alunos = len(df_alunos)
 if total_alunos > 0:
     media_geral_freq = f"{(pres_hoje / total_alunos) * 100:.1f}%"
 else:
     media_geral_freq = "0%"
 
-# --- CÁLCULO DA MÉDIA ACADÊMICA OTIMIZADO ---
 df_avaliacoes_cache = carregar_avaliacoes()
 if not df_avaliacoes_cache.empty:
     media_geral_acad = f"{df_avaliacoes_cache['acerto'].mean() * 10:.1f}"
 else:
     media_geral_acad = "--"
 
-# --- RENDERIZAÇÃO DOS 5 CARTÕES ---
 st.markdown(f'''
 <div class="metrics-container">
     <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
@@ -505,7 +495,6 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-# --- DEFINIÇÃO DINÂMICA DAS ABAS ---
 abas_do_sistema = ["📝 Registro", "📊 Gestão", "🚨 Alertas", "📈 Histórico"]
 if eh_admin:
     abas_do_sistema.append("⚙️ Manutenção")
@@ -514,7 +503,6 @@ abas_do_sistema.append("📑 Desempenho Acadêmico")
 tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
-# --- ABA 0: REGISTRO ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     
@@ -579,7 +567,6 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-# --- ABA 1: GESTÃO ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -599,7 +586,6 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-# --- ABA 2: ALERTAS ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
@@ -612,7 +598,6 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-# --- ABA 3: HISTÓRICO ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
@@ -623,7 +608,6 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-# --- ABA 4: MANUTENÇÃO (ADMIN) ---
 if eh_admin:
     with tabs[indice_aba]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
@@ -656,7 +640,6 @@ if eh_admin:
         st.markdown('</div>', unsafe_allow_html=True)
     indice_aba += 1
 
-# --- ABA 5: DESEMPENHO ACADÊMICO ---
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
@@ -669,10 +652,11 @@ with tabs[indice_aba]:
             'SOCIOLGIA': 'SOCIOLOGIA'
         })
 
+    # ADICIONEI CHAVES (KEYS) NOS SELECTBOXES PARA MANTER ESTABILIDADE
     cf1, cf2, cf3 = st.columns(3)
-    pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"])
-    af = cf2.selectbox("Área", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
-    tf = cf3.selectbox("Turma", ["Todas"] + sorted(df_alunos.turma.unique()))
+    pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
+    af = cf2.selectbox("Área", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
+    tf = cf3.selectbox("Turma", ["Todas"] + sorted(df_alunos.turma.unique()), key="filtro_turma_da")
     
     dff = df_da.copy()
     if pf != "Todos": dff = dff[dff.periodo==pf]
@@ -729,11 +713,11 @@ with tabs[indice_aba]:
         if not dff.empty:
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
             c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
-            with c_est1: bus_al = st.text_input("Buscar Nome:")
-            with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"])
+            with c_est1: bus_al = st.text_input("Buscar Nome:", key="busca_nome_est")
+            with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="filtro_desempenho_est")
             with c_est3: 
                 st.markdown("<br>", unsafe_allow_html=True)
-                filtro_erros = st.checkbox("Somente c/ erros")
+                filtro_erros = st.checkbox("Somente c/ erros", key="filtro_erros_est")
 
             res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
             erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
@@ -745,50 +729,57 @@ with tabs[indice_aba]:
             elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
 
             total_estudantes_avaliados = len(res_al)
-            mostrar_todos = (tf != "Todas") or bus_al or filtro_erros or (filtro_desempenho != "Todos")
-            lista = res_al.to_dict('records') if mostrar_todos else res_al.head(20).to_dict('records')
             
-            if not mostrar_todos: 
-                st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Selecione uma turma ou use os filtros para ver mais).")
-            else: 
-                st.info(f"📊 **Total de estudantes avaliados / encontrados:** {total_estudantes_avaliados}.")
+            # 🟢 MELHORIA 1: Identifica se QUALQUER filtro foi acionado para destravar a tela
+            filtros_ativos = (tf != "Todas") or (pf != "Todos") or (af != "Todas") or bool(bus_al) or filtro_erros or (filtro_desempenho != "Todos")
             
-            # 🟢 NOVO: OPÇÃO DE GERAR TODOS EM LOTE 🟢
+            # Guarda a lista com TODOS os alunos filtrados
+            lista_completa = res_al.to_dict('records')
+            # 🟢 MELHORIA 2: A lista de visualização mostra todos os alunos se os filtros estiverem ativos
+            lista_visualizacao = lista_completa if filtros_ativos else res_al.head(20).to_dict('records')
+            
             st.markdown("---")
-            gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)")
+            gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)", key="chk_lote")
             
             if gerar_em_lote:
-                st.warning(f"Você está prestes a gerar **{len(lista)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
+                st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
+                
+                # 🟢 MELHORIA 3: CHAVE DINÂMICA
+                # A chave do arquivo ZIP agora inclui os filtros. Se você mudar a Turma, a chave muda e o botão de download some automaticamente!
+                zip_key = f"zip_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}"
                 
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
-                    with st.spinner(f"Gerando {len(lista)} boletins. Por favor, aguarde..."):
+                    with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
                         
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            for a in lista:
+                            # 🟢 MELHORIA 4: Usa sempre a lista_completa para o ZIP, ignorando limites de visualização de tela
+                            for a in lista_completa:
                                 df_bol_ind = dff[dff.nome==a['nome']]
                                 df_historico_aluno = df_da[df_da.nome==a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                                 
                                 if pdf_bytes:
-                                    # Limpa o nome do aluno para não dar erro no Windows/Mac ao extrair o ZIP
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
                                     zip_file.writestr(f"Boletim_{a['turma']}_{safe_name}.pdf", pdf_bytes)
                         
-                        st.session_state['zip_boletins'] = zip_buffer.getvalue()
+                        st.session_state[zip_key] = zip_buffer.getvalue()
                 
-                # Se o arquivo já foi processado e salvo na memória, libera o botão de Download
-                if 'zip_boletins' in st.session_state:
+                if zip_key in st.session_state:
                     st.success("✅ Arquivo ZIP gerado com sucesso! Clique no botão abaixo para salvar em seu computador.")
                     st.download_button(
                         label="📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS",
-                        data=st.session_state['zip_boletins'],
-                        file_name=f"Boletins_Lote_{tf.replace(' ', '_')}.zip",
+                        data=st.session_state[zip_key],
+                        file_name=f"Boletins_{tf.replace(' ', '_')}.zip",
                         mime="application/zip"
                     )
             else:
-                # 🟢 SE NÃO ESTIVER MARCADO, MOSTRA A LISTA EXPANSÍVEL PADRÃO 🟢
-                for a in lista:
+                if not filtros_ativos: 
+                    st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Selecione uma turma ou use os filtros para ver todos).")
+                else: 
+                    st.info(f"📊 **Total de estudantes avaliados / encontrados:** {len(lista_visualizacao)}.")
+                
+                for a in lista_visualizacao:
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     
