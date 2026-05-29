@@ -652,7 +652,6 @@ with tabs[indice_aba]:
             'SOCIOLGIA': 'SOCIOLOGIA'
         })
 
-    # ADICIONEI CHAVES (KEYS) NOS SELECTBOXES PARA MANTER ESTABILIDADE
     cf1, cf2, cf3 = st.columns(3)
     pf = cf1.selectbox("Período", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
     af = cf2.selectbox("Área", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
@@ -712,10 +711,13 @@ with tabs[indice_aba]:
     with stabs[1]:
         if not dff.empty:
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
-            c_est1, c_est2, c_est3 = st.columns([2, 1, 1])
+            
+            # 🟢 MELHORIA AQUI: Adicionado a coluna para ORDENAÇÃO 🟢
+            c_est1, c_est2, c_est3, c_est4 = st.columns([2, 1, 1, 1])
             with c_est1: bus_al = st.text_input("Buscar Nome:", key="busca_nome_est")
             with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="filtro_desempenho_est")
-            with c_est3: 
+            with c_est3: ordenar_por = st.selectbox("Ordenar por:", ["Alfabética", "Maior Nota", "Menor Nota"], key="ordenar_est")
+            with c_est4: 
                 st.markdown("<br>", unsafe_allow_html=True)
                 filtro_erros = st.checkbox("Somente c/ erros", key="filtro_erros_est")
 
@@ -728,14 +730,20 @@ with tabs[indice_aba]:
             elif filtro_desempenho == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
             elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
 
+            # 🟢 APLICANDO A ORDENAÇÃO NA LISTA 🟢
+            if ordenar_por == "Maior Nota":
+                res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[False, True])
+            elif ordenar_por == "Menor Nota":
+                res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[True, True])
+            else:
+                res_al = res_al.sort_values(by='nome')
+
             total_estudantes_avaliados = len(res_al)
             
-            # 🟢 MELHORIA 1: Identifica se QUALQUER filtro foi acionado para destravar a tela
-            filtros_ativos = (tf != "Todas") or (pf != "Todos") or (af != "Todas") or bool(bus_al) or filtro_erros or (filtro_desempenho != "Todos")
+            # Identifica se QUALQUER filtro foi acionado para destravar a tela (incluindo se mudou a ordem)
+            filtros_ativos = (tf != "Todas") or (pf != "Todos") or (af != "Todas") or bool(bus_al) or filtro_erros or (filtro_desempenho != "Todos") or (ordenar_por != "Alfabética")
             
-            # Guarda a lista com TODOS os alunos filtrados
             lista_completa = res_al.to_dict('records')
-            # 🟢 MELHORIA 2: A lista de visualização mostra todos os alunos se os filtros estiverem ativos
             lista_visualizacao = lista_completa if filtros_ativos else res_al.head(20).to_dict('records')
             
             st.markdown("---")
@@ -744,16 +752,14 @@ with tabs[indice_aba]:
             if gerar_em_lote:
                 st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
                 
-                # 🟢 MELHORIA 3: CHAVE DINÂMICA
-                # A chave do arquivo ZIP agora inclui os filtros. Se você mudar a Turma, a chave muda e o botão de download some automaticamente!
-                zip_key = f"zip_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}"
+                # A chave do arquivo ZIP inclui os filtros e a ordem, para sempre baixar o arquivo atualizado
+                zip_key = f"zip_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
                 
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
                         
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            # 🟢 MELHORIA 4: Usa sempre a lista_completa para o ZIP, ignorando limites de visualização de tela
                             for a in lista_completa:
                                 df_bol_ind = dff[dff.nome==a['nome']]
                                 df_historico_aluno = df_da[df_da.nome==a['nome']]
