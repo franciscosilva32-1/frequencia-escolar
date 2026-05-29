@@ -291,7 +291,7 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_font("Arial", "B", 18); pdf.set_text_color(255,255,255); pdf.cell(0, 15, "BOLETIM DE DESEMPENHO", 0, 1, "C")
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"ESTUDANTE: {aluno}", 0, 1); pdf.cell(0, 10, f"TURMA: {turma} | MÉDIA (Filtro): {nota_g:.2f}", 0, 1)
+    pdf.cell(0, 10, f"ESTUDANTE: {aluno} ({turma})", 0, 1); pdf.cell(0, 10, f"MÉDIA (Filtro): {nota_g:.2f}", 0, 1)
     
     pdf.set_font("Arial", "B", 8)
     pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1)
@@ -561,7 +561,7 @@ with tabs[indice_aba]:
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
             if not faltas_justificadas.empty:
                 for _, f in faltas_justificadas.iterrows():
-                    st.info(f"👤 {f['nome']} - Justificativa: **{f['motivo_saida']}**")
+                    st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
             else: st.write("Nenhuma falta justificada ainda.")
         else: st.success("Nenhuma falta registada para esta data!")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -600,7 +600,7 @@ indice_aba += 1
 
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
-    aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['status']})" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
+    aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
         try:
             conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
@@ -614,7 +614,7 @@ if eh_admin:
         st.subheader("📧 Gerir E-mails e Alunos")
         col1, col2 = st.columns(2)
         with col1:
-            al_email = st.selectbox("Selecione o Aluno", [""] + [f"{r['codigo']} - {r['nome']}" for _, r in df_alunos.iterrows()])
+            al_email = st.selectbox("Selecione o Aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()])
             novo_e = st.text_input("Novo E-mail do Responsável")
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd(); cur = conn.cursor()
@@ -677,7 +677,7 @@ with tabs[indice_aba]:
                     
                 medalha = "🥇 1º LUGAR" if idx == 0 else ("🥈 2º LUGAR" if idx == 1 else ("🥉 3º LUGAR" if idx == 2 else f"⭐ {idx+1}º LUGAR"))
                 classe_nome = "top7-name" if rev else "top7-name-hidden"
-                texto_nome = r['nome'] if rev else "OCULTO"
+                texto_nome = f"{r['nome']} ({r['turma']})" if rev else "OCULTO"
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA (FILTRADA): {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
     
     alertas_estudante = {}
@@ -712,7 +712,6 @@ with tabs[indice_aba]:
         if not dff.empty:
             st.markdown("#### ⚙️ Filtros do Boletim do Estudante")
             
-            # 🟢 MELHORIA AQUI: Adicionado a coluna para ORDENAÇÃO 🟢
             c_est1, c_est2, c_est3, c_est4 = st.columns([2, 1, 1, 1])
             with c_est1: bus_al = st.text_input("Buscar Nome:", key="busca_nome_est")
             with c_est2: filtro_desempenho = st.selectbox("Desempenho:", ["Todos", "INSUFICIENTE", "BOM", "ÓTIMO"], key="filtro_desempenho_est")
@@ -730,7 +729,6 @@ with tabs[indice_aba]:
             elif filtro_desempenho == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
             elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
 
-            # 🟢 APLICANDO A ORDENAÇÃO NA LISTA 🟢
             if ordenar_por == "Maior Nota":
                 res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[False, True])
             elif ordenar_por == "Menor Nota":
@@ -740,7 +738,6 @@ with tabs[indice_aba]:
 
             total_estudantes_avaliados = len(res_al)
             
-            # Identifica se QUALQUER filtro foi acionado para destravar a tela (incluindo se mudou a ordem)
             filtros_ativos = (tf != "Todas") or (pf != "Todos") or (af != "Todas") or bool(bus_al) or filtro_erros or (filtro_desempenho != "Todos") or (ordenar_por != "Alfabética")
             
             lista_completa = res_al.to_dict('records')
@@ -752,7 +749,6 @@ with tabs[indice_aba]:
             if gerar_em_lote:
                 st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
                 
-                # A chave do arquivo ZIP inclui os filtros e a ordem, para sempre baixar o arquivo atualizado
                 zip_key = f"zip_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
                 
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
@@ -785,11 +781,12 @@ with tabs[indice_aba]:
                 else: 
                     st.info(f"📊 **Total de estudantes avaliados / encontrados:** {len(lista_visualizacao)}.")
                 
-                for a in lista_visualizacao:
+                # 🟢 AQUI ADICIONAMOS O RANKING (enumerate com start=1) 🟢
+                for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     
-                    with st.expander(f"👤 {a['nome']} | Nota (Filtros Atuais): {a['acerto']*10:.2f} {tag}"):
+                    with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
                         df_bol_ind = dff[dff.nome==a['nome']]
                         df_historico_aluno = df_da[df_da.nome==a['nome']]
