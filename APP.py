@@ -511,12 +511,15 @@ pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Períod
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
 tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
+# 🟢 AQUI ESTÁ A CORREÇÃO DA VARIÁVEL df_da 🟢
 df_avaliacoes_cache = carregar_avaliacoes()
 if not df_avaliacoes_cache.empty:
     df_avaliacoes_cache['disciplina'] = df_avaliacoes_cache['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
 
+df_da = df_avaliacoes_cache.copy() # <- ESSA É A LINHA QUE FALTAVA
+
 # Aplicando os filtros no dataframe de avaliações globais
-dff = df_avaliacoes_cache.copy()
+dff = df_da.copy()
 if pf != "Todos": dff = dff[dff.periodo==pf]
 if af != "Todas": dff = dff[dff.area==af]
 if tf != "Todas": dff = dff[dff.turma==tf]
