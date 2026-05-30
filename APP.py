@@ -116,7 +116,6 @@ st.markdown("""
     .metric-card:hover { transform: translateY(-5px); }
     .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
     
-    /* Cores das barras superiores dos cartões */
     .m-total::before { background: #0ea5e9; } 
     .m-presente::before { background: var(--success); } 
     .m-falta::before { background: var(--danger); } 
@@ -181,6 +180,15 @@ DICIONARIO_ABREVIACAO = {
     "QUÍMICA": "QUI", "SOCIOLOGIA": "SOC", "SOCIOLGIA": "SOC"
 }
 
+# Dicionário dinâmico para os gráficos de satisfação
+DICIONARIO_PERGUNTAS_SATISFACAO = {
+    "Todos": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Específica 1", "Específica 2"],
+    "Estudante": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Qualidade das Aulas", "Organização Eventos"],
+    "Pais/Responsável": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Facilidade Certificados", "Comunicação Escola"],
+    "Professor": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Recursos Pedagógicos", "Engajamento Alunos"],
+    "Servidor": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Condições de Trabalho", "Clima Organizacional"]
+}
+
 def conectar_bd(): return psycopg2.connect(DATABASE_URL)
 
 def inicializar_tabelas():
@@ -189,7 +197,6 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))")
-        # Nova tabela de Satisfação
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
             q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
@@ -544,7 +551,7 @@ st.markdown(f'''
 ''', unsafe_allow_html=True)
 
 
-abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico"]
+abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico", "💬 Satisfação Pública"]
 if eh_admin: abas_do_sistema.append("⚙️ Manutenção do Sistema")
 tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
@@ -809,6 +816,73 @@ with tabs[indice_aba]:
                         st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("---")
             else: st.success("Não foram detectados erros de marcação para estes filtros!")
+    st.markdown('</div>', unsafe_allow_html=True)
+indice_aba += 1
+
+# ------------------------------------------------------------
+# 7. NOVA ABA: ANÁLISE DE SATISFAÇÃO DA COMUNIDADE
+# ------------------------------------------------------------
+with tabs[indice_aba]:
+    st.markdown('<div class="card-panel">', unsafe_allow_html=True)
+    st.title("💬 Análise de Satisfação da Comunidade")
+    st.info("💡 **Dica:** Os dados de Estudantes também obedecem ao filtro global de Turma selecionado no topo da tela.")
+    
+    if df_sat.empty:
+        st.warning("Nenhuma avaliação de satisfação foi recebida até o momento.")
+    else:
+        cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
+        
+        # Filtro de dados
+        df_sat_filtrado = df_sat.copy()
+        if cat_sat != "Todos":
+            df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
+        if cat_sat in ["Todos", "Estudante"] and tf != "Todas":
+            df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
+            
+        if df_sat_filtrado.empty:
+            st.info("Nenhum dado encontrado para os filtros selecionados.")
+        else:
+            # Puxando o nome das perguntas com base no dicionário
+            nomes_perguntas = DICIONARIO_PERGUNTAS_SATISFACAO[cat_sat]
+            
+            # Calculando a média de cada pergunta
+            medias_q1 = df_sat_filtrado['q1'].mean()
+            medias_q2 = df_sat_filtrado['q2'].mean()
+            medias_q3 = df_sat_filtrado['q3'].mean()
+            medias_q4 = df_sat_filtrado['q4'].mean()
+            medias_q5 = df_sat_filtrado['q5'].mean()
+            
+            df_grafico_sat = pd.DataFrame({
+                'Pergunta': nomes_perguntas,
+                'Média (Max 5)': [medias_q1, medias_q2, medias_q3, medias_q4, medias_q5]
+            })
+            
+            # Gráfico de Barras Plotly
+            fig_sat = px.bar(
+                df_grafico_sat, 
+                x='Pergunta', 
+                y='Média (Max 5)', 
+                text='Média (Max 5)',
+                color='Pergunta',
+                title=f"Média de Satisfação: {cat_sat}"
+            )
+            fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            st.plotly_chart(fig_sat, use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("📝 Mural de Sugestões e Feedbacks")
+            st.write("Abaixo estão os comentários textuais deixados pelos avaliadores.")
+            
+            df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
+            if df_sugestoes.empty:
+                st.success("Não há sugestões em texto para este grupo.")
+            else:
+                for _, sug in df_sugestoes.iterrows():
+                    data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
+                    turma_str = f" ({sug['turma']})" if sug['turma'] else ""
+                    st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
+
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
