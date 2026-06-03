@@ -615,18 +615,46 @@ indice_aba = 0
 
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
-    st.markdown("#### ⚙️ Configuração do Turno Letivo")
-    st.write("Ajuste os horários de início e término do turno para que o sistema saiba registrar os atrasos e as saídas corretamente.")
+    st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
+    st.write("Ajuste os horários e confirme se a data de hoje é um dia letivo para liberar o registro dos estudantes.")
+    
+    # Horários (como estavam antes)
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1: h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
     with c_cfg2: h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
+    
+    # Controle de Dias Letivos (Movido para cá!)
+    with st.form("form_controle_dias"):
+        st.markdown("📅 **Ativação do Calendário:**")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
+        with col_d2:
+            st.write("") 
+            st.write("")
+            is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
+        
+        btn_salvar_dia = st.form_submit_button("💾 Salvar Configuração do Dia")
+        
+    if btn_salvar_dia:
+        try:
+            conn = conectar_bd()
+            cur = conn.cursor()
+            cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
+            conn.commit()
+            conn.close()
+            verificar_dia_letivo.clear() 
+            st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
+        except Exception as e:
+            st.error(f"Ocorreu um erro ao salvar o calendário: {e}")
+
     st.markdown("---")
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     with t_en:
         is_hoje_letivo = verificar_dia_letivo(hoje)
         if not is_hoje_letivo:
-            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo na aba de Configurações.")
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
             with st.form("f_en", clear_on_submit=True):
@@ -639,7 +667,7 @@ with tabs[indice_aba]:
     with t_sa:
         is_hoje_letivo = verificar_dia_letivo(hoje)
         if not is_hoje_letivo:
-            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo na aba de Configurações.")
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
             with st.form("f_sa", clear_on_submit=True):
@@ -1001,32 +1029,6 @@ if eh_admin:
                 else: st.error(msg)
             
         st.markdown("---")
-        st.markdown("---")
-        st.subheader("📅 Controle de Dias Letivos")
-        st.write("Selecione as datas do calendário para ativá-las como dias letivos oficiais.")
-        
-        with st.form("form_controle_dias"):
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
-            with col_d2:
-                st.write("") 
-                st.write("")
-                is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
-            
-            btn_salvar_dia = st.form_submit_button("Salvar Dia")
-            
-        if btn_salvar_dia:
-            try:
-                conn = conectar_bd()
-                cur = conn.cursor()
-                cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
-                conn.commit()
-                conn.close()
-                verificar_dia_letivo.clear() 
-                st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
-            except Exception as e:
-                st.error(f"Ocorreu um erro ao salvar o calendário: {e}")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
         if not df_avaliacoes_cache.empty:
             blocos = df_avaliacoes_cache[['periodo', 'area', 'turma']].drop_duplicates()
