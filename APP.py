@@ -218,12 +218,27 @@ def inicializar_tabelas():
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
             q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
         )""")
+        cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(periodo, area, turma)")
         conn.commit(); conn.close()
     except: pass
 
 inicializar_tabelas()
+
+@st.cache_data(ttl=300)
+def verificar_dia_letivo(data_atual):
+    try:
+        conn = conectar_bd()
+        cur = conn.cursor()
+        cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
+        res = cur.fetchone()
+        conn.close()
+        if res:
+            return res[0]
+        return False
+    except:
+        return False
 
 # ------------------------------------------------------------
 # 5. LÓGICA DE NEGÓCIO, CACHE E GERADORES
@@ -609,24 +624,32 @@ with tabs[indice_aba]:
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     with t_en:
-        gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
-        with st.form("f_en", clear_on_submit=True):
-            cod_en = st.text_input("Código Aluno (Entrada)")
-            if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
-                res = registrar_presenca(cod_en.upper(), hoje, h_lim_e)
-                if res == "erro_cod": st.error("Código não encontrado.")
-                elif res: st.success(f"Bem-vindo, {res}!")
+        is_hoje_letivo = verificar_dia_letivo(hoje)
+        if not is_hoje_letivo:
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo na aba de Configurações.")
+        else:
+            gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
+            with st.form("f_en", clear_on_submit=True):
+                cod_en = st.text_input("Código Aluno (Entrada)")
+                if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
+                    res = registrar_presenca(cod_en.upper(), hoje, h_lim_e)
+                    if res == "erro_cod": st.error("Código não encontrado.")
+                    elif res: st.success(f"Bem-vindo, {res}!")
                 
     with t_sa:
-        gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
-        with st.form("f_sa", clear_on_submit=True):
-            cod_sa = st.text_input("Código Aluno (Saída)")
-            hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-            mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
-            if st.form_submit_button("CONFIRMAR SAÍDA") and cod_sa:
-                res = registrar_saida(cod_sa.upper(), mot, True, hoje, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
-                if res: st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!"); st.rerun()
-                else: st.error("Erro: Aluno sem registro de entrada hoje.")
+        is_hoje_letivo = verificar_dia_letivo(hoje)
+        if not is_hoje_letivo:
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo na aba de Configurações.")
+        else:
+            gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
+            with st.form("f_sa", clear_on_submit=True):
+                cod_sa = st.text_input("Código Aluno (Saída)")
+                hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
+                mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
+                if st.form_submit_button("CONFIRMAR SAÍDA") and cod_sa:
+                    res = registrar_saida(cod_sa.upper(), mot, True, hoje, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
+                    if res: st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!"); st.rerun()
+                    else: st.error("Erro: Aluno sem registro de entrada hoje.")
                 
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
@@ -978,6 +1001,32 @@ if eh_admin:
                 else: st.error(msg)
             
         st.markdown("---")
+        st.markdown("---")
+        st.subheader("📅 Controle de Dias Letivos")
+        st.write("Selecione as datas do calendário para ativá-las como dias letivos oficiais.")
+        
+        with st.form("form_controle_dias"):
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
+            with col_d2:
+                st.write("") 
+                st.write("")
+                is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
+            
+            btn_salvar_dia = st.form_submit_button("Salvar Dia")
+            
+        if btn_salvar_dia:
+            try:
+                conn = conectar_bd()
+                cur = conn.cursor()
+                cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
+                conn.commit()
+                conn.close()
+                verificar_dia_letivo.clear() 
+                st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
+            except Exception as e:
+                st.error(f"Ocorreu um erro ao salvar o calendário: {e}")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
         if not df_avaliacoes_cache.empty:
             blocos = df_avaliacoes_cache[['periodo', 'area', 'turma']].drop_duplicates()
