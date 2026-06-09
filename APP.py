@@ -86,13 +86,19 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
             except: pass
     threading.Thread(target=enviar).start()
 
-def renderizar_logo_central():
+@st.cache_data
+def carregar_logo_base64():
     if os.path.exists("logo.png"):
         try:
             with open("logo.png", "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode()
-            st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
-        except: pass
+                return base64.b64encode(image_file.read()).decode()
+        except: return None
+    return None
+
+def renderizar_logo_central():
+    encoded_string = carregar_logo_base64()
+    if encoded_string:
+        st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------
 # 3. CSS (VISUAL PREMIUM E CENTRALIZADO)
@@ -106,22 +112,12 @@ st.markdown("""
     
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
 
-    /* 📱 MELHORIA MOBILE: Cartões maiores e espaçados para as opções do formulário */
     [data-testid="stRadio"] div[role="radiogroup"] > label {
-        font-size: 1.3rem !important;
-        padding: 16px 15px !important;
-        margin-bottom: 12px !important;
-        background-color: #ffffff;
-        border: 2px solid #cbd5e1;
-        border-radius: 12px;
-        box-shadow: 0 3px 6px rgba(0,0,0,0.04);
-        cursor: pointer;
-        transition: all 0.2s ease;
+        font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important;
+        background-color: #ffffff; border: 2px solid #cbd5e1; border-radius: 12px;
+        box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease;
     }
-    [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
-        border-color: var(--accent);
-        transform: translateY(-2px);
-    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent); transform: translateY(-2px); }
 
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
@@ -241,8 +237,26 @@ def verificar_dia_letivo(data_atual):
         return False
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO, CACHE E GERADORES
+# 5. LÓGICA DE NEGÓCIO E CACHE 
 # ------------------------------------------------------------
+@st.cache_data(ttl=60)
+def contar_presencas_hoje(data_str):
+    try:
+        conn = conectar_bd(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+    except: return 0
+
+@st.cache_data(ttl=60)
+def carregar_faltas(data_str):
+    try:
+        conn = conectar_bd()
+        df = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[data_str])
+        conn.close()
+        return df
+    except: return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def carregar_alunos():
@@ -253,10 +267,13 @@ def carregar_alunos():
 @st.cache_data(ttl=300)
 def carregar_avaliacoes():
     try:
-        conn = conectar_bd(); df = pd.read_sql("SELECT * FROM avaliacoes_avs", conn); conn.close(); return df
+        conn = conectar_bd(); df = pd.read_sql("SELECT * FROM avaliacoes_avs", conn); conn.close()
+        if not df.empty and 'disciplina' in df.columns:
+            df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
+        return df
     except: return pd.DataFrame()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def carregar_satisfacao():
     try:
         conn = conectar_bd()
@@ -266,6 +283,24 @@ def carregar_satisfacao():
             df['media_resposta'] = df[['q1','q2','q3','q4','q5']].mean(axis=1)
         return df
     except: return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def processar_estatisticas_areas(df_filtrado):
+    alertas_estudante = {}
+    area_stats = pd.DataFrame()
+    if not df_filtrado.empty:
+        area_stats = df_filtrado.groupby(['nome', 'turma', 'periodo', 'area']).agg(Total=('questao', 'count'), Brancos=('resposta', lambda x: (x == 'BRANCO').sum()), Duplas=('resposta', lambda x: (x == 'DUPLA').sum())).reset_index()
+        area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
+        for nome, group in area_stats.groupby('nome'):
+            alertas = []
+            faltas = group[group['Faltou']]
+            if not faltas.empty:
+                for _, r_f in faltas.iterrows(): alertas.append(f"FALTOU {r_f['area']} ({r_f['periodo']})")
+            if group['Duplas'].sum() > 0: alertas.append("MARCAÇÃO DUPLA")
+            presentes = group[~group['Faltou']]
+            if presentes['Brancos'].sum() > 0: alertas.append("EM BRANCO")
+            if alertas: alertas_estudante[nome] = " | ".join(alertas)
+    return alertas_estudante, area_stats
 
 def importar_csv_alunos(file):
     conteudo_bytes = file.read()
@@ -289,7 +324,10 @@ def registrar_presenca(cod, data, h_limite):
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
         if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
-        conn.commit(); conn.close(); return res[0]
+        conn.commit(); conn.close()
+        contar_presencas_hoje.clear()
+        carregar_faltas.clear()
+        return res[0]
     except: return False
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
@@ -303,7 +341,10 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
-            conn.commit(); conn.close(); return res[0]
+            conn.commit(); conn.close()
+            contar_presencas_hoje.clear()
+            carregar_faltas.clear()
+            return res[0]
         conn.close(); return False
     except: return False
 
@@ -313,19 +354,36 @@ def importar_csv_desempenho(file, periodo, area, turma):
     except: conteudo_str = conteudo_bytes.decode('latin-1')
     temp_df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
     temp_df.columns = [str(c).strip() for c in temp_df.columns]
+    
     col_qs = [c for c in temp_df.columns if re.search(r'^Q\s*\d+\s*Options', c, re.IGNORECASE)]
     idx_not = next((i for i, c in enumerate(temp_df.columns) if 'Not attempted' in c), -1)
     idx_f = temp_df.columns.get_loc(col_qs[0])
     discs = [str(c).strip().upper() for c in temp_df.columns[idx_not+1:idx_f] if 'AV' not in str(c).upper()] if idx_not != -1 else [area.upper()]
-    q_p_d = len(col_qs) // len(discs); dados_l = []
-    for row in temp_df.to_dict('records'):
-        n = str(row.get('Nome', '')).strip()
+    q_p_d = len(col_qs) // len(discs)
+    
+    dados_l = []
+    nomes = temp_df.get('Nome', pd.Series(dtype=str)).astype(str).str.strip().tolist()
+    col_keys = [cq.replace('Options', 'Key') for cq in col_qs]
+    
+    for ck in col_keys:
+        if ck not in temp_df.columns:
+            temp_df[ck] = ''
+            
+    options_matrix = temp_df[col_qs].fillna('').astype(str).values
+    keys_matrix = temp_df[col_keys].fillna('').astype(str).values
+
+    for r_idx, n in enumerate(nomes):
         if not n or n.lower() == 'nan': continue
-        for i, cq in enumerate(col_qs):
-            d_i = min(i // q_p_d, len(discs)-1); rb = row.get(cq)
-            r = 'BRANCO' if pd.isna(rb) or str(rb).strip() == '' else (str(rb).strip().upper() if len(str(rb).strip())==1 else 'DUPLA')
-            g = str(row.get(cq.replace('Options', 'Key'), '')).strip().upper()
-            dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, 1 if r==g and r!='BRANCO' else 0))
+        for i in range(len(col_qs)):
+            d_i = min(i // q_p_d, len(discs)-1)
+            rb = options_matrix[r_idx, i].strip()
+            g = keys_matrix[r_idx, i].strip().upper()
+            
+            r = 'BRANCO' if not rb else (rb.upper() if len(rb)==1 else 'DUPLA')
+            acerto = 1 if r == g and r != 'BRANCO' else 0
+            
+            dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
+            
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
     conn.commit(); conn.close(); carregar_avaliacoes.clear(); return True, f"{len(dados_l)} registros salvos."
@@ -543,10 +601,7 @@ st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()
 
 # --- PROCESSAMENTO DE DADOS (GLOBAL) ---
 hoje = obter_hora_atual().strftime("%Y-%m-%d")
-try:
-    conn = conectar_bd(); cur = conn.cursor(); cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (hoje,))
-    pres_hoje = cur.fetchone()[0]; conn.close()
-except: pres_hoje = 0
+pres_hoje = contar_presencas_hoje(hoje)
 
 total_alunos = len(df_alunos)
 media_geral_freq = f"{(pres_hoje / total_alunos) * 100:.1f}%" if total_alunos > 0 else "0%"
@@ -569,13 +624,9 @@ af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁT
 tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
 df_avaliacoes_cache = carregar_avaliacoes()
-if not df_avaliacoes_cache.empty:
-    df_avaliacoes_cache['disciplina'] = df_avaliacoes_cache['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
-
-df_da = df_avaliacoes_cache.copy()
 
 # Aplicando os filtros no dataframe de avaliações globais
-dff = df_da.copy()
+dff = df_avaliacoes_cache
 if pf != "Todos": dff = dff[dff.periodo==pf]
 if af != "Todas": dff = dff[dff.area==af]
 if tf != "Todas": dff = dff[dff.turma==tf]
@@ -618,12 +669,12 @@ with tabs[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     st.write("Ajuste os horários e confirme se a data de hoje é um dia letivo para liberar o registro dos estudantes.")
     
-    # Horários (como estavam antes)
+    # Horários
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1: h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
     with c_cfg2: h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
     
-    # Controle de Dias Letivos (Movido para cá!)
+    # Controle de Dias Letivos
     with st.form("form_controle_dias"):
         st.markdown("📅 **Ativação do Calendário:**")
         col_d1, col_d2 = st.columns(2)
@@ -682,7 +733,8 @@ with tabs[indice_aba]:
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", obter_hora_atual().date())
-        conn = conectar_bd(); df_faltas = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[d_just]); conn.close()
+        df_faltas = carregar_faltas(d_just.strftime("%Y-%m-%d"))
+        
         if not df_faltas.empty:
             with st.form("form_justificar"):
                 al_falta_sel = st.selectbox("Selecione o Estudante Faltoso", [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_faltas.iterrows()])
@@ -690,8 +742,10 @@ with tabs[indice_aba]:
                 if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
                     cod_f = al_falta_sel.split(" - ")[0]
                     conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just))
-                    conn.commit(); conn.close(); st.success("Justificativa salva com sucesso!"); st.rerun()
+                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
+                    conn.commit(); conn.close()
+                    carregar_faltas.clear()
+                    st.success("Justificativa salva com sucesso!"); st.rerun()
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
@@ -753,6 +807,9 @@ with tabs[indice_aba]:
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
     stabs = st.tabs(sub_da)
     
+    # Executa o processamento de faltosos e em branco apenas quando necessário e utiliza cache
+    alertas_estudante, area_stats = processar_estatisticas_areas(dff)
+    
     with stabs[0]:
         if not dff.empty:
             top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
@@ -763,20 +820,6 @@ with tabs[indice_aba]:
                 classe_nome = "top7-name" if rev else "top7-name-hidden"
                 texto_nome = f"{r['nome']} ({r['turma']})" if rev else "OCULTO"
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA (FILTRADA): {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
-    
-    alertas_estudante = {}
-    if not dff.empty:
-        area_stats = dff.groupby(['nome', 'turma', 'periodo', 'area']).agg(Total=('questao', 'count'), Brancos=('resposta', lambda x: (x == 'BRANCO').sum()), Duplas=('resposta', lambda x: (x == 'DUPLA').sum())).reset_index()
-        area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
-        for nome, group in area_stats.groupby('nome'):
-            alertas = []
-            faltas = group[group['Faltou']]
-            if not faltas.empty:
-                for _, r_f in faltas.iterrows(): alertas.append(f"FALTOU {r_f['area']} ({r_f['periodo']})")
-            if group['Duplas'].sum() > 0: alertas.append("MARCAÇÃO DUPLA")
-            presentes = group[~group['Faltou']]
-            if presentes['Brancos'].sum() > 0: alertas.append("EM BRANCO")
-            if alertas: alertas_estudante[nome] = " | ".join(alertas)
     
     with stabs[1]:
         if not dff.empty:
@@ -816,7 +859,7 @@ with tabs[indice_aba]:
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
                                 df_bol_ind = dff[dff.nome==a['nome']]
-                                df_historico_aluno = df_da[df_da.nome==a['nome']]
+                                df_historico_aluno = df_avaliacoes_cache[df_avaliacoes_cache.nome==a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -834,7 +877,7 @@ with tabs[indice_aba]:
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         df_bol_ind = dff[dff.nome==a['nome']]
-                        df_historico_aluno = df_da[df_da.nome==a['nome']]
+                        df_historico_aluno = df_avaliacoes_cache[df_avaliacoes_cache.nome==a['nome']]
                         medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
@@ -863,7 +906,7 @@ with tabs[indice_aba]:
                                 st.markdown(grid+'</div><br>', unsafe_allow_html=True)
                             
     with stabs[2]:
-        if not dff.empty:
+        if not dff.empty and not area_stats.empty:
             estudantes_faltosos = area_stats[area_stats['Faltou']]
             if not estudantes_faltosos.empty:
                 st.error(f"⚠️ **REGISTO DE FALTAS ({len(estudantes_faltosos)})**")
