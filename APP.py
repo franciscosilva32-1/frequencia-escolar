@@ -237,7 +237,7 @@ def verificar_dia_letivo(data_atual):
         return False
 
 # ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO E CACHE 
+# 5. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS
 # ------------------------------------------------------------
 @st.cache_data(ttl=60)
 def contar_presencas_hoje(data_str):
@@ -284,8 +284,18 @@ def carregar_satisfacao():
         return df
     except: return pd.DataFrame()
 
+# 🚀 MÓDULO DE CACHE OTIMIZADO (SEM PASSAR DATAFRAMES COMO PARÂMETROS)
 @st.cache_data(ttl=300)
-def processar_estatisticas_areas(df_filtrado):
+def obter_dados_acad_filtrados(p, a, t):
+    df = carregar_avaliacoes()
+    if p != "Todos": df = df[df.periodo==p]
+    if a != "Todas": df = df[df.area==a]
+    if t != "Todas": df = df[df.turma==t]
+    return df
+
+@st.cache_data(ttl=300)
+def obter_estatisticas_areas_cached(p, a, t):
+    df_filtrado = obter_dados_acad_filtrados(p, a, t)
     alertas_estudante = {}
     area_stats = pd.DataFrame()
     if not df_filtrado.empty:
@@ -301,6 +311,46 @@ def processar_estatisticas_areas(df_filtrado):
             if presentes['Brancos'].sum() > 0: alertas.append("EM BRANCO")
             if alertas: alertas_estudante[nome] = " | ".join(alertas)
     return alertas_estudante, area_stats
+
+@st.cache_data(ttl=300)
+def obter_top7_cached(p, a, t):
+    dff = obter_dados_acad_filtrados(p, a, t)
+    if dff.empty: return pd.DataFrame()
+    return dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
+
+@st.cache_data(ttl=300)
+def obter_resumo_estudantes_cached(p, a, t):
+    dff = obter_dados_acad_filtrados(p, a, t)
+    if dff.empty: return pd.DataFrame(), []
+    res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
+    erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
+    return res_al, erros_n
+
+@st.cache_data(ttl=300)
+def obter_top3_erros_cached(p, a, t):
+    dff = obter_dados_acad_filtrados(p, a, t)
+    if dff.empty: return pd.DataFrame()
+    q_err = dff.groupby(['turma', 'periodo', 'disciplina', 'questao']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
+    q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
+    q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].sort_values(['turma', 'periodo', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, True, False]).groupby(['turma', 'periodo', 'disciplina']).head(3)
+    return q_err_top3
+
+@st.cache_data(ttl=300)
+def calcular_satisfacao_global_cached(tf):
+    df_sat = carregar_satisfacao()
+    sat_est_str, sat_pais_str, sat_eq_str = "--", "--", "--"
+    if not df_sat.empty:
+        df_sat_est = df_sat[df_sat['categoria'] == 'Estudante']
+        if tf != "Todas": df_sat_est = df_sat_est[df_sat_est['turma'] == tf]
+        if not df_sat_est.empty: sat_est_str = f"{df_sat_est['media_resposta'].mean():.1f} / 5"
+        
+        df_sat_pais = df_sat[df_sat['categoria'] == 'Pais/Responsável']
+        if not df_sat_pais.empty: sat_pais_str = f"{df_sat_pais['media_resposta'].mean():.1f} / 5"
+        
+        df_sat_eq = df_sat[df_sat['categoria'].isin(['Professor', 'Servidor'])]
+        if not df_sat_eq.empty: sat_eq_str = f"{df_sat_eq['media_resposta'].mean():.1f} / 5"
+    return sat_est_str, sat_pais_str, sat_eq_str
+
 
 def importar_csv_alunos(file):
     conteudo_bytes = file.read()
@@ -386,7 +436,9 @@ def importar_csv_desempenho(file, periodo, area, turma):
             
     conn = conectar_bd(); cur = conn.cursor()
     execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-    conn.commit(); conn.close(); carregar_avaliacoes.clear(); return True, f"{len(dados_l)} registros salvos."
+    conn.commit(); conn.close(); carregar_avaliacoes.clear()
+    obter_dados_acad_filtrados.clear()
+    return True, f"{len(dados_l)} registros salvos."
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: return None
@@ -623,30 +675,13 @@ pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Períod
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
 tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
-df_avaliacoes_cache = carregar_avaliacoes()
-
-# Aplicando os filtros no dataframe de avaliações globais
-dff = df_avaliacoes_cache
-if pf != "Todos": dff = dff[dff.periodo==pf]
-if af != "Todas": dff = dff[dff.area==af]
-if tf != "Todas": dff = dff[dff.turma==tf]
+# Aplicando os filtros VIA CACHE diretamente pelas variáveis (Gargalo 1 Eliminado)
+dff = obter_dados_acad_filtrados(pf, af, tf)
 
 media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" if not dff.empty else "--"
 
-# Cálculos de Satisfação
-df_sat = carregar_satisfacao()
-sat_est_str, sat_pais_str, sat_eq_str = "--", "--", "--"
-
-if not df_sat.empty:
-    df_sat_est = df_sat[df_sat['categoria'] == 'Estudante']
-    if tf != "Todas": df_sat_est = df_sat_est[df_sat_est['turma'] == tf]
-    if not df_sat_est.empty: sat_est_str = f"{df_sat_est['media_resposta'].mean():.1f} / 5"
-    
-    df_sat_pais = df_sat[df_sat['categoria'] == 'Pais/Responsável']
-    if not df_sat_pais.empty: sat_pais_str = f"{df_sat_pais['media_resposta'].mean():.1f} / 5"
-    
-    df_sat_eq = df_sat[df_sat['categoria'].isin(['Professor', 'Servidor'])]
-    if not df_sat_eq.empty: sat_eq_str = f"{df_sat_eq['media_resposta'].mean():.1f} / 5"
+# Cálculos de Satisfação via Cache Otimizado (Gargalo 4 Eliminado)
+sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(tf)
 
 # --- LINHA 2: CARTÕES DE DESEMPENHO E SATISFAÇÃO ---
 st.markdown(f'''
@@ -807,12 +842,13 @@ with tabs[indice_aba]:
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
     stabs = st.tabs(sub_da)
     
-    # Executa o processamento de faltosos e em branco apenas quando necessário e utiliza cache
-    alertas_estudante, area_stats = processar_estatisticas_areas(dff)
+    # Cache do processamento de estatísticas com Strings
+    alertas_estudante, area_stats = obter_estatisticas_areas_cached(pf, af, tf)
     
     with stabs[0]:
         if not dff.empty:
-            top7 = dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
+            # Puxa o Top 7 direto da memória baseada nas Strings selecionadas no Topo
+            top7 = obter_top7_cached(pf, af, tf)
             for idx, r in enumerate(top7.to_dict('records')):
                 if eh_admin: rev = st.toggle("Revelar", key=f"rev_{idx}")
                 else: rev = False
@@ -830,8 +866,10 @@ with tabs[indice_aba]:
             with c_est3: ordenar_por = st.selectbox("Ordenar por:", ["Alfabética", "Maior Nota", "Menor Nota"], key="ordenar_est")
             with c_est4: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente c/ erros", key="filtro_erros_est")
 
-            res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
-            erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
+            # Gargalo 2 Eliminado: Tabela Resumo do Estudante extraída do Cache já sumarizada
+            res_al, erros_n = obter_resumo_estudantes_cached(pf, af, tf)
+            
+            # Filtros locais (super rápidos pois operam em uma tabela já resumida e minúscula)
             if bus_al: res_al = res_al[res_al.nome.str.contains(bus_al.upper())]
             if filtro_erros: res_al = res_al[res_al.nome.isin(erros_n)]
             if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al.acerto*10 < 6.0]
@@ -856,10 +894,11 @@ with tabs[indice_aba]:
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
+                        df_historico_base = carregar_avaliacoes()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
                                 df_bol_ind = dff[dff.nome==a['nome']]
-                                df_historico_aluno = df_avaliacoes_cache[df_avaliacoes_cache.nome==a['nome']]
+                                df_historico_aluno = df_historico_base[df_historico_base.nome==a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -872,12 +911,13 @@ with tabs[indice_aba]:
                 if not filtros_ativos: st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Mude a ordenação ou os filtros globais para ver todos).")
                 else: st.info(f"📊 **Total de estudantes avaliados / encontrados:** {len(lista_visualizacao)}.")
                 
+                df_historico_base = carregar_avaliacoes()
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         df_bol_ind = dff[dff.nome==a['nome']]
-                        df_historico_aluno = df_avaliacoes_cache[df_avaliacoes_cache.nome==a['nome']]
+                        df_historico_aluno = df_historico_base[df_historico_base.nome==a['nome']]
                         medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
@@ -932,9 +972,9 @@ with tabs[indice_aba]:
     with stabs[4]:
         if not dff.empty:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
-            q_err = dff.groupby(['turma', 'periodo', 'disciplina', 'questao']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
-            q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
-            q_err_top3 = q_err[q_err['Taxa de Erro (%)'] > 0].sort_values(['turma', 'periodo', 'disciplina', 'Taxa de Erro (%)'], ascending=[True, True, True, False]).groupby(['turma', 'periodo', 'disciplina']).head(3)
+            
+            # Gargalo 3 Eliminado: O agrupamento pesado para achar os Top 3 erros vem direto da memória
+            q_err_top3 = obter_top3_erros_cached(pf, af, tf)
             
             if not q_err_top3.empty:
                 pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
@@ -963,6 +1003,7 @@ with tabs[indice_aba]:
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info("💡 **Dica:** Os dados de Estudantes também obedecem ao filtro global de Turma selecionado no topo da tela.")
     
+    df_sat = carregar_satisfacao()
     if df_sat.empty:
         st.warning("Nenhuma avaliação de satisfação foi recebida até o momento.")
     else:
@@ -1073,6 +1114,7 @@ if eh_admin:
             
         st.markdown("---")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
+        df_avaliacoes_cache = carregar_avaliacoes()
         if not df_avaliacoes_cache.empty:
             blocos = df_avaliacoes_cache[['periodo', 'area', 'turma']].drop_duplicates()
             lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
@@ -1084,7 +1126,8 @@ if eh_admin:
                 conn.commit(); conn.close(); carregar_avaliacoes.clear(); st.success("Bloco removido do servidor!"); st.rerun()
         else: st.info("O banco de dados de desempenho está vazio.")
 
-        if not df_sat.empty:
+        df_sat_admin = carregar_satisfacao()
+        if not df_sat_admin.empty:
             st.markdown("---")
             st.write("Atenção: Ao excluir dados de pesquisa de satisfação, isso não poderá ser desfeito.")
             if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
