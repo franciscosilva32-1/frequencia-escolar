@@ -326,7 +326,7 @@ def obter_resumo_estudantes_cached(ano, p, a, t):
     dff = obter_dados_acad_filtrados(ano, p, a, t)
     if dff.empty: return pd.DataFrame(), []
     res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
-    erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
+    erros_n = dff[dff['resposta'].isin(['BRANCO','DUPLA'])]['nome'].unique()
     return res_al, erros_n
 
 @st.cache_data(ttl=300)
@@ -474,11 +474,11 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     pdf.cell(0, 10, f"ESTUDANTE: {aluno} ({turma})", 0, 1); pdf.cell(0, 10, f"MÉDIA (Filtro): {nota_g:.2f}", 0, 1)
     pdf.set_font("Arial", "B", 8); pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1); pdf.ln(2)
     
-    for p in sorted(df_b.periodo.unique()):
+    for p in sorted(df_b['periodo'].unique()):
         pdf.set_fill_color(230,230,230); pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, f"  {p}", 0, 1, fill=True)
-        for d in sorted(df_b[df_b.periodo==p].disciplina.unique()):
-            df_d = df_b[(df_b.periodo==p) & (df_b.disciplina==d)]
-            pdf.set_font("Arial", "B", 11); pdf.cell(0, 8, f"{d} - Nota: {(df_d.acerto.mean()*10):.2f}", 0, 1)
+        for d in sorted(df_b[df_b['periodo']==p]['disciplina'].unique()):
+            df_d = df_b[(df_b['periodo']==p) & (df_b['disciplina']==d)]
+            pdf.set_font("Arial", "B", 11); pdf.cell(0, 8, f"{d} - Nota: {(df_d['acerto'].mean()*10):.2f}", 0, 1)
             x, y, col = 10, pdf.get_y(), 0
             for q in df_d.sort_values('questao').to_dict('records'):
                 if y > 265: pdf.add_page(); y = 20
@@ -704,7 +704,7 @@ if ano_atual not in anos_disponiveis: anos_disponiveis.append(ano_atual)
 ano_f = c_ano.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="filtro_ano_da")
 pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
-tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
+tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos['turma'].unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
 # Carregamento Otimizado com SQL + Spinner (UX)
 with st.spinner("Sincronizando dados..."):
@@ -896,11 +896,12 @@ with tabs[indice_aba]:
 
             res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
             
-            if bus_al: res_al = res_al[res_al.nome.str.contains(bus_al.upper())]
-            if filtro_erros: res_al = res_al[res_al.nome.isin(erros_n)]
-            if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al.acerto*10 < 6.0]
-            elif filtro_desempenho == "BOM": res_al = res_al[(res_al.acerto*10 >= 6.0) & (res_al.acerto*10 <= 7.5)]
-            elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al.acerto*10 > 7.5]
+            # Usando colchetes para garantir que não chame propriedades indevidas
+            if bus_al: res_al = res_al[res_al['nome'].str.contains(bus_al.upper())]
+            if filtro_erros: res_al = res_al[res_al['nome'].isin(erros_n)]
+            if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al['acerto']*10 < 6.0]
+            elif filtro_desempenho == "BOM": res_al = res_al[(res_al['acerto']*10 >= 6.0) & (res_al['acerto']*10 <= 7.5)]
+            elif filtro_desempenho == "ÓTIMO": res_al = res_al[res_al['acerto']*10 > 7.5]
 
             if ordenar_por == "Maior Nota": res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[False, True])
             elif ordenar_por == "Menor Nota": res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[True, True])
@@ -923,8 +924,9 @@ with tabs[indice_aba]:
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
-                                df_bol_ind = dff[dff.nome==a['nome']]
-                                df_historico_aluno = df_historico_base[df_historico_base.nome==a['nome']]
+                                # Usando colchetes por segurança
+                                df_bol_ind = dff[dff['nome'] == a['nome']]
+                                df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -937,23 +939,30 @@ with tabs[indice_aba]:
                 if not filtros_ativos: st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo os 20 primeiros).")
                 else: st.info(f"📊 **Total de estudantes encontrados:** {len(lista_visualizacao)}.")
                 
-                # OTIMIZAÇÃO CRÍTICA 4: Pré-cálculo para o loop for
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
-                medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                piores_por_aluno = medias_gerais_turma.groupby('nome').apply(lambda x: x.nsmallest(3, 'Nota')).reset_index(drop=True)
+                
+                # CORREÇÃO AQUI: Garante que agrupa apenas se houver dados e usa head(3) no lugar de apply()
+                if not dff.empty:
+                    medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                    piores_por_aluno = medias_gerais_turma.sort_values(['nome', 'Nota']).groupby('nome').head(3)
+                else:
+                    piores_por_aluno = pd.DataFrame(columns=['nome', 'disciplina', 'periodo', 'Nota'])
                 
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
-                        df_bol_ind = dff[dff.nome==a['nome']]
-                        df_historico_aluno = df_historico_base[df_historico_base.nome==a['nome']]
+                        # Usando a notação estrita de colchetes
+                        df_bol_ind = dff[dff['nome'] == a['nome']]
+                        df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                         
-                        # Extrai a conta pré-feita
-                        piores_3 = piores_por_aluno[piores_por_aluno.nome == a['nome']]
+                        # Extrai a conta pré-feita com colchetes
+                        piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
-                        if not piores_3.empty: st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
+                        
+                        if not piores_3.empty: 
+                            st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
                         
                         if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
                             b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
@@ -971,14 +980,14 @@ with tabs[indice_aba]:
                         for _, mb in medias_b.iterrows(): st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})"); st.progress(min(mb['Nota'] / 10, 1.0))
                         
                         st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
-                        for p_m in sorted(df_bol_ind.periodo.unique()):
-                            for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
+                        for p_m in sorted(df_bol_ind['periodo'].unique()):
+                            for d_m in sorted(df_bol_ind[df_bol_ind['periodo']==p_m]['disciplina'].unique()):
                                 st.markdown(f"**{d_m} - {p_m}**")
-                                q_df = df_bol_ind[(df_bol_ind.periodo==p_m) & (df_bol_ind.disciplina==d_m)].sort_values("questao")
+                                q_df = df_bol_ind[(df_bol_ind['periodo']==p_m) & (df_bol_ind['disciplina']==d_m)].sort_values("questao")
                                 grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
                                 for _, q in q_df.iterrows():
-                                    cor = "#10b981" if q.acerto==1 else ("#f59e0b" if q.resposta=='BRANCO' else ("#8b5cf6" if q.resposta=='DUPLA' else "#ef4444"))
-                                    grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q.questao}<br>R:{q.resposta} G:{q.gabarito}</div>'
+                                    cor = "#10b981" if q['acerto']==1 else ("#f59e0b" if q['resposta']=='BRANCO' else ("#8b5cf6" if q['resposta']=='DUPLA' else "#ef4444"))
+                                    grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q["questao"]}<br>R:{q["resposta"]} G:{q["gabarito"]}</div>'
                                 st.markdown(grid+'</div><br>', unsafe_allow_html=True)
                             
     with stabs[2]:
@@ -1125,7 +1134,7 @@ if eh_admin:
         with c_up0: ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
         with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
         with c_up2: a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
-        with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="tup")
+        with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="tup")
         
         arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
         if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
@@ -1137,7 +1146,6 @@ if eh_admin:
         st.markdown("---")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
         
-        # Puxa APENAS blocos únicos direto do SQL, sem ler 50.000 linhas pro Pandas
         conn_limpeza = conectar_bd()
         try:
             blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
