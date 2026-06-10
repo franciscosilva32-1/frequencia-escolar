@@ -44,7 +44,7 @@ cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # ------------------------------------------------------------
-# 2. FUNÇÕES DE SUPORTE (TEMPO E E-MAIL)
+# 2. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
 # ------------------------------------------------------------
 def obter_hora_atual(): return datetime.utcnow() - timedelta(hours=3)
 
@@ -56,6 +56,17 @@ def data_formatada_ptbr():
 ATIVAR_EMAILS = True  
 EMAIL_ESCOLA = st.secrets.get("EMAIL_ESCOLA", "") 
 SENHA_APP_ESCOLA = st.secrets.get("SENHA_APP_ESCOLA", "") 
+
+DICIONARIO_CORES = {
+    # Disciplinas
+    "LP": "#2563eb", "MAT": "#dc2626", "MTM": "#dc2626", "BIO": "#16a34a",
+    "ART": "#d97706", "EDF": "#7c3aed", "ESP": "#db2777", "FIL": "#4f46e5",
+    "FIS": "#0d9488", "GGF": "#ea580c", "HST": "#9333ea", "ING": "#0891b2",
+    "QUI": "#65a30d", "SOC": "#ca8a04",
+    # Áreas
+    "LÍNGUA PORTUGUESA": "#2563eb", "MATEMÁTICA": "#dc2626",
+    "LINGUAGENS": "#d97706", "HUMANAS": "#7c3aed", "NATUREZA": "#16a34a"
+}
 
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -209,14 +220,33 @@ def inicializar_tabelas():
         conn = conectar_bd(); cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
-        cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(periodo, area, turma, nome, disciplina, questao))")
+        
+        # TABELA AVALIAÇÕES COM NOVA COLUNA 'ANO'
+        cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
+        
+        # Script Seguro para atualizar banco antigo (Adiciona coluna ano e refaz Unique)
+        try:
+            cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        try:
+            cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='avaliacoes_avs' AND constraint_type='UNIQUE'")
+            constraints = cur.fetchall()
+            for c in constraints: cur.execute(f"ALTER TABLE avaliacoes_avs DROP CONSTRAINT {c[0]}")
+            cur.execute("ALTER TABLE avaliacoes_avs ADD UNIQUE (ano, periodo, area, turma, nome, disciplina, questao)")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
             q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
         )""")
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(periodo, area, turma)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit(); conn.close()
     except: pass
 
@@ -230,11 +260,9 @@ def verificar_dia_letivo(data_atual):
         cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
         res = cur.fetchone()
         conn.close()
-        if res:
-            return res[0]
+        if res: return res[0]
         return False
-    except:
-        return False
+    except: return False
 
 # ------------------------------------------------------------
 # 5. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS
@@ -284,18 +312,19 @@ def carregar_satisfacao():
         return df
     except: return pd.DataFrame()
 
-# 🚀 MÓDULO DE CACHE OTIMIZADO (SEM PASSAR DATAFRAMES COMO PARÂMETROS)
+# 🚀 MÓDULO DE CACHE OTIMIZADO (AGORA INCLUI ANO)
 @st.cache_data(ttl=300)
-def obter_dados_acad_filtrados(p, a, t):
+def obter_dados_acad_filtrados(ano, p, a, t):
     df = carregar_avaliacoes()
+    if not df.empty and 'ano' in df.columns: df = df[df.ano == str(ano)]
     if p != "Todos": df = df[df.periodo==p]
     if a != "Todas": df = df[df.area==a]
     if t != "Todas": df = df[df.turma==t]
     return df
 
 @st.cache_data(ttl=300)
-def obter_estatisticas_areas_cached(p, a, t):
-    df_filtrado = obter_dados_acad_filtrados(p, a, t)
+def obter_estatisticas_areas_cached(ano, p, a, t):
+    df_filtrado = obter_dados_acad_filtrados(ano, p, a, t)
     alertas_estudante = {}
     area_stats = pd.DataFrame()
     if not df_filtrado.empty:
@@ -313,22 +342,22 @@ def obter_estatisticas_areas_cached(p, a, t):
     return alertas_estudante, area_stats
 
 @st.cache_data(ttl=300)
-def obter_top7_cached(p, a, t):
-    dff = obter_dados_acad_filtrados(p, a, t)
+def obter_top7_cached(ano, p, a, t):
+    dff = obter_dados_acad_filtrados(ano, p, a, t)
     if dff.empty: return pd.DataFrame()
     return dff.groupby(['nome','turma']).acerto.mean().reset_index().sort_values('acerto', ascending=False).head(7)
 
 @st.cache_data(ttl=300)
-def obter_resumo_estudantes_cached(p, a, t):
-    dff = obter_dados_acad_filtrados(p, a, t)
+def obter_resumo_estudantes_cached(ano, p, a, t):
+    dff = obter_dados_acad_filtrados(ano, p, a, t)
     if dff.empty: return pd.DataFrame(), []
     res_al = dff.groupby(['nome','turma']).acerto.mean().reset_index()
     erros_n = dff[dff.resposta.isin(['BRANCO','DUPLA'])].nome.unique()
     return res_al, erros_n
 
 @st.cache_data(ttl=300)
-def obter_top3_erros_cached(p, a, t):
-    dff = obter_dados_acad_filtrados(p, a, t)
+def obter_top3_erros_cached(ano, p, a, t):
+    dff = obter_dados_acad_filtrados(ano, p, a, t)
     if dff.empty: return pd.DataFrame()
     q_err = dff.groupby(['turma', 'periodo', 'disciplina', 'questao']).agg(Total=('questao', 'count'), Acertos=('acerto', 'sum')).reset_index()
     q_err['Taxa de Erro (%)'] = ((q_err['Total'] - q_err['Acertos']) / q_err['Total']) * 100
@@ -336,10 +365,13 @@ def obter_top3_erros_cached(p, a, t):
     return q_err_top3
 
 @st.cache_data(ttl=300)
-def calcular_satisfacao_global_cached(tf):
+def calcular_satisfacao_global_cached(ano, tf):
     df_sat = carregar_satisfacao()
     sat_est_str, sat_pais_str, sat_eq_str = "--", "--", "--"
     if not df_sat.empty:
+        df_sat['ano_registro'] = pd.to_datetime(df_sat['data_hora']).dt.year
+        df_sat = df_sat[df_sat['ano_registro'] == int(ano)]
+        
         df_sat_est = df_sat[df_sat['categoria'] == 'Estudante']
         if tf != "Todas": df_sat_est = df_sat_est[df_sat_est['turma'] == tf]
         if not df_sat_est.empty: sat_est_str = f"{df_sat_est['media_resposta'].mean():.1f} / 5"
@@ -350,7 +382,6 @@ def calcular_satisfacao_global_cached(tf):
         df_sat_eq = df_sat[df_sat['categoria'].isin(['Professor', 'Servidor'])]
         if not df_sat_eq.empty: sat_eq_str = f"{df_sat_eq['media_resposta'].mean():.1f} / 5"
     return sat_est_str, sat_pais_str, sat_eq_str
-
 
 def importar_csv_alunos(file):
     conteudo_bytes = file.read()
@@ -398,7 +429,8 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
         conn.close(); return False
     except: return False
 
-def importar_csv_desempenho(file, periodo, area, turma):
+# ADICIONADO FILTRO ANO AQUI
+def importar_csv_desempenho(file, ano, periodo, area, turma):
     conteudo_bytes = file.read()
     try: conteudo_str = conteudo_bytes.decode('utf-8-sig')
     except: conteudo_str = conteudo_bytes.decode('latin-1')
@@ -432,10 +464,10 @@ def importar_csv_desempenho(file, periodo, area, turma):
             r = 'BRANCO' if not rb else (rb.upper() if len(rb)==1 else 'DUPLA')
             acerto = 1 if r == g and r != 'BRANCO' else 0
             
-            dados_l.append((periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
+            dados_l.append((str(ano), periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
             
     conn = conectar_bd(); cur = conn.cursor()
-    execute_values(cur, "INSERT INTO avaliacoes_avs (periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
+    execute_values(cur, "INSERT INTO avaliacoes_avs (ano, periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (ano, periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
     conn.commit(); conn.close(); carregar_avaliacoes.clear()
     obter_dados_acad_filtrados.clear()
     return True, f"{len(dados_l)} registros salvos."
@@ -468,12 +500,15 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
         progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
         fig, ax = plt.subplots(figsize=(10, 6))
-        cores = plt.cm.tab20(np.linspace(0, 1, len(progresso_pivot.columns)))
-        for i, col in enumerate(progresso_pivot.columns):
-            cor = cores[i]; abreviacao = DICIONARIO_ABREVIACAO.get(col, col[:4].upper())
+        
+        # Puxa a cor exata do nosso Dicionario se possivel
+        for col in progresso_pivot.columns:
+            abreviacao = DICIONARIO_ABREVIACAO.get(col, col[:4].upper())
+            cor = DICIONARIO_CORES.get(abreviacao, DICIONARIO_CORES.get(col, "#000000"))
             ax.plot(progresso_pivot.index, progresso_pivot[col], marker='o', linewidth=5, markersize=12, label=col, color=cor)
             for x_val, y_val in zip(progresso_pivot.index, progresso_pivot[col]):
                 if pd.notna(y_val): ax.text(x_val, y_val + 0.3, abreviacao, color=cor, fontsize=10, fontweight='bold', ha='center', va='bottom')
+        
         ax.set_title("Evolucao Geral ao Longo do Ano", fontweight='bold', fontsize=18); ax.set_ylabel("Nota", fontweight='bold', fontsize=14); ax.set_xlabel("Periodo", fontweight='bold', fontsize=14); ax.set_ylim(0, 11) 
         ax.grid(True, linestyle='--', alpha=0.7); ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12); plt.tight_layout()
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp: plt.savefig(tmp.name, format='png', dpi=300, bbox_inches='tight'); tmp_img_name = tmp.name
@@ -668,20 +703,27 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-# --- FILTROS GLOBAIS DE DESEMPENHO E SATISFAÇÃO (NO TOPO) ---
+# --- FILTROS GLOBAIS (ANO, PERÍODO, ÁREA E TURMA) ---
 st.markdown("### 🎛️ Filtros Globais (Acadêmico & Pesquisa)")
-cf1, cf2, cf3 = st.columns(3)
+c_ano, cf1, cf2, cf3 = st.columns([1, 2, 2, 2])
+
+# Gerando Lista de Anos
+anos_disponiveis = [str(y) for y in range(2024, 2035)]
+ano_atual = str(obter_hora_atual().year)
+if ano_atual not in anos_disponiveis: anos_disponiveis.append(ano_atual)
+
+ano_f = c_ano.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="filtro_ano_da")
 pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
 tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
-# Aplicando os filtros VIA CACHE diretamente pelas variáveis (Gargalo 1 Eliminado)
-dff = obter_dados_acad_filtrados(pf, af, tf)
+# Aplicando os filtros VIA CACHE diretamente pelas variáveis
+dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
 
 media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" if not dff.empty else "--"
 
-# Cálculos de Satisfação via Cache Otimizado (Gargalo 4 Eliminado)
-sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(tf)
+# Cálculos de Satisfação via Cache
+sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
 
 # --- LINHA 2: CARTÕES DE DESEMPENHO E SATISFAÇÃO ---
 st.markdown(f'''
@@ -837,18 +879,16 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
-    st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Período, Área e Turma).")
+    st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
     
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
     stabs = st.tabs(sub_da)
     
-    # Cache do processamento de estatísticas com Strings
-    alertas_estudante, area_stats = obter_estatisticas_areas_cached(pf, af, tf)
+    alertas_estudante, area_stats = obter_estatisticas_areas_cached(ano_f, pf, af, tf)
     
     with stabs[0]:
         if not dff.empty:
-            # Puxa o Top 7 direto da memória baseada nas Strings selecionadas no Topo
-            top7 = obter_top7_cached(pf, af, tf)
+            top7 = obter_top7_cached(ano_f, pf, af, tf)
             for idx, r in enumerate(top7.to_dict('records')):
                 if eh_admin: rev = st.toggle("Revelar", key=f"rev_{idx}")
                 else: rev = False
@@ -866,10 +906,8 @@ with tabs[indice_aba]:
             with c_est3: ordenar_por = st.selectbox("Ordenar por:", ["Alfabética", "Maior Nota", "Menor Nota"], key="ordenar_est")
             with c_est4: st.markdown("<br>", unsafe_allow_html=True); filtro_erros = st.checkbox("Somente c/ erros", key="filtro_erros_est")
 
-            # Gargalo 2 Eliminado: Tabela Resumo do Estudante extraída do Cache já sumarizada
-            res_al, erros_n = obter_resumo_estudantes_cached(pf, af, tf)
+            res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
             
-            # Filtros locais (super rápidos pois operam em uma tabela já resumida e minúscula)
             if bus_al: res_al = res_al[res_al.nome.str.contains(bus_al.upper())]
             if filtro_erros: res_al = res_al[res_al.nome.isin(erros_n)]
             if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al.acerto*10 < 6.0]
@@ -889,12 +927,13 @@ with tabs[indice_aba]:
             gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)", key="chk_lote")
             if gerar_em_lote:
                 st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
-                zip_key = f"zip_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
+                zip_key = f"zip_{ano_f}_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
                 
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
-                        df_historico_base = carregar_avaliacoes()
+                        # Extrai Base Histórica vinculada apenas ao Ano Selecionado Globalmente
+                        df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
                                 df_bol_ind = dff[dff.nome==a['nome']]
@@ -906,12 +945,14 @@ with tabs[indice_aba]:
                         st.session_state[zip_key] = zip_buffer.getvalue()
                 if zip_key in st.session_state:
                     st.success("✅ Arquivo ZIP gerado com sucesso! Clique no botão abaixo para salvar em seu computador.")
-                    st.download_button(label="📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS", data=st.session_state[zip_key], file_name=f"Boletins_{tf.replace(' ', '_')}.zip", mime="application/zip")
+                    st.download_button(label="📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS", data=st.session_state[zip_key], file_name=f"Boletins_{tf.replace(' ', '_')}_{ano_f}.zip", mime="application/zip")
             else:
                 if not filtros_ativos: st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Mude a ordenação ou os filtros globais para ver todos).")
                 else: st.info(f"📊 **Total de estudantes avaliados / encontrados:** {len(lista_visualizacao)}.")
                 
-                df_historico_base = carregar_avaliacoes()
+                # Para mostrar histórico individual, amarra a base do histórico ao Ano Selecionado
+                df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
+                
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
@@ -926,7 +967,7 @@ with tabs[indice_aba]:
                             b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                             if b_pdf: st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                             else: st.error("Erro ao gerar PDF.")
-                        st.markdown("#### 📈 Evolução ao Longo do Ano (Completo)")
+                        st.markdown(f"#### 📈 Evolução ao Longo do Ano ({ano_f})")
                         progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                         try: st.line_chart(progresso.pivot(index='periodo', columns='disciplina', values='Nota'), height=250)
@@ -964,7 +1005,14 @@ with tabs[indice_aba]:
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
                 resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() if tipo_grafico == "Área" else resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
                 resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
-                fig_g = px.bar(resumo_graf.sort_values('Nota'), x='Abreviacao', y='Nota', color='Abreviacao', text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False})
+                
+                # ADICIONADO: color_discrete_map mapeado para o DICIONARIO_CORES que criamos
+                fig_g = px.bar(
+                    resumo_graf.sort_values('Nota'), 
+                    x='Abreviacao', y='Nota', color='Abreviacao', 
+                    text='Nota', hover_data={'Nome Completo': True, 'Nota': ':.2f', 'Abreviacao': False},
+                    color_discrete_map=DICIONARIO_CORES
+                )
                 fig_g.update_traces(texttemplate='%{text:.1f}', textposition='outside')
                 fig_g.update_layout(yaxis=dict(range=[0, 11]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
                 st.plotly_chart(fig_g, use_container_width=True, key=f"grafico_{p}_{tipo_grafico}")
@@ -972,10 +1020,7 @@ with tabs[indice_aba]:
     with stabs[4]:
         if not dff.empty:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
-            
-            # Gargalo 3 Eliminado: O agrupamento pesado para achar os Top 3 erros vem direto da memória
-            q_err_top3 = obter_top3_erros_cached(pf, af, tf)
-            
+            q_err_top3 = obter_top3_erros_cached(ano_f, pf, af, tf)
             if not q_err_top3.empty:
                 pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
                 if pdf_data: st.download_button("📥 BAIXAR RELATÓRIO EM PDF", data=pdf_data, file_name="Questoes_Criticas.pdf", mime="application/pdf")
@@ -1001,64 +1046,64 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("💬 Análise de Satisfação da Comunidade")
-    st.info("💡 **Dica:** Os dados de Estudantes também obedecem ao filtro global de Turma selecionado no topo da tela.")
+    st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
     
     df_sat = carregar_satisfacao()
     if df_sat.empty:
         st.warning("Nenhuma avaliação de satisfação foi recebida até o momento.")
     else:
-        cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
+        # Filtra logo pelo ano global extraindo de data_hora
+        df_sat['ano_registro'] = pd.to_datetime(df_sat['data_hora']).dt.year
+        df_sat_ano = df_sat[df_sat['ano_registro'] == int(ano_f)]
         
-        # Filtro de dados
-        df_sat_filtrado = df_sat.copy()
-        if cat_sat != "Todos":
-            df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
-        if cat_sat in ["Todos", "Estudante"] and tf != "Todas":
-            df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
-            
-        if df_sat_filtrado.empty:
-            st.info("Nenhum dado encontrado para os filtros selecionados.")
+        if df_sat_ano.empty:
+            st.warning(f"Nenhuma avaliação registrada para o ano de {ano_f}.")
         else:
-            # Puxando o nome das perguntas com base no dicionário
-            nomes_perguntas = DICIONARIO_PERGUNTAS_SATISFACAO[cat_sat]
+            cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
             
-            # Calculando a média de cada pergunta
-            medias_q1 = df_sat_filtrado['q1'].mean()
-            medias_q2 = df_sat_filtrado['q2'].mean()
-            medias_q3 = df_sat_filtrado['q3'].mean()
-            medias_q4 = df_sat_filtrado['q4'].mean()
-            medias_q5 = df_sat_filtrado['q5'].mean()
-            
-            df_grafico_sat = pd.DataFrame({
-                'Pergunta': nomes_perguntas,
-                'Média (Max 5)': [medias_q1, medias_q2, medias_q3, medias_q4, medias_q5]
-            })
-            
-            # Gráfico de Barras Plotly
-            fig_sat = px.bar(
-                df_grafico_sat, 
-                x='Pergunta', 
-                y='Média (Max 5)', 
-                text='Média (Max 5)',
-                color='Pergunta',
-                title=f"Média de Satisfação: {cat_sat}"
-            )
-            fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-            fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
-            st.plotly_chart(fig_sat, use_container_width=True)
-
-            st.markdown("---")
-            st.subheader("📝 Mural de Sugestões e Feedbacks")
-            st.write("Abaixo estão os comentários textuais deixados pelos avaliadores.")
-            
-            df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
-            if df_sugestoes.empty:
-                st.success("Não há sugestões em texto para este grupo.")
+            df_sat_filtrado = df_sat_ano.copy()
+            if cat_sat != "Todos":
+                df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
+            if cat_sat in ["Todos", "Estudante"] and tf != "Todas":
+                df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
+                
+            if df_sat_filtrado.empty:
+                st.info("Nenhum dado encontrado para os filtros selecionados.")
             else:
-                for _, sug in df_sugestoes.iterrows():
-                    data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
-                    turma_str = f" ({sug['turma']})" if sug['turma'] else ""
-                    st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
+                nomes_perguntas = DICIONARIO_PERGUNTAS_SATISFACAO[cat_sat]
+                medias_q1 = df_sat_filtrado['q1'].mean()
+                medias_q2 = df_sat_filtrado['q2'].mean()
+                medias_q3 = df_sat_filtrado['q3'].mean()
+                medias_q4 = df_sat_filtrado['q4'].mean()
+                medias_q5 = df_sat_filtrado['q5'].mean()
+                
+                df_grafico_sat = pd.DataFrame({
+                    'Pergunta': nomes_perguntas,
+                    'Média (Max 5)': [medias_q1, medias_q2, medias_q3, medias_q4, medias_q5]
+                })
+                
+                fig_sat = px.bar(
+                    df_grafico_sat, 
+                    x='Pergunta', 
+                    y='Média (Max 5)', 
+                    text='Média (Max 5)',
+                    color='Pergunta',
+                    title=f"Média de Satisfação: {cat_sat}"
+                )
+                fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+                fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                st.plotly_chart(fig_sat, use_container_width=True)
+
+                st.markdown("---")
+                st.subheader("📝 Mural de Sugestões e Feedbacks")
+                df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
+                if df_sugestoes.empty:
+                    st.success("Não há sugestões em texto para este grupo.")
+                else:
+                    for _, sug in df_sugestoes.iterrows():
+                        data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
+                        turma_str = f" ({sug['turma']})" if sug['turma'] else ""
+                        st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
@@ -1100,7 +1145,10 @@ if eh_admin:
         st.markdown("---")
         st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
         st.write("Somente administradores podem enviar ou excluir dados do banco.")
-        c_up1, c_up2, c_up3 = st.columns(3)
+        
+        # Filtro de ANO incluído na gestão de envio!
+        c_up0, c_up1, c_up2, c_up3 = st.columns(4)
+        with c_up0: ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
         with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
         with c_up2: a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
         with c_up3: t_up = st.selectbox("Turma:", sorted(df_alunos.turma.unique()) if not df_alunos.empty else ["Todas"], key="tup")
@@ -1108,21 +1156,21 @@ if eh_admin:
         arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
         if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
             with st.spinner("Processando e injetando dados em lote..."):
-                sucesso, msg = importar_csv_desempenho(arquivo_avs, p_up, a_up, t_up)
+                sucesso, msg = importar_csv_desempenho(arquivo_avs, ano_up, p_up, a_up, t_up)
                 if sucesso: st.success(msg); st.rerun()
                 else: st.error(msg)
             
         st.markdown("---")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
         df_avaliacoes_cache = carregar_avaliacoes()
-        if not df_avaliacoes_cache.empty:
-            blocos = df_avaliacoes_cache[['periodo', 'area', 'turma']].drop_duplicates()
-            lista_blocos = [f"{r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
+        if not df_avaliacoes_cache.empty and 'ano' in df_avaliacoes_cache.columns:
+            blocos = df_avaliacoes_cache[['ano', 'periodo', 'area', 'turma']].drop_duplicates()
+            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
             bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
             if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
-                p_del, a_del, t_del = bloco_del.split(" | ")
+                ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
                 conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("DELETE FROM avaliacoes_avs WHERE periodo=%s AND area=%s AND turma=%s", (p_del, a_del, t_del))
+                cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
                 conn.commit(); conn.close(); carregar_avaliacoes.clear(); st.success("Bloco removido do servidor!"); st.rerun()
         else: st.info("O banco de dados de desempenho está vazio.")
 
