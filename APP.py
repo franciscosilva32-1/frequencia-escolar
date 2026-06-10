@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import execute_values
 import os
 import io
@@ -44,7 +45,26 @@ cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # ------------------------------------------------------------
-# 2. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
+# 2. BANCO DE DADOS (CONNECTION POOLING)
+# ------------------------------------------------------------
+DATABASE_URL = st.secrets.get("DATABASE_URL")
+SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
+SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
+
+@st.cache_resource
+def get_connection_pool():
+    # ThreadedConnectionPool é o mais seguro para Streamlit
+    return pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
+
+def conectar_bd():
+    return get_connection_pool().getconn()
+
+def liberar_conn(conn):
+    if conn:
+        get_connection_pool().putconn(conn)
+
+# ------------------------------------------------------------
+# 3. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
 # ------------------------------------------------------------
 def obter_hora_atual(): return datetime.utcnow() - timedelta(hours=3)
 
@@ -58,144 +78,13 @@ EMAIL_ESCOLA = st.secrets.get("EMAIL_ESCOLA", "")
 SENHA_APP_ESCOLA = st.secrets.get("SENHA_APP_ESCOLA", "") 
 
 DICIONARIO_CORES = {
-    # Disciplinas
     "LP": "#2563eb", "MAT": "#dc2626", "MTM": "#dc2626", "BIO": "#16a34a",
     "ART": "#d97706", "EDF": "#7c3aed", "ESP": "#db2777", "FIL": "#4f46e5",
     "FIS": "#0d9488", "GGF": "#ea580c", "HST": "#9333ea", "ING": "#0891b2",
     "QUI": "#65a30d", "SOC": "#ca8a04",
-    # Áreas
     "LÍNGUA PORTUGUESA": "#2563eb", "MATEMÁTICA": "#dc2626",
     "LINGUAGENS": "#d97706", "HUMANAS": "#7c3aed", "NATUREZA": "#16a34a"
 }
-
-def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
-    try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except: data_f = data
-    
-    if evento.startswith("ENTRADA"):
-        assunto = f"🏫 Aviso de Entrada - Jansen Veloso"
-        if "ATRASO" in evento:
-            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO na escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
-        else:
-            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA na escola hoje ({data_f}) às {horario} (Dentro do horário regular).\n\nAtenciosamente,\nEquipe Jansen Veloso."
-            
-    elif evento == "SAÍDA REGULAR":
-        assunto = f"🏫 Aviso de Saída - Jansen Veloso"
-        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou SAÍDA REGULAR da escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
-        
-    else: # SAÍDA ANTECIPADA
-        assunto = f"🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
-        texto = f"⚠️ ATENÇÃO!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
-    
-    msg = MIMEMultipart(); msg['From'] = EMAIL_ESCOLA; msg['To'] = email_destino; msg['Subject'] = assunto
-    msg.attach(MIMEText(texto, 'plain'))
-    def enviar():
-        if ATIVAR_EMAILS and EMAIL_ESCOLA and SENHA_APP_ESCOLA:
-            try:
-                server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls(); server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
-                server.send_message(msg); server.quit()
-            except: pass
-    threading.Thread(target=enviar).start()
-
-@st.cache_data
-def carregar_logo_base64():
-    if os.path.exists("logo.png"):
-        try:
-            with open("logo.png", "rb") as image_file:
-                return base64.b64encode(image_file.read()).decode()
-        except: return None
-    return None
-
-def renderizar_logo_central():
-    encoded_string = carregar_logo_base64()
-    if encoded_string:
-        st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# 3. CSS (VISUAL PREMIUM E CENTRALIZADO)
-# ------------------------------------------------------------
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-    :root { --primary: #0a1f35; --accent: #ff7b00; --success: #10b981; --danger: #ef4444; --bg-color: #f8fafc; }
-    .stApp { background: var(--bg-color); }
-    #MainMenu, footer, header {visibility: hidden;}
-    
-    html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
-
-    [data-testid="stRadio"] div[role="radiogroup"] > label {
-        font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important;
-        background-color: #ffffff; border: 2px solid #cbd5e1; border-radius: 12px;
-        box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease;
-    }
-    [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent); transform: translateY(-2px); }
-
-    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
-    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
-    
-    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
-    @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
-    
-    .metric-card { background: white; padding: 2.5rem 1.5rem; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.06); text-align: center; position: relative; overflow: hidden; border: 2px solid #e2e8f0; transition: transform 0.2s ease;}
-    .metric-card:hover { transform: translateY(-5px); }
-    .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
-    
-    .m-total::before { background: #0ea5e9; } 
-    .m-presente::before { background: var(--success); } 
-    .m-falta::before { background: var(--danger); } 
-    .m-atraso::before { background: #f59e0b; } 
-    .m-acad::before { background: #8b5cf6; }
-    .m-satest::before { background: #10b981; }
-    .m-satpais::before { background: #f59e0b; }
-    .m-sateq::before { background: #3b82f6; }
-    
-    .m-val { font-size: 4rem; font-weight: 900; color: #0f172a; display: block; line-height: 1.1; letter-spacing: -2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.05); }
-    .m-lab { font-size: 1.2rem; font-weight: 900; color: #475569; text-transform: uppercase; letter-spacing: 1px; margin-top: 1rem; display: block; }
-    
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
-    .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
-    .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
-    .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
-    
-    .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
-    
-    div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
-    div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
-    div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
-    
-    [data-baseweb="select"] > div { background-color: #ffffff !important; border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; }
-    [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.4rem !important;}
-    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
-    ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
-    
-    .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
-    [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
-    [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
-    
-    .login-card { max-width: 600px; margin: 5vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
-    .login-title { font-size: 2.2rem; font-weight: 900; color: var(--primary); margin-bottom: 1.5rem; text-align: center; }
-    
-    [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
-    .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
-
-    .top7-card { background: linear-gradient(135deg, #ffffff, #f8fafc); border-left: 12px solid var(--accent); padding: 3rem 1.5rem; border-radius: 20px; margin-bottom: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center;}
-    .top7-medal { font-size: 3.8rem !important; font-weight: 900; color: var(--primary); margin-bottom: 0.5rem; letter-spacing: -1px;}
-    .top7-name { font-size: 4.5rem !important; font-weight: 900; color: var(--primary); letter-spacing: -2px; margin: 1.5rem 0; line-height: 1.1; text-transform: uppercase;}
-    .top7-name-hidden { font-size: 4.5rem !important; font-weight: 900; color: #94a3b8; filter: blur(12px); user-select: none; margin: 1.5rem 0; line-height: 1.1;}
-    .top7-details { font-size: 1.8rem !important; color: #64748b; font-weight: 800; background: #e2e8f0; display: inline-block; padding: 0.5rem 1.5rem; border-radius: 30px;}
-    
-    div[data-testid="stExpander"]:nth-child(even) { background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1; margin-bottom: 10px;}
-    div[data-testid="stExpander"]:nth-child(odd) { background-color: #e2e8f0; border-radius: 12px; border: 1px solid #94a3b8; margin-bottom: 10px;}
-</style>
-""", unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# 4. BANCO DE DADOS E DICIONÁRIO
-# ------------------------------------------------------------
-DATABASE_URL = st.secrets.get("DATABASE_URL")
-SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
-SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
 DICIONARIO_ABREVIACAO = {
     "BIOLOGIA": "BIO", "ARTE": "ART", "EDUCAÇÃO FÍSICA": "EDF",
@@ -213,23 +102,61 @@ DICIONARIO_PERGUNTAS_SATISFACAO = {
     "Servidor": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Condições de Trabalho", "Clima Organizacional"]
 }
 
-def conectar_bd(): return psycopg2.connect(DATABASE_URL)
+def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
+    try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except: data_f = data
+    
+    if evento.startswith("ENTRADA"):
+        assunto = f"🏫 Aviso de Entrada - Jansen Veloso"
+        if "ATRASO" in evento: texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO na escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        else: texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA na escola hoje ({data_f}) às {horario} (Dentro do horário regular).\n\nAtenciosamente,\nEquipe Jansen Veloso."
+    elif evento == "SAÍDA REGULAR":
+        assunto = f"🏫 Aviso de Saída - Jansen Veloso"
+        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou SAÍDA REGULAR da escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+    else:
+        assunto = f"🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
+        texto = f"⚠️ ATENÇÃO!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+    
+    msg = MIMEMultipart(); msg['From'] = EMAIL_ESCOLA; msg['To'] = email_destino; msg['Subject'] = assunto
+    msg.attach(MIMEText(texto, 'plain'))
+    def enviar():
+        if ATIVAR_EMAILS and EMAIL_ESCOLA and SENHA_APP_ESCOLA:
+            try:
+                server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls(); server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
+                server.send_message(msg); server.quit()
+            except: pass
+    threading.Thread(target=enviar).start()
 
+@st.cache_resource 
+def carregar_logo_base64():
+    if os.path.exists("logo.png"):
+        try:
+            with open("logo.png", "rb") as image_file: return base64.b64encode(image_file.read()).decode()
+        except: return None
+    return None
+
+def renderizar_logo_central():
+    encoded_string = carregar_logo_base64()
+    if encoded_string:
+        st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# 4. INICIALIZAÇÃO DE TABELAS (CACHE RESOURCE)
+# ------------------------------------------------------------
+@st.cache_resource
 def inicializar_tabelas():
+    conn = conectar_bd()
     try:
-        conn = conectar_bd(); cur = conn.cursor()
+        cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
-        
-        # TABELA AVALIAÇÕES COM NOVA COLUNA 'ANO'
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
-        # Script Seguro para atualizar banco antigo (Adiciona coluna ano e refaz Unique)
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
             conn.commit()
-        except Exception:
-            conn.rollback()
+        except Exception: conn.rollback()
 
         try:
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='avaliacoes_avs' AND constraint_type='UNIQUE'")
@@ -237,8 +164,7 @@ def inicializar_tabelas():
             for c in constraints: cur.execute(f"ALTER TABLE avaliacoes_avs DROP CONSTRAINT {c[0]}")
             cur.execute("ALTER TABLE avaliacoes_avs ADD UNIQUE (ano, periodo, area, turma, nome, disciplina, questao)")
             conn.commit()
-        except Exception:
-            conn.rollback()
+        except Exception: conn.rollback()
 
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
@@ -247,11 +173,67 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
-        conn.commit(); conn.close()
-    except: pass
+        conn.commit()
+    except Exception as e: print(f"Erro inicialização: {e}")
+    finally: liberar_conn(conn)
 
 inicializar_tabelas()
 
+# ------------------------------------------------------------
+# 5. CSS (VISUAL PREMIUM E CENTRALIZADO)
+# ------------------------------------------------------------
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+    :root { --primary: #0a1f35; --accent: #ff7b00; --success: #10b981; --danger: #ef4444; --bg-color: #f8fafc; }
+    .stApp { background: var(--bg-color); }
+    #MainMenu, footer, header {visibility: hidden;}
+    html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
+    [data-testid="stRadio"] div[role="radiogroup"] > label { font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; background-color: #ffffff; border: 2px solid #cbd5e1; border-radius: 12px; box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; }
+    [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
+    .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
+    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
+    @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
+    .metric-card { background: white; padding: 2.5rem 1.5rem; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.06); text-align: center; position: relative; overflow: hidden; border: 2px solid #e2e8f0; transition: transform 0.2s ease;}
+    .metric-card:hover { transform: translateY(-5px); }
+    .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
+    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } .m-acad::before { background: #8b5cf6; } .m-satest::before { background: #10b981; } .m-satpais::before { background: #f59e0b; } .m-sateq::before { background: #3b82f6; }
+    .m-val { font-size: 4rem; font-weight: 900; color: #0f172a; display: block; line-height: 1.1; letter-spacing: -2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.05); }
+    .m-lab { font-size: 1.2rem; font-weight: 900; color: #475569; text-transform: uppercase; letter-spacing: 1px; margin-top: 1rem; display: block; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
+    .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
+    .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
+    .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
+    .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
+    div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
+    div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
+    div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
+    [data-baseweb="select"] > div { background-color: #ffffff !important; border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; }
+    [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.4rem !important;}
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
+    .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
+    [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
+    [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
+    .login-card { max-width: 600px; margin: 5vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
+    .login-title { font-size: 2.2rem; font-weight: 900; color: var(--primary); margin-bottom: 1.5rem; text-align: center; }
+    [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
+    .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
+    .top7-card { background: linear-gradient(135deg, #ffffff, #f8fafc); border-left: 12px solid var(--accent); padding: 3rem 1.5rem; border-radius: 20px; margin-bottom: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center;}
+    .top7-medal { font-size: 3.8rem !important; font-weight: 900; color: var(--primary); margin-bottom: 0.5rem; letter-spacing: -1px;}
+    .top7-name { font-size: 4.5rem !important; font-weight: 900; color: var(--primary); letter-spacing: -2px; margin: 1.5rem 0; line-height: 1.1; text-transform: uppercase;}
+    .top7-name-hidden { font-size: 4.5rem !important; font-weight: 900; color: #94a3b8; filter: blur(12px); user-select: none; margin: 1.5rem 0; line-height: 1.1;}
+    .top7-details { font-size: 1.8rem !important; color: #64748b; font-weight: 800; background: #e2e8f0; display: inline-block; padding: 0.5rem 1.5rem; border-radius: 30px;}
+    div[data-testid="stExpander"]:nth-child(even) { background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1; margin-bottom: 10px;}
+    div[data-testid="stExpander"]:nth-child(odd) { background-color: #e2e8f0; border-radius: 12px; border: 1px solid #94a3b8; margin-bottom: 10px;}
+</style>
+""", unsafe_allow_html=True)
+
+# ------------------------------------------------------------
+# 6. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS SQL-FIRST
+# ------------------------------------------------------------
 @st.cache_data(ttl=300)
 def verificar_dia_letivo(data_atual):
     try:
@@ -259,21 +241,18 @@ def verificar_dia_letivo(data_atual):
         cur = conn.cursor()
         cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
         res = cur.fetchone()
-        conn.close()
+        liberar_conn(conn)
         if res: return res[0]
         return False
     except: return False
 
-# ------------------------------------------------------------
-# 5. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS
-# ------------------------------------------------------------
 @st.cache_data(ttl=60)
 def contar_presencas_hoje(data_str):
     try:
         conn = conectar_bd(); cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
         count = cur.fetchone()[0]
-        conn.close()
+        liberar_conn(conn)
         return count
     except: return 0
 
@@ -282,44 +261,39 @@ def carregar_faltas(data_str):
     try:
         conn = conectar_bd()
         df = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[data_str])
-        conn.close()
+        liberar_conn(conn)
         return df
     except: return pd.DataFrame()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)  # TTL Aumentado para 1 hora
 def carregar_alunos():
     try:
-        conn = conectar_bd(); df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn); conn.close(); return df
+        conn = conectar_bd()
+        df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
+        liberar_conn(conn)
+        return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
-@st.cache_data(ttl=300)
-def carregar_avaliacoes():
-    try:
-        conn = conectar_bd(); df = pd.read_sql("SELECT * FROM avaliacoes_avs", conn); conn.close()
-        if not df.empty and 'disciplina' in df.columns:
-            df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
-        return df
-    except: return pd.DataFrame()
 
-@st.cache_data(ttl=300)
-def carregar_satisfacao():
-    try:
-        conn = conectar_bd()
-        df = pd.read_sql("SELECT * FROM satisfacao_v1", conn)
-        conn.close()
-        if not df.empty:
-            df['media_resposta'] = df[['q1','q2','q3','q4','q5']].mean(axis=1)
-        return df
-    except: return pd.DataFrame()
-
-# 🚀 MÓDULO DE CACHE OTIMIZADO (AGORA INCLUI ANO)
+# 🚀 OTIMIZAÇÃO CRÍTICA 1 & 2: Filtragem via SQL puro
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
-    df = carregar_avaliacoes()
-    if not df.empty and 'ano' in df.columns: df = df[df.ano == str(ano)]
-    if p != "Todos": df = df[df.periodo==p]
-    if a != "Todas": df = df[df.area==a]
-    if t != "Todas": df = df[df.turma==t]
+    conditions = ["ano = %s"]
+    params = [str(ano)]
+    if p != "Todos": conditions.append("periodo = %s"); params.append(p)
+    if a != "Todas": conditions.append("area = %s"); params.append(a)
+    if t != "Todas": conditions.append("turma = %s"); params.append(t)
+    
+    where_clause = " AND ".join(conditions)
+    query = f"SELECT * FROM avaliacoes_avs WHERE {where_clause}"
+    
+    conn = conectar_bd()
+    try: df = pd.read_sql(query, conn, params=params)
+    except Exception: df = pd.DataFrame()
+    finally: liberar_conn(conn)
+    
+    if not df.empty and 'disciplina' in df.columns:
+        df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
     return df
 
 @st.cache_data(ttl=300)
@@ -365,13 +339,22 @@ def obter_top3_erros_cached(ano, p, a, t):
     return q_err_top3
 
 @st.cache_data(ttl=300)
+def carregar_satisfacao_por_ano(ano):
+    query = "SELECT * FROM satisfacao_v1 WHERE EXTRACT(YEAR FROM data_hora) = %s"
+    conn = conectar_bd()
+    try:
+        df = pd.read_sql(query, conn, params=[int(ano)])
+        if not df.empty: df['media_resposta'] = df[['q1','q2','q3','q4','q5']].mean(axis=1)
+        return df
+    except Exception: return pd.DataFrame()
+    finally: liberar_conn(conn)
+
+# 🚀 OTIMIZAÇÃO CRÍTICA 3: Satisfação Global Otimizada no SQL
+@st.cache_data(ttl=300)
 def calcular_satisfacao_global_cached(ano, tf):
-    df_sat = carregar_satisfacao()
+    df_sat = carregar_satisfacao_por_ano(ano)
     sat_est_str, sat_pais_str, sat_eq_str = "--", "--", "--"
     if not df_sat.empty:
-        df_sat['ano_registro'] = pd.to_datetime(df_sat['data_hora']).dt.year
-        df_sat = df_sat[df_sat['ano_registro'] == int(ano)]
-        
         df_sat_est = df_sat[df_sat['categoria'] == 'Estudante']
         if tf != "Todas": df_sat_est = df_sat_est[df_sat_est['turma'] == tf]
         if not df_sat_est.empty: sat_est_str = f"{df_sat_est['media_resposta'].mean():.1f} / 5"
@@ -391,45 +374,52 @@ def importar_csv_alunos(file):
     def norm(c): return ''.join(x for x in unicodedata.normalize('NFD', str(c)) if unicodedata.category(x) != 'Mn').strip().upper()
     df.columns = [norm(col) for col in df.columns]
     dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
-    conn = conectar_bd(); cur = conn.cursor()
-    execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
-    conn.commit(); conn.close(); carregar_alunos.clear(); return True
+    conn = conectar_bd()
+    try:
+        cur = conn.cursor()
+        execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
+        conn.commit(); carregar_alunos.clear()
+        return True
+    finally: liberar_conn(conn)
 
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual(); h_at = agora.strftime("%H:%M:%S"); status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
+    conn = conectar_bd()
     try:
-        conn = conectar_bd(); cur = conn.cursor()
+        cur = conn.cursor()
         cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
         res = cur.fetchone()
-        if not res: conn.close(); return "erro_cod"
+        if not res: return "erro_cod"
         cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
         if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
-        conn.commit(); conn.close()
+        conn.commit()
         contar_presencas_hoje.clear()
         carregar_faltas.clear()
         return res[0]
-    except: return False
+    except Exception: return False
+    finally: liberar_conn(conn)
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
+    conn = conectar_bd()
     try:
-        conn = conectar_bd(); cur = conn.cursor(); cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
+        cur = conn.cursor(); cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
         res = cur.fetchone()
-        if not res: conn.close(); return False
+        if not res: return False
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
             if res[1]: 
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
-            conn.commit(); conn.close()
+            conn.commit()
             contar_presencas_hoje.clear()
             carregar_faltas.clear()
             return res[0]
-        conn.close(); return False
-    except: return False
+        return False
+    except Exception: return False
+    finally: liberar_conn(conn)
 
-# ADICIONADO FILTRO ANO AQUI
 def importar_csv_desempenho(file, ano, periodo, area, turma):
     conteudo_bytes = file.read()
     try: conteudo_str = conteudo_bytes.decode('utf-8-sig')
@@ -466,11 +456,15 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
             
             dados_l.append((str(ano), periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
             
-    conn = conectar_bd(); cur = conn.cursor()
-    execute_values(cur, "INSERT INTO avaliacoes_avs (ano, periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (ano, periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-    conn.commit(); conn.close(); carregar_avaliacoes.clear()
-    obter_dados_acad_filtrados.clear()
-    return True, f"{len(dados_l)} registros salvos."
+    conn = conectar_bd()
+    try:
+        cur = conn.cursor()
+        execute_values(cur, "INSERT INTO avaliacoes_avs (ano, periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (ano, periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
+        conn.commit()
+        obter_dados_acad_filtrados.clear()
+        return True, f"{len(dados_l)} registros salvos."
+    except Exception as e: return False, str(e)
+    finally: liberar_conn(conn)
 
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: return None
@@ -500,15 +494,12 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
         progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
         fig, ax = plt.subplots(figsize=(10, 6))
-        
-        # Puxa a cor exata do nosso Dicionario se possivel
         for col in progresso_pivot.columns:
             abreviacao = DICIONARIO_ABREVIACAO.get(col, col[:4].upper())
             cor = DICIONARIO_CORES.get(abreviacao, DICIONARIO_CORES.get(col, "#000000"))
             ax.plot(progresso_pivot.index, progresso_pivot[col], marker='o', linewidth=5, markersize=12, label=col, color=cor)
             for x_val, y_val in zip(progresso_pivot.index, progresso_pivot[col]):
                 if pd.notna(y_val): ax.text(x_val, y_val + 0.3, abreviacao, color=cor, fontsize=10, fontweight='bold', ha='center', va='bottom')
-        
         ax.set_title("Evolucao Geral ao Longo do Ano", fontweight='bold', fontsize=18); ax.set_ylabel("Nota", fontweight='bold', fontsize=14); ax.set_xlabel("Periodo", fontweight='bold', fontsize=14); ax.set_ylim(0, 11) 
         ax.grid(True, linestyle='--', alpha=0.7); ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12); plt.tight_layout()
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp: plt.savefig(tmp.name, format='png', dpi=300, bbox_inches='tight'); tmp_img_name = tmp.name
@@ -570,13 +561,12 @@ def gerar_camera(label, btn_label, cam_id):
     """, height=450)
 
 # ------------------------------------------------------------
-# 6. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
+# 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
 # ------------------------------------------------------------
 if st.query_params.get("modo") == "pesquisa":
     st.markdown("<div class='login-card' style='max-width: 750px;'>", unsafe_allow_html=True)
     renderizar_logo_central()
     
-    # 🟢 LÓGICA DE TELA DE SUCESSO
     if st.session_state.pesquisa_enviada:
         st.markdown("""
         <div style='text-align: center; padding: 40px 10px;'>
@@ -596,7 +586,6 @@ if st.query_params.get("modo") == "pesquisa":
         st.markdown("</div>", unsafe_allow_html=True)
         st.stop()
         
-    # 🟢 LÓGICA DO FORMULÁRIO
     st.markdown("<h2 style='color: var(--primary); text-align: center; margin-bottom: 5px;'>Pesquisa de Satisfação Escolar</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #64748b; font-weight: bold; margin-bottom: 25px;'>Sua opinião é 100% anônima e essencial para melhorarmos nossa escola.</p>", unsafe_allow_html=True)
 
@@ -640,15 +629,16 @@ if st.query_params.get("modo") == "pesquisa":
                 elif cat == "Estudante" and not turma_sel:
                     st.error("⚠️ Atenção: Por favor, selecione a sua turma no topo do formulário.")
                 else:
+                    conn = conectar_bd()
                     try:
-                        conn = conectar_bd(); cur = conn.cursor()
+                        cur = conn.cursor()
                         cur.execute("INSERT INTO satisfacao_v1 (data_hora, categoria, turma, q1, q2, q3, q4, q5, sugestao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                                     (obter_hora_atual(), cat, turma_sel, int(q1[0]), int(q2[0]), int(q3[0]), int(q4[0]), int(q5[0]), sugestao))
-                        conn.commit(); conn.close(); carregar_satisfacao.clear()
-                        
+                        conn.commit()
                         st.session_state.pesquisa_enviada = True
                         st.rerun()
                     except: st.error("Erro de conexão ao salvar avaliação. Tente novamente.")
+                    finally: liberar_conn(conn)
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop() 
 
@@ -707,7 +697,6 @@ st.markdown(f'''
 st.markdown("### 🎛️ Filtros Globais (Acadêmico & Pesquisa)")
 c_ano, cf1, cf2, cf3 = st.columns([1, 2, 2, 2])
 
-# Gerando Lista de Anos
 anos_disponiveis = [str(y) for y in range(2024, 2035)]
 ano_atual = str(obter_hora_atual().year)
 if ano_atual not in anos_disponiveis: anos_disponiveis.append(ano_atual)
@@ -717,12 +706,13 @@ pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Períod
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
 tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos.turma.unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
-# Aplicando os filtros VIA CACHE diretamente pelas variáveis
-dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
+# Carregamento Otimizado com SQL + Spinner (UX)
+with st.spinner("Sincronizando dados..."):
+    dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
 
 media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" if not dff.empty else "--"
 
-# Cálculos de Satisfação via Cache
+# Cálculos de Satisfação via Cache e SQL
 sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
 
 # --- LINHA 2: CARTÕES DE DESEMPENHO E SATISFAÇÃO ---
@@ -746,43 +736,33 @@ with tabs[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     st.write("Ajuste os horários e confirme se a data de hoje é um dia letivo para liberar o registro dos estudantes.")
     
-    # Horários
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1: h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
     with c_cfg2: h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
     
-    # Controle de Dias Letivos
     with st.form("form_controle_dias"):
         st.markdown("📅 **Ativação do Calendário:**")
         col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
-        with col_d2:
-            st.write("") 
-            st.write("")
-            is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
-        
+        with col_d1: data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
+        with col_d2: st.write(""); st.write(""); is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
         btn_salvar_dia = st.form_submit_button("💾 Salvar Configuração do Dia")
         
     if btn_salvar_dia:
+        conn = conectar_bd()
         try:
-            conn = conectar_bd()
             cur = conn.cursor()
             cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
             conn.commit()
-            conn.close()
             verificar_dia_letivo.clear() 
             st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
-        except Exception as e:
-            st.error(f"Ocorreu um erro ao salvar o calendário: {e}")
+        except Exception as e: st.error(f"Erro ao salvar: {e}")
+        finally: liberar_conn(conn)
 
     st.markdown("---")
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     with t_en:
-        is_hoje_letivo = verificar_dia_letivo(hoje)
-        if not is_hoje_letivo:
-            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje): st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
             with st.form("f_en", clear_on_submit=True):
@@ -793,9 +773,7 @@ with tabs[indice_aba]:
                     elif res: st.success(f"Bem-vindo, {res}!")
                 
     with t_sa:
-        is_hoje_letivo = verificar_dia_letivo(hoje)
-        if not is_hoje_letivo:
-            st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje): st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
             with st.form("f_sa", clear_on_submit=True):
@@ -818,17 +796,19 @@ with tabs[indice_aba]:
                 motivo_falta = st.selectbox("Justificativa", ["Atestado Médico", "Problemas Familiares", "Problemas de Transporte", "Outros"])
                 if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
                     cod_f = al_falta_sel.split(" - ")[0]
-                    conn = conectar_bd(); cur = conn.cursor()
-                    cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
-                    conn.commit(); conn.close()
-                    carregar_faltas.clear()
-                    st.success("Justificativa salva com sucesso!"); st.rerun()
+                    conn = conectar_bd()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
+                        conn.commit()
+                        carregar_faltas.clear()
+                        st.success("Justificativa salva com sucesso!"); st.rerun()
+                    finally: liberar_conn(conn)
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
             if not faltas_justificadas.empty:
-                for _, f in faltas_justificadas.iterrows():
-                    st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
+                for _, f in faltas_justificadas.iterrows(): st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
             else: st.write("Nenhuma falta justificada ainda.")
         else: st.success("Nenhuma falta registada para esta data!")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -841,15 +821,19 @@ with tabs[indice_aba]:
     with c2: t_f_gestao = st.selectbox("Turma (Frequência)", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="filtro_turma_gestao")
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
+    
+    query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
+    if t_f_gestao != "Todas": query += " AND a.turma = %s"; params.append(t_f_gestao)
+    if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
+    elif s_f == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
+    if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
+    
+    conn = conectar_bd()
     try:
-        query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
-        if t_f_gestao != "Todas": query += " AND a.turma = %s"; params.append(t_f_gestao)
-        if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
-        elif s_f == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
-        if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
-        conn = conectar_bd(); df_relatorio = pd.read_sql_query(query + " ORDER BY a.turma, a.nome", conn, params=params); conn.close()
+        df_relatorio = pd.read_sql_query(query + " ORDER BY a.turma, a.nome", conn, params=params)
         st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
     except: st.info("Sem dados para exibir no momento.")
+    finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -857,11 +841,13 @@ with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     if dias_u:
+        conn = conectar_bd()
         try:
-            conn = conectar_bd(); df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)]); conn.close()
+            df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)])
             if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
             else: st.success("Nenhum aluno ativo nesta situação.")
         except: st.info("Aguardando...")
+        finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -869,12 +855,14 @@ with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
+        conn = conectar_bd()
         try:
-            conn = conectar_bd(); df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]]); conn.close(); st.dataframe(df_hist, hide_index=True)
+            df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]])
+            st.dataframe(df_hist, hide_index=True)
         except: st.warning("Erro ao carregar histórico.")
+        finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
-
 
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
@@ -926,13 +914,12 @@ with tabs[indice_aba]:
             st.markdown("---")
             gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)", key="chk_lote")
             if gerar_em_lote:
-                st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez. Isso pode levar alguns instantes (aprox. 1 a 2 segundos por aluno).")
+                st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez.")
                 zip_key = f"zip_{ano_f}_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
                 
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
-                        # Extrai Base Histórica vinculada apenas ao Ano Selecionado Globalmente
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
@@ -944,27 +931,30 @@ with tabs[indice_aba]:
                                     zip_file.writestr(f"Boletim_{a['turma']}_{safe_name}.pdf", pdf_bytes)
                         st.session_state[zip_key] = zip_buffer.getvalue()
                 if zip_key in st.session_state:
-                    st.success("✅ Arquivo ZIP gerado com sucesso! Clique no botão abaixo para salvar em seu computador.")
-                    st.download_button(label="📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS", data=st.session_state[zip_key], file_name=f"Boletins_{tf.replace(' ', '_')}_{ano_f}.zip", mime="application/zip")
+                    st.success("✅ Arquivo ZIP gerado com sucesso!")
+                    st.download_button("📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS", data=st.session_state[zip_key], file_name=f"Boletins_{tf.replace(' ', '_')}_{ano_f}.zip", mime="application/zip")
             else:
-                if not filtros_ativos: st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo apenas os 20 primeiros. Mude a ordenação ou os filtros globais para ver todos).")
-                else: st.info(f"📊 **Total de estudantes avaliados / encontrados:** {len(lista_visualizacao)}.")
+                if not filtros_ativos: st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo os 20 primeiros).")
+                else: st.info(f"📊 **Total de estudantes encontrados:** {len(lista_visualizacao)}.")
                 
-                # Para mostrar histórico individual, amarra a base do histórico ao Ano Selecionado
+                # OTIMIZAÇÃO CRÍTICA 4: Pré-cálculo para o loop for
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
+                medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
+                piores_por_aluno = medias_gerais_turma.groupby('nome').apply(lambda x: x.nsmallest(3, 'Nota')).reset_index(drop=True)
                 
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
+                        
                         df_bol_ind = dff[dff.nome==a['nome']]
                         df_historico_aluno = df_historico_base[df_historico_base.nome==a['nome']]
-                        medias_aluno = df_bol_ind.groupby('disciplina').agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                        piores_3 = medias_aluno.sort_values('Nota', ascending=True).head(3)
+                        
+                        # Extrai a conta pré-feita
+                        piores_3 = piores_por_aluno[piores_por_aluno.nome == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                         if not piores_3.empty: st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
                         
-                        # CORREÇÃO AQUI (Adicionado pdf_{idx}_ à chave do botão)
                         if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
                             b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                             if b_pdf: st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
@@ -975,9 +965,11 @@ with tabs[indice_aba]:
                         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
                         try: st.line_chart(progresso.pivot(index='periodo', columns='disciplina', values='Nota'), height=250)
                         except: pass
+                        
                         st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
                         medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         for _, mb in medias_b.iterrows(): st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})"); st.progress(min(mb['Nota'] / 10, 1.0))
+                        
                         st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
                         for p_m in sorted(df_bol_ind.periodo.unique()):
                             for d_m in sorted(df_bol_ind[df_bol_ind.periodo==p_m].disciplina.unique()):
@@ -996,7 +988,7 @@ with tabs[indice_aba]:
                 st.error(f"⚠️ **REGISTO DE FALTAS ({len(estudantes_faltosos)})**")
                 cols_f = st.columns(3)
                 for i, r_f in enumerate(estudantes_faltosos.to_dict('records')): cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) <br> <span style='color:#ef4444;'>Falta em: **{r_f['area']}** ({r_f['periodo']})</span>", unsafe_allow_html=True)
-            else: st.success("✨ Nenhum estudante faltou na avaliação selecionada (de acordo com os filtros atuais).")
+            else: st.success("✨ Nenhum estudante faltou na avaliação selecionada.")
 
     with stabs[3]:
         if not dff.empty:
@@ -1009,7 +1001,6 @@ with tabs[indice_aba]:
                 resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper() if tipo_grafico == "Área" else resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
                 resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
                 
-                # ADICIONADO: color_discrete_map mapeado para o DICIONARIO_CORES que criamos
                 fig_g = px.bar(
                     resumo_graf.sort_values('Nota'), 
                     x='Abreviacao', y='Nota', color='Abreviacao', 
@@ -1051,62 +1042,40 @@ with tabs[indice_aba]:
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
     
-    df_sat = carregar_satisfacao()
-    if df_sat.empty:
-        st.warning("Nenhuma avaliação de satisfação foi recebida até o momento.")
+    df_sat_ano = carregar_satisfacao_por_ano(ano_f)
+    
+    if df_sat_ano.empty:
+        st.warning(f"Nenhuma avaliação registrada para o ano de {ano_f}.")
     else:
-        # Filtra logo pelo ano global extraindo de data_hora
-        df_sat['ano_registro'] = pd.to_datetime(df_sat['data_hora']).dt.year
-        df_sat_ano = df_sat[df_sat['ano_registro'] == int(ano_f)]
+        cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
         
-        if df_sat_ano.empty:
-            st.warning(f"Nenhuma avaliação registrada para o ano de {ano_f}.")
-        else:
-            cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
+        df_sat_filtrado = df_sat_ano.copy()
+        if cat_sat != "Todos": df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
+        if cat_sat in ["Todos", "Estudante"] and tf != "Todas": df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
             
-            df_sat_filtrado = df_sat_ano.copy()
-            if cat_sat != "Todos":
-                df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
-            if cat_sat in ["Todos", "Estudante"] and tf != "Todas":
-                df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
-                
-            if df_sat_filtrado.empty:
-                st.info("Nenhum dado encontrado para os filtros selecionados.")
-            else:
-                nomes_perguntas = DICIONARIO_PERGUNTAS_SATISFACAO[cat_sat]
-                medias_q1 = df_sat_filtrado['q1'].mean()
-                medias_q2 = df_sat_filtrado['q2'].mean()
-                medias_q3 = df_sat_filtrado['q3'].mean()
-                medias_q4 = df_sat_filtrado['q4'].mean()
-                medias_q5 = df_sat_filtrado['q5'].mean()
-                
-                df_grafico_sat = pd.DataFrame({
-                    'Pergunta': nomes_perguntas,
-                    'Média (Max 5)': [medias_q1, medias_q2, medias_q3, medias_q4, medias_q5]
-                })
-                
-                fig_sat = px.bar(
-                    df_grafico_sat, 
-                    x='Pergunta', 
-                    y='Média (Max 5)', 
-                    text='Média (Max 5)',
-                    color='Pergunta',
-                    title=f"Média de Satisfação: {cat_sat}"
-                )
-                fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-                fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
-                st.plotly_chart(fig_sat, use_container_width=True)
+        if df_sat_filtrado.empty:
+            st.info("Nenhum dado encontrado para os filtros selecionados.")
+        else:
+            nomes_perguntas = DICIONARIO_PERGUNTAS_SATISFACAO[cat_sat]
+            df_grafico_sat = pd.DataFrame({
+                'Pergunta': nomes_perguntas,
+                'Média (Max 5)': [df_sat_filtrado['q1'].mean(), df_sat_filtrado['q2'].mean(), df_sat_filtrado['q3'].mean(), df_sat_filtrado['q4'].mean(), df_sat_filtrado['q5'].mean()]
+            })
+            
+            fig_sat = px.bar(df_grafico_sat, x='Pergunta', y='Média (Max 5)', text='Média (Max 5)', color='Pergunta', title=f"Média de Satisfação: {cat_sat}")
+            fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            st.plotly_chart(fig_sat, use_container_width=True)
 
-                st.markdown("---")
-                st.subheader("📝 Mural de Sugestões e Feedbacks")
-                df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
-                if df_sugestoes.empty:
-                    st.success("Não há sugestões em texto para este grupo.")
-                else:
-                    for _, sug in df_sugestoes.iterrows():
-                        data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
-                        turma_str = f" ({sug['turma']})" if sug['turma'] else ""
-                        st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
+            st.markdown("---")
+            st.subheader("📝 Mural de Sugestões e Feedbacks")
+            df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
+            if df_sugestoes.empty: st.success("Não há sugestões em texto para este grupo.")
+            else:
+                for _, sug in df_sugestoes.iterrows():
+                    data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
+                    turma_str = f" ({sug['turma']})" if sug['turma'] else ""
+                    st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
@@ -1117,7 +1086,6 @@ if eh_admin:
         st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
         st.write("Copie o link abaixo e envie via WhatsApp para alunos, pais e servidores responderem de forma anônima:")
         
-        link_base = st.query_params.get("url_base", "https://seu-site-aqui.streamlit.app") 
         link_completo = f"https://seu-projeto.streamlit.app/?modo=pesquisa"
         st.code(link_completo, language="text")
         st.markdown("---")
@@ -1128,18 +1096,22 @@ if eh_admin:
             al_email = st.selectbox("Selecione o Aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()])
             novo_e = st.text_input("Novo E-mail do Responsável")
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
-                conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                conn.commit(); conn.close(); carregar_alunos.clear(); st.success("Atualizado!")
+                conn = conectar_bd()
+                try:
+                    cur = conn.cursor(); cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                    conn.commit(); carregar_alunos.clear(); st.success("Atualizado!")
+                finally: liberar_conn(conn)
         with col2:
             st.write("Adição Manual")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
             m_tur = st.text_input("Turma")
             if st.button("CADASTRAR") and m_cod and m_nom:
-                conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                conn.commit(); conn.close(); carregar_alunos.clear(); st.success("Cadastrado!")
+                conn = conectar_bd()
+                try:
+                    cur = conn.cursor(); cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                    conn.commit(); carregar_alunos.clear(); st.success("Cadastrado!")
+                finally: liberar_conn(conn)
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
         if st.button("PROCESSAR LISTA") and up_al:
@@ -1149,7 +1121,6 @@ if eh_admin:
         st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
         st.write("Somente administradores podem enviar ou excluir dados do banco.")
         
-        # Filtro de ANO incluído na gestão de envio!
         c_up0, c_up1, c_up2, c_up3 = st.columns(4)
         with c_up0: ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
         with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
@@ -1165,25 +1136,33 @@ if eh_admin:
             
         st.markdown("---")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
-        df_avaliacoes_cache = carregar_avaliacoes()
-        if not df_avaliacoes_cache.empty and 'ano' in df_avaliacoes_cache.columns:
-            blocos = df_avaliacoes_cache[['ano', 'periodo', 'area', 'turma']].drop_duplicates()
-            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos.iterrows()]
+        
+        # Puxa APENAS blocos únicos direto do SQL, sem ler 50.000 linhas pro Pandas
+        conn_limpeza = conectar_bd()
+        try:
+            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
+        except: blocos_df = pd.DataFrame()
+        finally: liberar_conn(conn_limpeza)
+        
+        if not blocos_df.empty:
+            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
             bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
             if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
                 ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
-                conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
-                conn.commit(); conn.close(); carregar_avaliacoes.clear(); st.success("Bloco removido do servidor!"); st.rerun()
+                conn_del = conectar_bd()
+                try:
+                    cur = conn_del.cursor(); cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
+                    conn_del.commit(); st.success("Bloco removido do servidor!"); st.rerun()
+                finally: liberar_conn(conn_del)
         else: st.info("O banco de dados de desempenho está vazio.")
 
-        df_sat_admin = carregar_satisfacao()
-        if not df_sat_admin.empty:
-            st.markdown("---")
-            st.write("Atenção: Ao excluir dados de pesquisa de satisfação, isso não poderá ser desfeito.")
-            if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
-                conn = conectar_bd(); cur = conn.cursor()
-                cur.execute("DELETE FROM satisfacao_v1")
-                conn.commit(); conn.close(); carregar_satisfacao.clear(); st.success("Respostas apagadas."); st.rerun()
+        st.markdown("---")
+        st.write("Atenção: Ao excluir dados de pesquisa de satisfação, isso não poderá ser desfeito.")
+        if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
+            conn_sat = conectar_bd()
+            try:
+                cur = conn_sat.cursor(); cur.execute("DELETE FROM satisfacao_v1")
+                conn_sat.commit(); carregar_satisfacao_por_ano.clear(); st.success("Respostas apagadas."); st.rerun()
+            finally: liberar_conn(conn_sat)
 
     st.markdown('</div>', unsafe_allow_html=True)
