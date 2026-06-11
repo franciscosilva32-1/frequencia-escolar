@@ -292,21 +292,43 @@ def carregar_alunos():
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 
+# 🚀 OTIMIZAÇÃO: Filtro Inteligente via LEFT JOIN (Corrige erros de upload)
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
-    conditions = ["ano = %s"]
+    conditions = ["avs.ano = %s"]
     params = [str(ano)]
-    if p != "Todos": conditions.append("periodo = %s"); params.append(p)
-    if a != "Todas": conditions.append("area = %s"); params.append(a)
-    if t != "Todas": conditions.append("turma = %s"); params.append(t)
+    
+    if p != "Todos": 
+        conditions.append("avs.periodo = %s")
+        params.append(p)
+        
+    if a != "Todas": 
+        conditions.append("avs.area = %s")
+        params.append(a)
+        
+    # Cruza a turma oficial do aluno (al.turma) para ignorar turmas erradas no upload do CSV.
+    if t != "Todas": 
+        conditions.append("COALESCE(al.turma, avs.turma) = %s")
+        params.append(t)
     
     where_clause = " AND ".join(conditions)
-    query = f"SELECT * FROM avaliacoes_avs WHERE {where_clause}"
+    
+    query = f"""
+        SELECT avs.id, avs.ano, avs.periodo, avs.area, 
+               COALESCE(al.turma, avs.turma) as turma, 
+               avs.nome, avs.disciplina, avs.questao, avs.resposta, avs.gabarito, avs.acerto 
+        FROM avaliacoes_avs avs
+        LEFT JOIN alunos_v2 al ON avs.nome = al.nome
+        WHERE {where_clause}
+    """
     
     conn = conectar_bd()
-    try: df = pd.read_sql(query, conn, params=params)
-    except Exception: df = pd.DataFrame()
-    finally: liberar_conn(conn)
+    try: 
+        df = pd.read_sql(query, conn, params=params)
+    except Exception: 
+        df = pd.DataFrame()
+    finally: 
+        liberar_conn(conn)
     
     if not df.empty and 'disciplina' in df.columns:
         df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
@@ -911,6 +933,7 @@ with tabs[indice_aba]:
 
             res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
             
+            # Usando colchetes para garantir que não chame propriedades indevidas
             if bus_al: res_al = res_al[res_al['nome'].str.contains(bus_al.upper())]
             if filtro_erros: res_al = res_al[res_al['nome'].isin(erros_n)]
             if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al['acerto']*10 < 6.0]
@@ -938,6 +961,7 @@ with tabs[indice_aba]:
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
+                                # Usando colchetes por segurança
                                 df_bol_ind = dff[dff['nome'] == a['nome']]
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
@@ -965,9 +989,11 @@ with tabs[indice_aba]:
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
+                        # Usando a notação estrita de colchetes
                         df_bol_ind = dff[dff['nome'] == a['nome']]
                         df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                         
+                        # Extrai a conta pré-feita com colchetes
                         piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                         
