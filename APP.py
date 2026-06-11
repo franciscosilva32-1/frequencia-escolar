@@ -180,7 +180,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. CSS (VISUAL PREMIUM E CENTRALIZADO)
+# 5. CSS (VISUAL PREMIUM E CORREÇÃO DO MODO ESCURO)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -189,8 +189,22 @@ st.markdown("""
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
-    [data-testid="stRadio"] div[role="radiogroup"] > label { font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; background-color: #ffffff; border: 2px solid #cbd5e1; border-radius: 12px; box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; }
-    [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent); transform: translateY(-2px); }
+    
+    /* CORREÇÃO DO MODO ESCURO NOS RADIO BUTTONS (PESQUISA DE SATISFAÇÃO) */
+    [data-testid="stRadio"] div[role="radiogroup"] > label { 
+        font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; 
+        background-color: #ffffff !important; 
+        color: #000000 !important; /* FORÇA TEXTO PRETO */
+        border: 2px solid #cbd5e1 !important; border-radius: 12px; 
+        box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; 
+    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label * {
+        color: #000000 !important; /* FORÇA PRETO EM TODOS OS SUB-ELEMENTOS DO BOTÃO */
+        -webkit-text-fill-color: #000000 !important;
+    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent) !important; transform: translateY(-2px); }
+    
+    /* GERAL */
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
@@ -207,13 +221,16 @@ st.markdown("""
     .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
     .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
     .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
+    
+    /* CORREÇÃO DO MODO ESCURO NOS INPUTS E SELECTS */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
-    [data-baseweb="select"] > div { background-color: #ffffff !important; border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; }
+    [data-baseweb="select"] > div { background-color: #ffffff !important; border: 2.5px solid #0a1f35 !important; border-radius: 12px !important; height: 55px !important; color: #000000 !important; }
     [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.4rem !important;}
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
+    
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
@@ -275,7 +292,6 @@ def carregar_alunos():
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 
-# 🚀 OTIMIZAÇÃO CRÍTICA 1 & 2: Filtragem via SQL puro
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
     conditions = ["ano = %s"]
@@ -349,7 +365,6 @@ def carregar_satisfacao_por_ano(ano):
     except Exception: return pd.DataFrame()
     finally: liberar_conn(conn)
 
-# 🚀 OTIMIZAÇÃO CRÍTICA 3: Satisfação Global Otimizada no SQL
 @st.cache_data(ttl=300)
 def calcular_satisfacao_global_cached(ano, tf):
     df_sat = carregar_satisfacao_por_ano(ano)
@@ -896,7 +911,6 @@ with tabs[indice_aba]:
 
             res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
             
-            # Usando colchetes para garantir que não chame propriedades indevidas
             if bus_al: res_al = res_al[res_al['nome'].str.contains(bus_al.upper())]
             if filtro_erros: res_al = res_al[res_al['nome'].isin(erros_n)]
             if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al['acerto']*10 < 6.0]
@@ -924,7 +938,6 @@ with tabs[indice_aba]:
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
-                                # Usando colchetes por segurança
                                 df_bol_ind = dff[dff['nome'] == a['nome']]
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
@@ -941,7 +954,6 @@ with tabs[indice_aba]:
                 
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                 
-                # CORREÇÃO AQUI: Garante que agrupa apenas se houver dados e usa head(3) no lugar de apply()
                 if not dff.empty:
                     medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     piores_por_aluno = medias_gerais_turma.sort_values(['nome', 'Nota']).groupby('nome').head(3)
@@ -953,11 +965,9 @@ with tabs[indice_aba]:
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
-                        # Usando a notação estrita de colchetes
                         df_bol_ind = dff[dff['nome'] == a['nome']]
                         df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                         
-                        # Extrai a conta pré-feita com colchetes
                         piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                         
