@@ -851,6 +851,8 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
+
+# 🚀 OTIMIZAÇÃO APLICADA: LEFT JOIN NO RELATÓRIO DIÁRIO
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -859,20 +861,40 @@ with tabs[indice_aba]:
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
     
-    query = "SELECT a.codigo, a.nome, a.turma, r.tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s"; params = [dt_f.strftime("%Y-%m-%d")]
-    if t_f_gestao != "Todas": query += " AND a.turma = %s"; params.append(t_f_gestao)
-    if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
-    elif s_f == "Ausentes": query += " AND r.tipo_registro = 'FALTA'"
-    if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
+    params = [dt_f.strftime("%Y-%m-%d")]
+    query = """
+        SELECT a.codigo, a.nome, a.turma, 
+               COALESCE(r.tipo_registro, 'NÃO REGISTRADO (AUSENTE)') as tipo_registro, 
+               r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida 
+        FROM alunos_v2 a 
+        LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s
+        WHERE a.status = 'ATIVO'
+    """
+    
+    if t_f_gestao != "Todas":
+        query += " AND a.turma = %s"
+        params.append(t_f_gestao)
+        
+    if s_f == "Presentes":
+        query += " AND r.tipo_registro = 'PRESENCA'"
+    elif s_f == "Ausentes":
+        query += " AND (r.tipo_registro = 'FALTA' OR r.tipo_registro IS NULL)"
+        
+    if b_f:
+        query += " AND a.nome ILIKE %s"
+        params.append(f"%{b_f}%")
+        
+    query += " ORDER BY a.turma, a.nome"
     
     conn = conectar_bd()
     try:
-        df_relatorio = pd.read_sql_query(query + " ORDER BY a.turma, a.nome", conn, params=params)
+        df_relatorio = pd.read_sql_query(query, conn, params=params)
         st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
     except: st.info("Sem dados para exibir no momento.")
     finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
+
 
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
