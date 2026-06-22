@@ -153,6 +153,17 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
+        # NOVA TABELA PARA HISTÓRICO DE FALTAS NA 1ª CHAMADA
+        cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
+            id SERIAL PRIMARY KEY,
+            codigo_aluno TEXT REFERENCES alunos_v2(codigo),
+            ano TEXT,
+            periodo TEXT,
+            motivo TEXT,
+            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(codigo_aluno, ano, periodo)
+        )""")
+        
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
             conn.commit()
@@ -291,8 +302,24 @@ def carregar_alunos():
         return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
+# NOVA FUNÇÃO: CARREGAR HISTÓRICO DE FALTAS NA 1ª CHAMADA
+@st.cache_data(ttl=60)
+def carregar_faltas_primeira_chamada(ano):
+    query = """
+        SELECT a.nome, a.turma, f.periodo, f.motivo, 
+               TO_CHAR(f.data_registro, 'DD/MM/YYYY') as data_registro 
+        FROM faltas_primeira_chamada f
+        JOIN alunos_v2 a ON f.codigo_aluno = a.codigo
+        WHERE f.ano = %s
+        ORDER BY f.periodo, a.turma, a.nome
+    """
+    conn = conectar_bd()
+    try:
+        df = pd.read_sql(query, conn, params=[str(ano)])
+        return df
+    except Exception: return pd.DataFrame()
+    finally: liberar_conn(conn)
 
-# 🚀 OTIMIZAÇÃO: Filtro Inteligente via LEFT JOIN (Corrige erros de upload)
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
     conditions = ["avs.ano = %s"]
@@ -306,7 +333,6 @@ def obter_dados_acad_filtrados(ano, p, a, t):
         conditions.append("avs.area = %s")
         params.append(a)
         
-    # Cruza a turma oficial do aluno (al.turma) para ignorar turmas erradas no upload do CSV.
     if t != "Todas": 
         conditions.append("COALESCE(al.turma, avs.turma) = %s")
         params.append(t)
@@ -851,8 +877,6 @@ with tabs[indice_aba]:
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-
-# 🚀 OTIMIZAÇÃO APLICADA: LEFT JOIN NO RELATÓRIO DIÁRIO
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -928,7 +952,7 @@ with tabs[indice_aba]:
     st.title("📊 Desempenho Acadêmico")
     st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
     
-    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos", "📈 Gráficos", "📋 Questões Críticas"]
+    sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos na Prova", "📈 Gráficos", "📋 Questões Críticas", "📝 Faltou 1ª Chamada"]
     stabs = st.tabs(sub_da)
     
     alertas_estudante, area_stats = obter_estatisticas_areas_cached(ano_f, pf, af, tf)
@@ -1052,7 +1076,7 @@ with tabs[indice_aba]:
         if not dff.empty and not area_stats.empty:
             estudantes_faltosos = area_stats[area_stats['Faltou']]
             if not estudantes_faltosos.empty:
-                st.error(f"⚠️ **REGISTO DE FALTAS ({len(estudantes_faltosos)})**")
+                st.error(f"⚠️ **REGISTO DE FALTAS NA PROVA ({len(estudantes_faltosos)})**")
                 cols_f = st.columns(3)
                 for i, r_f in enumerate(estudantes_faltosos.to_dict('records')): cols_f[i % 3].markdown(f"🚫 **{r_f['nome']}** ({r_f['turma']}) <br> <span style='color:#ef4444;'>Falta em: **{r_f['area']}** ({r_f['periodo']})</span>", unsafe_allow_html=True)
             else: st.success("✨ Nenhum estudante faltou na avaliação selecionada.")
@@ -1098,6 +1122,26 @@ with tabs[indice_aba]:
                         st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("---")
             else: st.success("Não foram detectados erros de marcação para estes filtros!")
+            
+    # NOVA SUB-ABA: HISTÓRICO DE FALTAS NA 1ª CHAMADA
+    with stabs[5]:
+        st.markdown("#### 📝 Histórico de Faltas na 1ª Chamada")
+        st.write(f"Visualizando dados do Ano Letivo: **{ano_f}**")
+        df_faltas_1a = carregar_faltas_primeira_chamada(ano_f)
+        
+        # Filtro Inteligente: Aplica o período selecionado globalmente (se houver)
+        if pf != "Todos" and not df_faltas_1a.empty:
+            df_faltas_1a = df_faltas_1a[df_faltas_1a['periodo'] == pf]
+            
+        # Filtro Inteligente: Aplica a turma selecionada globalmente (se houver)
+        if tf != "Todas" and not df_faltas_1a.empty:
+            df_faltas_1a = df_faltas_1a[df_faltas_1a['turma'] == tf]
+        
+        if df_faltas_1a.empty:
+            st.success(f"🎉 Nenhum registro de falta na 1ª chamada encontrado para os filtros atuais!")
+        else:
+            st.dataframe(df_faltas_1a, use_container_width=True, hide_index=True)
+            
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -1150,6 +1194,42 @@ indice_aba += 1
 if eh_admin:
     with tabs[indice_aba]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
+        
+        # NOVA SEÇÃO: REGISTRO DE FALTAS NA 1ª CHAMADA
+        st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
+        st.write("Selecione o estudante que não compareceu à primeira chamada e justifique o motivo.")
+        with st.form("form_falta_1a", clear_on_submit=True):
+            c_f1, c_f2 = st.columns(2)
+            with c_f1: f1_ano = st.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual))
+            with c_f2: f1_per = st.selectbox("Período Acadêmico", ["1º Período", "2º Período", "3º Período", "4º Período"])
+            
+            f1_aluno = st.selectbox("Selecione o Estudante", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()])
+            f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justificativa", "Outros"])
+            
+            if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
+                if f1_aluno:
+                    cod_aluno = f1_aluno.split(" - ")[0]
+                    conn_f1 = conectar_bd()
+                    try:
+                        cur_f1 = conn_f1.cursor()
+                        # O "ON CONFLICT" faz a atualização inteligente se você lançar para o mesmo aluno no mesmo período
+                        cur_f1.execute("""
+                            INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, motivo) 
+                            VALUES (%s, %s, %s, %s) 
+                            ON CONFLICT (codigo_aluno, ano, periodo) 
+                            DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
+                        """, (cod_aluno, f1_ano, f1_per, f1_motivo))
+                        conn_f1.commit()
+                        carregar_faltas_primeira_chamada.clear()
+                        st.success(f"Falta na 1ª chamada registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+                    finally: liberar_conn(conn_f1)
+                else:
+                    st.error("Por favor, selecione um estudante na lista.")
+                    
+        st.markdown("---")
+        
         st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
         st.write("Copie o link abaixo e envie via WhatsApp para alunos, pais e servidores responderem de forma anônima:")
         
