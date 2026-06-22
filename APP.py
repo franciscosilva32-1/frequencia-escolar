@@ -153,16 +153,27 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
-        # NOVA TABELA PARA HISTÓRICO DE FALTAS NA 1ª CHAMADA
+        # TABELA PARA HISTÓRICO DE FALTAS NA 1ª CHAMADA (COM COLUNA ÁREA)
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY,
             codigo_aluno TEXT REFERENCES alunos_v2(codigo),
             ano TEXT,
             periodo TEXT,
+            area TEXT,
             motivo TEXT,
             data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(codigo_aluno, ano, periodo)
+            UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
+        
+        # Script de Atualização: Caso a tabela já exista do código anterior, adiciona a coluna e atualiza a regra
+        try:
+            cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
+            cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='faltas_primeira_chamada' AND constraint_type='UNIQUE'")
+            for c in cur.fetchall():
+                cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
+            cur.execute("ALTER TABLE faltas_primeira_chamada ADD UNIQUE (codigo_aluno, ano, periodo, area)")
+            conn.commit()
+        except Exception: conn.rollback() # Ignora se a coluna e regras já estiverem perfeitamente configuradas
         
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
@@ -302,16 +313,16 @@ def carregar_alunos():
         return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
-# NOVA FUNÇÃO: CARREGAR HISTÓRICO DE FALTAS NA 1ª CHAMADA
+# NOVA FUNÇÃO: CARREGAR HISTÓRICO DE FALTAS NA 1ª CHAMADA (AGORA INCLUI A ÁREA)
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
     query = """
-        SELECT a.nome, a.turma, f.periodo, f.motivo, 
+        SELECT a.nome, a.turma, f.periodo, f.area, f.motivo, 
                TO_CHAR(f.data_registro, 'DD/MM/YYYY') as data_registro 
         FROM faltas_primeira_chamada f
         JOIN alunos_v2 a ON f.codigo_aluno = a.codigo
         WHERE f.ano = %s
-        ORDER BY f.periodo, a.turma, a.nome
+        ORDER BY f.periodo, f.area, a.turma, a.nome
     """
     conn = conectar_bd()
     try:
@@ -1133,6 +1144,10 @@ with tabs[indice_aba]:
         if pf != "Todos" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['periodo'] == pf]
             
+        # Filtro Inteligente: Aplica a área acadêmica selecionada globalmente (se houver)
+        if af != "Todas" and not df_faltas_1a.empty:
+            df_faltas_1a = df_faltas_1a[df_faltas_1a['area'] == af]
+            
         # Filtro Inteligente: Aplica a turma selecionada globalmente (se houver)
         if tf != "Todas" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['turma'] == tf]
@@ -1195,13 +1210,14 @@ if eh_admin:
     with tabs[indice_aba]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
         
-        # NOVA SEÇÃO: REGISTRO DE FALTAS NA 1ª CHAMADA
+        # NOVA SEÇÃO: REGISTRO DE FALTAS NA 1ª CHAMADA (AGORA COM A SELEÇÃO DA ÁREA)
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
-        st.write("Selecione o estudante que não compareceu à primeira chamada e justifique o motivo.")
+        st.write("Selecione o estudante que não compareceu à primeira chamada, a área da avaliação e justifique o motivo.")
         with st.form("form_falta_1a", clear_on_submit=True):
-            c_f1, c_f2 = st.columns(2)
+            c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
             with c_f1: f1_ano = st.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual))
             with c_f2: f1_per = st.selectbox("Período Acadêmico", ["1º Período", "2º Período", "3º Período", "4º Período"])
+            with c_f3: f1_area = st.selectbox("Área Acadêmica", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
             
             f1_aluno = st.selectbox("Selecione o Estudante", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()])
             f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justificativa", "Outros"])
@@ -1212,16 +1228,16 @@ if eh_admin:
                     conn_f1 = conectar_bd()
                     try:
                         cur_f1 = conn_f1.cursor()
-                        # O "ON CONFLICT" faz a atualização inteligente se você lançar para o mesmo aluno no mesmo período
+                        # A regra de conflito agora inclui a 'area', permitindo que o aluno falte em Humanas e Natureza separadamente
                         cur_f1.execute("""
-                            INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, motivo) 
-                            VALUES (%s, %s, %s, %s) 
-                            ON CONFLICT (codigo_aluno, ano, periodo) 
+                            INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
+                            VALUES (%s, %s, %s, %s, %s) 
+                            ON CONFLICT (codigo_aluno, ano, periodo, area) 
                             DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
-                        """, (cod_aluno, f1_ano, f1_per, f1_motivo))
+                        """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
                         conn_f1.commit()
                         carregar_faltas_primeira_chamada.clear()
-                        st.success(f"Falta na 1ª chamada registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
+                        st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
                     finally: liberar_conn(conn_f1)
