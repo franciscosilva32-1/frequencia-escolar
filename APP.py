@@ -149,10 +149,13 @@ def inicializar_tabelas():
     conn = conectar_bd()
     try:
         cur = conn.cursor()
+        
+        # 1. Criação das tabelas base
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
+        # 2. Criação da tabela de Faltas 1ª Chamada (Completa e Consolidada)
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY,
             codigo_aluno TEXT REFERENCES alunos_v2(codigo),
@@ -164,15 +167,27 @@ def inicializar_tabelas():
             UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
         
+        # Salva a criação das tabelas AGORA para blindar contra rollbacks acidentais
+        conn.commit() 
+        
+        # 3. Bloco Isolado de Atualização de Faltas (Caso seja uma tabela antiga que precisava da coluna)
         try:
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
+            conn.commit()
+        except Exception: 
+            conn.rollback() 
+            
+        try:
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='faltas_primeira_chamada' AND constraint_type='UNIQUE'")
-            for c in cur.fetchall():
+            constraints = cur.fetchall()
+            for c in constraints:
                 cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD UNIQUE (codigo_aluno, ano, periodo, area)")
             conn.commit()
-        except Exception: conn.rollback() 
-        
+        except Exception:
+            conn.rollback()
+
+        # 4. Bloco Isolado de Atualização de Avaliações
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
             conn.commit()
@@ -186,6 +201,7 @@ def inicializar_tabelas():
             conn.commit()
         except Exception: conn.rollback()
 
+        # 5. Outras Tabelas e Índices
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
             q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
@@ -194,6 +210,7 @@ def inicializar_tabelas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
+        
     except Exception as e: print(f"Erro inicialização: {e}")
     finally: liberar_conn(conn)
 
