@@ -153,7 +153,6 @@ def inicializar_tabelas():
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
-        # TABELA PARA HISTÓRICO DE FALTAS NA 1ª CHAMADA (COM COLUNA ÁREA)
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY,
             codigo_aluno TEXT REFERENCES alunos_v2(codigo),
@@ -165,7 +164,6 @@ def inicializar_tabelas():
             UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
         
-        # Script de Atualização: Caso a tabela já exista do código anterior, adiciona a coluna e atualiza a regra
         try:
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='faltas_primeira_chamada' AND constraint_type='UNIQUE'")
@@ -173,7 +171,7 @@ def inicializar_tabelas():
                 cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD UNIQUE (codigo_aluno, ano, periodo, area)")
             conn.commit()
-        except Exception: conn.rollback() # Ignora se a coluna e regras já estiverem perfeitamente configuradas
+        except Exception: conn.rollback() 
         
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
@@ -212,21 +210,19 @@ st.markdown("""
     #MainMenu, footer, header {visibility: hidden;}
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
     
-    /* CORREÇÃO DO MODO ESCURO NOS RADIO BUTTONS (PESQUISA DE SATISFAÇÃO) */
     [data-testid="stRadio"] div[role="radiogroup"] > label { 
         font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; 
         background-color: #ffffff !important; 
-        color: #000000 !important; /* FORÇA TEXTO PRETO */
+        color: #000000 !important; 
         border: 2px solid #cbd5e1 !important; border-radius: 12px; 
         box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; 
     }
     [data-testid="stRadio"] div[role="radiogroup"] > label * {
-        color: #000000 !important; /* FORÇA PRETO EM TODOS OS SUB-ELEMENTOS DO BOTÃO */
+        color: #000000 !important;
         -webkit-text-fill-color: #000000 !important;
     }
     [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent) !important; transform: translateY(-2px); }
     
-    /* GERAL */
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
@@ -244,7 +240,6 @@ st.markdown("""
     .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
     .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
     
-    /* CORREÇÃO DO MODO ESCURO NOS INPUTS E SELECTS */
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
@@ -286,10 +281,13 @@ def verificar_dia_letivo(data_atual):
     except: return False
 
 @st.cache_data(ttl=60)
-def contar_presencas_hoje(data_str):
+def contar_presencas_data(data_str, turma="Todas"):
     try:
         conn = conectar_bd(); cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
+        if turma == "Todas":
+            cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
+        else:
+            cur.execute("SELECT COUNT(r.id) FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data=%s AND r.tipo_registro='PRESENCA' AND a.turma=%s", (data_str, turma))
         count = cur.fetchone()[0]
         liberar_conn(conn)
         return count
@@ -304,7 +302,7 @@ def carregar_faltas(data_str):
         return df
     except: return pd.DataFrame()
 
-@st.cache_data(ttl=3600)  # TTL Aumentado para 1 hora
+@st.cache_data(ttl=3600)  
 def carregar_alunos():
     try:
         conn = conectar_bd()
@@ -313,7 +311,6 @@ def carregar_alunos():
         return df
     except: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
-# NOVA FUNÇÃO: CARREGAR HISTÓRICO DE FALTAS NA 1ª CHAMADA (AGORA INCLUI A ÁREA)
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
     query = """
@@ -335,38 +332,15 @@ def carregar_faltas_primeira_chamada(ano):
 def obter_dados_acad_filtrados(ano, p, a, t):
     conditions = ["avs.ano = %s"]
     params = [str(ano)]
-    
-    if p != "Todos": 
-        conditions.append("avs.periodo = %s")
-        params.append(p)
-        
-    if a != "Todas": 
-        conditions.append("avs.area = %s")
-        params.append(a)
-        
-    if t != "Todas": 
-        conditions.append("COALESCE(al.turma, avs.turma) = %s")
-        params.append(t)
-    
+    if p != "Todos": conditions.append("avs.periodo = %s"); params.append(p)
+    if a != "Todas": conditions.append("avs.area = %s"); params.append(a)
+    if t != "Todas": conditions.append("COALESCE(al.turma, avs.turma) = %s"); params.append(t)
     where_clause = " AND ".join(conditions)
-    
-    query = f"""
-        SELECT avs.id, avs.ano, avs.periodo, avs.area, 
-               COALESCE(al.turma, avs.turma) as turma, 
-               avs.nome, avs.disciplina, avs.questao, avs.resposta, avs.gabarito, avs.acerto 
-        FROM avaliacoes_avs avs
-        LEFT JOIN alunos_v2 al ON avs.nome = al.nome
-        WHERE {where_clause}
-    """
-    
+    query = f"SELECT avs.id, avs.ano, avs.periodo, avs.area, COALESCE(al.turma, avs.turma) as turma, avs.nome, avs.disciplina, avs.questao, avs.resposta, avs.gabarito, avs.acerto FROM avaliacoes_avs avs LEFT JOIN alunos_v2 al ON avs.nome = al.nome WHERE {where_clause}"
     conn = conectar_bd()
-    try: 
-        df = pd.read_sql(query, conn, params=params)
-    except Exception: 
-        df = pd.DataFrame()
-    finally: 
-        liberar_conn(conn)
-    
+    try: df = pd.read_sql(query, conn, params=params)
+    except Exception: df = pd.DataFrame()
+    finally: liberar_conn(conn)
     if not df.empty and 'disciplina' in df.columns:
         df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
     return df
@@ -468,7 +442,7 @@ def registrar_presenca(cod, data, h_limite):
         cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
         if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
         conn.commit()
-        contar_presencas_hoje.clear()
+        contar_presencas_data.clear()
         carregar_faltas.clear()
         return res[0]
     except Exception: return False
@@ -487,7 +461,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
             conn.commit()
-            contar_presencas_hoje.clear()
+            contar_presencas_data.clear()
             carregar_faltas.clear()
             return res[0]
         return False
@@ -698,7 +672,7 @@ if st.query_params.get("modo") == "pesquisa":
                 q4 = st.radio("Como você avalia a qualidade das aulas e o engajamento dos professores?", opcoes, index=None)
                 q5 = st.radio("Como você avalia a organização dos eventos e atividades da escola?", opcoes, index=None)
             elif cat == "Pais/Responsável":
-                q4 = radio("Como você avalia a facilidade para solicitar certificados e declarações?", opcoes, index=None)
+                q4 = st.radio("Como você avalia a facilidade para solicitar certificados e declarações?", opcoes, index=None)
                 q5 = st.radio("Como você avalia a comunicação da escola sobre notas e faltas do estudante?", opcoes, index=None)
             elif cat == "Professor":
                 q4 = st.radio("Como você avalia os recursos pedagógicos e o suporte da gestão escolar?", opcoes, index=None)
@@ -762,47 +736,52 @@ renderizar_logo_central()
 st.markdown('<p class="main-title">PAINEL INTEGRADO</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 
-# --- PROCESSAMENTO DE DADOS (GLOBAL) ---
-hoje = obter_hora_atual().strftime("%Y-%m-%d")
-pres_hoje = contar_presencas_hoje(hoje)
-
-total_alunos = len(df_alunos)
-media_geral_freq = f"{(pres_hoje / total_alunos) * 100:.1f}%" if total_alunos > 0 else "0%"
-
-# --- LINHA 1: CARTÕES DE FREQUÊNCIA ---
-st.markdown(f'''
-<div class="metrics-container">
-    <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
-    <div class="metric-card m-presente"><span class="m-val">{pres_hoje}</span><span class="m-lab">Presentes Hoje</span></div>
-    <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_hoje}</span><span class="m-lab">Faltas Hoje</span></div>
-    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência Diária</span></div>
-</div>
-''', unsafe_allow_html=True)
-
-# --- FILTROS GLOBAIS (ANO, PERÍODO, ÁREA E TURMA) ---
-st.markdown("### 🎛️ Filtros Globais (Acadêmico & Pesquisa)")
-c_ano, cf1, cf2, cf3 = st.columns([1, 2, 2, 2])
+# --- FILTROS GLOBAIS (POSICIONADOS NO TOPO PARA CONTROLAR TUDO) ---
+st.markdown("### 🎛️ Filtros Globais do Painel")
+c_data, c_ano, cf1, cf2, cf3 = st.columns([1.5, 1, 1.5, 1.5, 2])
 
 anos_disponiveis = [str(y) for y in range(2024, 2035)]
 ano_atual = str(obter_hora_atual().year)
 if ano_atual not in anos_disponiveis: anos_disponiveis.append(ano_atual)
 
+# O novo filtro de data no topo!
+data_f_global = c_data.date_input("Data (Frequência)", obter_hora_atual().date(), key="filtro_data_global")
 ano_f = c_ano.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="filtro_ano_da")
 pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
-tf = cf3.selectbox("Turma (Filtra Acadêmico e Satisfação Estudante)", ["Todas"] + sorted(df_alunos['turma'].unique() if not df_alunos.empty else []), key="filtro_turma_da")
+tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + sorted(df_alunos['turma'].unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
-# Carregamento Otimizado com SQL + Spinner (UX)
+
+# --- PROCESSAMENTO DE DADOS (GLOBAL) ---
+
+# 1. Variável real do dia de hoje (usada exclusivamente para travar o registro das catracas no dia correto)
+hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
+
+# 2. Variável da data selecionada pelo usuário (usada nos cálculos e painéis)
+data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
+
+# 3. Processamento dinâmico de Alunos/Frequência baseado na data e turma selecionadas
+df_alunos_filtrado = df_alunos if tf == "Todas" else df_alunos[df_alunos['turma'] == tf]
+total_alunos = len(df_alunos_filtrado)
+
+pres_data = contar_presencas_data(data_selecionada_str, tf)
+media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%" if total_alunos > 0 else "0%"
+
+# 4. Processamento dinâmico de Avaliações e Satisfação
 with st.spinner("Sincronizando dados..."):
     dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
 
 media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" if not dff.empty else "--"
-
-# Cálculos de Satisfação via Cache e SQL
 sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
 
-# --- LINHA 2: CARTÕES DE DESEMPENHO E SATISFAÇÃO ---
+# --- CARTÕES DE MÉTRICAS RENDERIZADOS APÓS OS FILTROS ---
 st.markdown(f'''
+<div class="metrics-container">
+    <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
+    <div class="metric-card m-presente"><span class="m-val">{pres_data}</span><span class="m-lab">Presentes (Dia)</span></div>
+    <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_data}</span><span class="m-lab">Faltas (Dia)</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência (Dia)</span></div>
+</div>
 <div class="metrics-container" style="margin-top: 15px;">
     <div class="metric-card m-acad"><span class="m-val">{media_geral_acad}</span><span class="m-lab">Média Acad. (Filtrada)</span></div>
     <div class="metric-card m-satest"><span class="m-val">{sat_est_str}</span><span class="m-lab">Satisfação Estudante</span></div>
@@ -848,18 +827,18 @@ with tabs[indice_aba]:
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     with t_en:
-        if not verificar_dia_letivo(hoje): st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje_real): st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
             with st.form("f_en", clear_on_submit=True):
                 cod_en = st.text_input("Código Aluno (Entrada)")
                 if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
-                    res = registrar_presenca(cod_en.upper(), hoje, h_lim_e)
+                    res = registrar_presenca(cod_en.upper(), hoje_real, h_lim_e)
                     if res == "erro_cod": st.error("Código não encontrado.")
                     elif res: st.success(f"Bem-vindo, {res}!")
                 
     with t_sa:
-        if not verificar_dia_letivo(hoje): st.error("⚠️ REGISTRO BLOQUEADO: A data de hoje não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje_real): st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
             with st.form("f_sa", clear_on_submit=True):
@@ -867,13 +846,13 @@ with tabs[indice_aba]:
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
                 mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
                 if st.form_submit_button("CONFIRMAR SAÍDA") and cod_sa:
-                    res = registrar_saida(cod_sa.upper(), mot, True, hoje, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
+                    res = registrar_saida(cod_sa.upper(), mot, True, hoje_real, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
                     if res: st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!"); st.rerun()
                     else: st.error("Erro: Aluno sem registro de entrada hoje.")
                 
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
-        d_just = st.date_input("Data da Falta", obter_hora_atual().date())
+        d_just = st.date_input("Data da Falta", value=data_f_global)
         df_faltas = carregar_faltas(d_just.strftime("%Y-%m-%d"))
         
         if not df_faltas.empty:
@@ -903,8 +882,8 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
-    with c1: dt_f = st.date_input("Data", obter_hora_atual(), key="data_relatorio")
-    with c2: t_f_gestao = st.selectbox("Turma (Frequência)", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], key="filtro_turma_gestao")
+    with c1: dt_f = st.date_input("Data", value=data_f_global, key="data_relatorio")
+    with c2: t_f_gestao = st.selectbox("Turma (Frequência)", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], index=0 if tf=="Todas" else (["Todas"] + sorted(df_alunos['turma'].unique())).index(tf) , key="filtro_turma_gestao")
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
     
@@ -1002,7 +981,6 @@ with tabs[indice_aba]:
 
             res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
             
-            # Usando colchetes para garantir que não chame propriedades indevidas
             if bus_al: res_al = res_al[res_al['nome'].str.contains(bus_al.upper())]
             if filtro_erros: res_al = res_al[res_al['nome'].isin(erros_n)]
             if filtro_desempenho == "INSUFICIENTE": res_al = res_al[res_al['acerto']*10 < 6.0]
@@ -1030,7 +1008,6 @@ with tabs[indice_aba]:
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
-                                # Usando colchetes por segurança
                                 df_bol_ind = dff[dff['nome'] == a['nome']]
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
@@ -1058,11 +1035,9 @@ with tabs[indice_aba]:
                     tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
-                        # Usando a notação estrita de colchetes
                         df_bol_ind = dff[dff['nome'] == a['nome']]
                         df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                         
-                        # Extrai a conta pré-feita com colchetes
                         piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
                         
@@ -1146,21 +1121,17 @@ with tabs[indice_aba]:
                     st.markdown("---")
             else: st.success("Não foram detectados erros de marcação para estes filtros!")
             
-    # NOVA SUB-ABA: HISTÓRICO DE FALTAS NA 1ª CHAMADA
     with stabs[5]:
         st.markdown("#### 📝 Histórico de Faltas na 1ª Chamada")
         st.write(f"Visualizando dados do Ano Letivo: **{ano_f}**")
         df_faltas_1a = carregar_faltas_primeira_chamada(ano_f)
         
-        # Filtro Inteligente: Aplica o período selecionado globalmente (se houver)
         if pf != "Todos" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['periodo'] == pf]
             
-        # Filtro Inteligente: Aplica a área acadêmica selecionada globalmente (se houver)
         if af != "Todas" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['area'] == af]
             
-        # Filtro Inteligente: Aplica a turma selecionada globalmente (se houver)
         if tf != "Todas" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['turma'] == tf]
         
@@ -1222,7 +1193,6 @@ if eh_admin:
     with tabs[indice_aba]:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
         
-        # NOVA SEÇÃO: REGISTRO DE FALTAS NA 1ª CHAMADA (AGORA COM A SELEÇÃO DA ÁREA)
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
         st.write("Selecione o estudante que não compareceu à primeira chamada, a área da avaliação e justifique o motivo.")
         with st.form("form_falta_1a", clear_on_submit=True):
@@ -1240,7 +1210,6 @@ if eh_admin:
                     conn_f1 = conectar_bd()
                     try:
                         cur_f1 = conn_f1.cursor()
-                        # A regra de conflito agora inclui a 'area', permitindo que o aluno falte em Humanas e Natureza separadamente
                         cur_f1.execute("""
                             INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
                             VALUES (%s, %s, %s, %s, %s) 
