@@ -166,11 +166,9 @@ def inicializar_tabelas():
             data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
-        
-        # Salva a criação das tabelas AGORA para blindar contra rollbacks acidentais
         conn.commit() 
         
-        # 3. Bloco Isolado de Atualização de Faltas (Caso seja uma tabela antiga que precisava da coluna)
+        # 3. Bloco Isolado de Atualização de Faltas
         try:
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
             conn.commit()
@@ -210,6 +208,16 @@ def inicializar_tabelas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
+        
+        # 6. MÓDULO DE SEGURANÇA: Habilitar RLS (Row Level Security) em todas as tabelas
+        # Isso atende ao aviso "Síndrome das Pernas Inquietas" do Supabase, bloqueando a API pública
+        tabelas_para_proteger = ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']
+        for tb in tabelas_para_proteger:
+            try:
+                cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
+                conn.commit()
+            except Exception:
+                conn.rollback() # Ignora se já estiver habilitado ou houver algum outro alerta menor
         
     except Exception as e: print(f"Erro inicialização: {e}")
     finally: liberar_conn(conn)
