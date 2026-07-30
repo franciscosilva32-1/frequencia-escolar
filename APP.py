@@ -150,12 +150,10 @@ def inicializar_tabelas():
     try:
         cur = conn.cursor()
         
-        # 1. Criação das tabelas base
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         
-        # 2. Criação da tabela de Faltas 1ª Chamada (Completa e Consolidada)
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY,
             codigo_aluno TEXT REFERENCES alunos_v2(codigo),
@@ -168,12 +166,10 @@ def inicializar_tabelas():
         )""")
         conn.commit() 
         
-        # 3. Bloco Isolado de Atualização de Faltas
         try:
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
             conn.commit()
-        except Exception: 
-            conn.rollback() 
+        except Exception: conn.rollback() 
             
         try:
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='faltas_primeira_chamada' AND constraint_type='UNIQUE'")
@@ -182,10 +178,8 @@ def inicializar_tabelas():
                 cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD UNIQUE (codigo_aluno, ano, periodo, area)")
             conn.commit()
-        except Exception:
-            conn.rollback()
+        except Exception: conn.rollback()
 
-        # 4. Bloco Isolado de Atualização de Avaliações
         try:
             cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
             conn.commit()
@@ -199,7 +193,6 @@ def inicializar_tabelas():
             conn.commit()
         except Exception: conn.rollback()
 
-        # 5. Outras Tabelas e Índices
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
             q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
@@ -209,15 +202,13 @@ def inicializar_tabelas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
         
-        # 6. MÓDULO DE SEGURANÇA: Habilitar RLS (Row Level Security) em todas as tabelas
-        # Isso atende ao aviso "Síndrome das Pernas Inquietas" do Supabase, bloqueando a API pública
         tabelas_para_proteger = ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']
         for tb in tabelas_para_proteger:
             try:
                 cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
                 conn.commit()
             except Exception:
-                conn.rollback() # Ignora se já estiver habilitado ou houver algum outro alerta menor
+                conn.rollback() 
         
     except Exception as e: print(f"Erro inicialização: {e}")
     finally: liberar_conn(conn)
@@ -604,7 +595,14 @@ def gerar_pdf_relatorio_critico(df_critico):
         pdf.ln(5)
     out = pdf.output(dest='S'); return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
+# ------------------------------------------------------------
+# FUNÇÃO DA CÂMERA (CORRIGIDA)
+# ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
+    # ATUALIZAÇÃO IMPORTANTE:
+    # 1. Adicionado fallback inteligente (Tenta câmera traseira, se não achar, vai pra webcam frontal).
+    # 2. Dimensão do qrbox ajustada para 220, evitando erro em telas menores.
+    # 3. Adicionado alert() para você saber exatamente o erro caso seja bloqueado pelo navegador.
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
         <div style="display:flex; gap:10px; margin-bottom:15px;">
@@ -617,30 +615,49 @@ def gerar_camera(label, btn_label, cam_id):
     <script>
         let scanner_{cam_id};
         document.getElementById("start-{cam_id}").onclick = () => {{
-            document.getElementById("reader-{cam_id}").style.display = "block";
+            const container = document.getElementById("reader-{cam_id}");
+            container.style.display = "block";
+            
             if(!scanner_{cam_id}) scanner_{cam_id} = new Html5Qrcode("reader-{cam_id}");
-            scanner_{cam_id}.start({{ facingMode: "environment" }}, {{ fps: 15, qrbox: 250 }}, (txt) => {{
-                
+            
+            const configuracao = {{ fps: 10, qrbox: {{ width: 220, height: 220 }} }};
+            
+            const aoLerCodigo = (txt) => {{
                 const input = window.parent.document.querySelectorAll('input[aria-label*="{label}"]')[0];
                 if(input) {{ 
-                    // Truque avancado para forcar o Streamlit (React) a reconhecer a digitacao injetada
                     let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                     nativeInputValueSetter.call(input, txt);
                     input.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     
-                    // Aguarda o Streamlit registrar a variavel na memoria (800ms) e entao clica no botao sozinho
                     setTimeout(() => {{ 
                         window.parent.document.querySelectorAll('button').forEach(b => {{ 
                             if(b.innerText.includes("{btn_label}")) b.click(); 
                         }}); 
                     }}, 800);
                 }}
-                scanner_{cam_id}.stop().then(() => {{ document.getElementById("reader-{cam_id}").style.display = "none"; }});
-                
-            }}).catch(err => console.error(err));
+                scanner_{cam_id}.stop().then(() => {{ container.style.display = "none"; }});
+            }};
+
+            // Passo 1: Tenta iniciar a câmera traseira (environment)
+            scanner_{cam_id}.start({{ facingMode: "environment" }}, configuracao, aoLerCodigo)
+            .catch(erroTraseira => {{
+                console.warn("Câmera traseira falhou, tentando frontal...", erroTraseira);
+                // Passo 2: Se falhar (ex: notebook), tenta a câmera frontal/webcam (user)
+                scanner_{cam_id}.start({{ facingMode: "user" }}, configuracao, aoLerCodigo)
+                .catch(erroFrontal => {{
+                    // Passo 3: Se as duas falharem, exibe na tela o porquê (provavelmente permissão bloqueada)
+                    alert("⚠️ Erro ao acessar a câmera: Verifique se o navegador tem permissão. Detalhe técnico: " + erroFrontal);
+                    container.style.display = "none";
+                }});
+            }});
         }};
+        
         document.getElementById("stop-{cam_id}").onclick = () => {{
-            if(scanner_{cam_id}) {{ scanner_{cam_id}.stop().then(() => {{ document.getElementById("reader-{cam_id}").style.display = "none"; }}).catch(err => console.error(err)); }}
+            if(scanner_{cam_id}) {{ 
+                scanner_{cam_id}.stop().then(() => {{ 
+                    document.getElementById("reader-{cam_id}").style.display = "none"; 
+                }}).catch(err => console.error(err)); 
+            }}
         }};
     </script>
     """, height=450)
@@ -1259,28 +1276,97 @@ if eh_admin:
         st.code(link_completo, language="text")
         st.markdown("---")
 
+        # -------------------------------------------------------------------
+        # ATUALIZAÇÃO IMPORTANTE: MÓDULO DE GESTÃO E EXCLUSÃO DE ALUNOS AQUI
+        # -------------------------------------------------------------------
         st.subheader("📧 Gerir E-mails e Alunos")
         col1, col2 = st.columns(2)
+        
         with col1:
             al_email = st.selectbox("Selecione o Aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()])
             novo_e = st.text_input("Novo E-mail do Responsável")
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd()
                 try:
-                    cur = conn.cursor(); cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                    conn.commit(); carregar_alunos.clear(); st.success("Atualizado!")
-                finally: liberar_conn(conn)
+                    cur = conn.cursor()
+                    cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                    conn.commit()
+                    carregar_alunos.clear()
+                    st.success("Atualizado com sucesso!")
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Erro ao salvar: {e}")
+                finally: 
+                    liberar_conn(conn)
+        
         with col2:
-            st.write("Adição Manual")
+            st.write("Adição Manual de Aluno")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
-            m_tur = st.text_input("Turma")
-            if st.button("CADASTRAR") and m_cod and m_nom:
-                conn = conectar_bd()
-                try:
-                    cur = conn.cursor(); cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                    conn.commit(); carregar_alunos.clear(); st.success("Cadastrado!")
-                finally: liberar_conn(conn)
+            
+            # Adicionado Dropdown inteligente de Turmas
+            lista_turmas = sorted(df_alunos['turma'].unique()) if not df_alunos.empty else []
+            m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
+            if m_tur_sel == "+ Criar Nova Turma":
+                m_tur = st.text_input("Digite o nome da nova turma")
+            else:
+                m_tur = m_tur_sel
+
+            if st.button("CADASTRAR ALUNO"):
+                if m_cod and m_nom and m_tur and m_tur != "Selecione...":
+                    conn = conectar_bd()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                        conn.commit()
+                        carregar_alunos.clear()
+                        st.success("Cadastrado com sucesso!")
+                    except Exception as e:
+                        conn.rollback()
+                        # Evita a "tela vermelha" caso você insira uma matrícula já existente
+                        if "UniqueViolation" in str(type(e).__name__):
+                            st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
+                        else:
+                            st.error(f"Erro inesperado: {e}")
+                    finally: 
+                        liberar_conn(conn)
+                else:
+                    st.warning("Preencha todos os campos antes de cadastrar.")
+
+        st.divider()
+
+        # NOVO: MÓDULO DE EXCLUSÃO DE ALUNO EM CASCATA
+        st.markdown("#### 🗑️ Excluir Registro de Aluno")
+        st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
+        
+        c_del1, c_del2 = st.columns([3, 1])
+        with c_del1:
+            aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()], key="sel_del_aluno")
+        with c_del2:
+            st.write("") 
+            st.write("")
+            btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
+
+        if btn_excluir and aluno_excluir:
+            cod_del = aluno_excluir.split(" - ")[0]
+            conn = conectar_bd()
+            try:
+                cur = conn.cursor()
+                # Exclusão segura apagando os vínculos (chaves estrangeiras) primeiro
+                cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
+                cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
+                conn.commit()
+                carregar_alunos.clear() 
+                st.success(f"O registro {cod_del} foi completamente excluído!")
+                time.sleep(2) 
+                st.rerun()
+            except Exception as e:
+                conn.rollback()
+                st.error(f"Erro ao tentar excluir aluno: {e}")
+            finally:
+                liberar_conn(conn)
+
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
         if st.button("PROCESSAR LISTA") and up_al:
