@@ -38,6 +38,7 @@ except ImportError:
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
+# Inicializando a fila offline na memória do navegador
 if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
 
@@ -57,7 +58,10 @@ def get_connection_pool():
     return pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
 
 def conectar_bd():
-    return get_connection_pool().getconn()
+    try:
+        return get_connection_pool().getconn()
+    except:
+        return None
 
 def liberar_conn(conn):
     if conn:
@@ -147,6 +151,7 @@ def renderizar_logo_central():
 @st.cache_resource
 def inicializar_tabelas():
     conn = conectar_bd()
+    if not conn: return
     try:
         cur = conn.cursor()
         
@@ -288,6 +293,7 @@ st.markdown("""
 def verificar_dia_letivo(data_atual):
     try:
         conn = conectar_bd()
+        if not conn: return False
         cur = conn.cursor()
         cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
         res = cur.fetchone()
@@ -299,7 +305,9 @@ def verificar_dia_letivo(data_atual):
 @st.cache_data(ttl=60)
 def contar_presencas_data(data_str, turma="Todas"):
     try:
-        conn = conectar_bd(); cur = conn.cursor()
+        conn = conectar_bd()
+        if not conn: return 0
+        cur = conn.cursor()
         if turma == "Todas":
             cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
         else:
@@ -313,6 +321,7 @@ def contar_presencas_data(data_str, turma="Todas"):
 def carregar_faltas(data_str):
     try:
         conn = conectar_bd()
+        if not conn: return pd.DataFrame()
         df = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[data_str])
         liberar_conn(conn)
         return df
@@ -322,6 +331,7 @@ def carregar_faltas(data_str):
 def carregar_alunos():
     try:
         conn = conectar_bd()
+        if not conn: return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
         df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
         liberar_conn(conn)
         return df
@@ -338,6 +348,7 @@ def carregar_faltas_primeira_chamada(ano):
         ORDER BY f.periodo, f.area, a.turma, a.nome
     """
     conn = conectar_bd()
+    if not conn: return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn, params=[str(ano)])
         return df
@@ -354,6 +365,7 @@ def obter_dados_acad_filtrados(ano, p, a, t):
     where_clause = " AND ".join(conditions)
     query = f"SELECT avs.id, avs.ano, avs.periodo, avs.area, COALESCE(al.turma, avs.turma) as turma, avs.nome, avs.disciplina, avs.questao, avs.resposta, avs.gabarito, avs.acerto FROM avaliacoes_avs avs LEFT JOIN alunos_v2 al ON avs.nome = al.nome WHERE {where_clause}"
     conn = conectar_bd()
+    if not conn: return pd.DataFrame()
     try: df = pd.read_sql(query, conn, params=params)
     except Exception: df = pd.DataFrame()
     finally: liberar_conn(conn)
@@ -407,6 +419,7 @@ def obter_top3_erros_cached(ano, p, a, t):
 def carregar_satisfacao_por_ano(ano):
     query = "SELECT * FROM satisfacao_v1 WHERE EXTRACT(YEAR FROM data_hora) = %s"
     conn = conectar_bd()
+    if not conn: return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn, params=[int(ano)])
         if not df.empty: df['media_resposta'] = df[['q1','q2','q3','q4','q5']].mean(axis=1)
@@ -439,6 +452,7 @@ def importar_csv_alunos(file):
     df.columns = [norm(col) for col in df.columns]
     dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
     conn = conectar_bd()
+    if not conn: return False
     try:
         cur = conn.cursor()
         execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
@@ -446,26 +460,47 @@ def importar_csv_alunos(file):
         return True
     finally: liberar_conn(conn)
 
+# --- FUNÇÃO AUXILIAR DA FILA OFFLINE ---
+def ir_para_fila_offline(cod, data, h_at, status):
+    registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
+    st.session_state.fila_offline.append(registro_pendente)
+    return f"FILA OFFLINE ({cod})"
+
+# --- FUNÇÃO DE REGISTRO COM INTELIGÊNCIA OFFLINE ---
 def registrar_presenca(cod, data, h_limite):
-    agora = obter_hora_atual(); h_at = agora.strftime("%H:%M:%S"); status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
+    agora = obter_hora_atual()
+    h_at = agora.strftime("%H:%M:%S")
+    status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
+    
     conn = conectar_bd()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
-        res = cur.fetchone()
-        if not res: return "erro_cod"
-        cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
-        cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
-        if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
-        conn.commit()
-        contar_presencas_data.clear()
-        carregar_faltas.clear()
-        return res[0]
-    except Exception: return False
-    finally: liberar_conn(conn)
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
+            res = cur.fetchone()
+            if not res: return "erro_cod"
+            
+            cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
+            cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
+            
+            if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
+            conn.commit()
+            contar_presencas_data.clear()
+            carregar_faltas.clear()
+            return res[0]
+        except Exception as e:
+            liberar_conn(conn)
+            # Se deu erro de conexão (timeout) na hora de executar, vai para a fila
+            return ir_para_fila_offline(cod, data, h_at, status)
+        finally: 
+            liberar_conn(conn)
+    else:
+        # Se nem conseguiu conectar no banco, vai para a fila direto
+        return ir_para_fila_offline(cod, data, h_at, status)
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
+    if not conn: return False
     try:
         cur = conn.cursor(); cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
         res = cur.fetchone()
@@ -521,6 +556,7 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
             dados_l.append((str(ano), periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
             
     conn = conectar_bd()
+    if not conn: return False, "Erro de conexão ao banco de dados."
     try:
         cur = conn.cursor()
         execute_values(cur, "INSERT INTO avaliacoes_avs (ano, periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (ano, periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
@@ -599,10 +635,6 @@ def gerar_pdf_relatorio_critico(df_critico):
 # FUNÇÃO DA CÂMERA (CORRIGIDA)
 # ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
-    # ATUALIZAÇÃO IMPORTANTE:
-    # 1. Adicionado fallback inteligente (Tenta câmera traseira, se não achar, vai pra webcam frontal).
-    # 2. Dimensão do qrbox ajustada para 220, evitando erro em telas menores.
-    # 3. Adicionado alert() para você saber exatamente o erro caso seja bloqueado pelo navegador.
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
         <div style="display:flex; gap:10px; margin-bottom:15px;">
@@ -732,15 +764,18 @@ if st.query_params.get("modo") == "pesquisa":
                     st.error("⚠️ Atenção: Por favor, selecione a sua turma no topo do formulário.")
                 else:
                     conn = conectar_bd()
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("INSERT INTO satisfacao_v1 (data_hora, categoria, turma, q1, q2, q3, q4, q5, sugestao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                                    (obter_hora_atual(), cat, turma_sel, int(q1[0]), int(q2[0]), int(q3[0]), int(q4[0]), int(q5[0]), sugestao))
-                        conn.commit()
-                        st.session_state.pesquisa_enviada = True
-                        st.rerun()
-                    except: st.error("Erro de conexão ao salvar avaliação. Tente novamente.")
-                    finally: liberar_conn(conn)
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("INSERT INTO satisfacao_v1 (data_hora, categoria, turma, q1, q2, q3, q4, q5, sugestao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                                        (obter_hora_atual(), cat, turma_sel, int(q1[0]), int(q2[0]), int(q3[0]), int(q4[0]), int(q5[0]), sugestao))
+                            conn.commit()
+                            st.session_state.pesquisa_enviada = True
+                            st.rerun()
+                        except: st.error("Erro de conexão ao salvar avaliação. Tente novamente.")
+                        finally: liberar_conn(conn)
+                    else:
+                        st.error("Não foi possível conectar ao banco de dados no momento.")
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop() 
 
@@ -796,20 +831,15 @@ tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + sorted(df_alunos['turma'].
 
 # --- PROCESSAMENTO DE DADOS (GLOBAL) ---
 
-# 1. Variável real do dia de hoje (usada exclusivamente para travar o registro das catracas no dia correto)
 hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
-
-# 2. Variável da data selecionada pelo usuário (usada nos cálculos e painéis)
 data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
 
-# 3. Processamento dinâmico de Alunos/Frequência baseado na data e turma selecionadas
 df_alunos_filtrado = df_alunos if tf == "Todas" else df_alunos[df_alunos['turma'] == tf]
 total_alunos = len(df_alunos_filtrado)
 
 pres_data = contar_presencas_data(data_selecionada_str, tf)
 media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%" if total_alunos > 0 else "0%"
 
-# 4. Processamento dinâmico de Avaliações e Satisfação
 with st.spinner("Sincronizando dados..."):
     dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
 
@@ -856,29 +886,77 @@ with tabs[indice_aba]:
         
     if btn_salvar_dia:
         conn = conectar_bd()
-        try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
-            conn.commit()
-            verificar_dia_letivo.clear() 
-            st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
-        except Exception as e: st.error(f"Erro ao salvar: {e}")
-        finally: liberar_conn(conn)
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
+                conn.commit()
+                verificar_dia_letivo.clear() 
+                st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
+            except Exception as e: st.error(f"Erro ao salvar: {e}")
+            finally: liberar_conn(conn)
+        else:
+            st.error("Sem conexão com o banco de dados.")
 
     st.markdown("---")
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
+    
+    # -------------------------------------------------------------------
+    # ABA DE ENTRADA COM O NOVO MÓDULO DE SINCRONIZAÇÃO OFFLINE
+    # -------------------------------------------------------------------
     with t_en:
-        if not verificar_dia_letivo(hoje_real): st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje_real): 
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
             with st.form("f_en", clear_on_submit=True):
                 cod_en = st.text_input("Código Aluno (Entrada)")
                 if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
                     res = registrar_presenca(cod_en.upper(), hoje_real, h_lim_e)
-                    if res == "erro_cod": st.error("Código não encontrado.")
-                    elif res: st.success(f"Bem-vindo, {res}!")
+                    if res == "erro_cod": 
+                        st.error("Código não encontrado.")
+                    elif "FILA OFFLINE" in res: 
+                        st.warning(f"⚠️ Rede instável! O aluno {cod_en.upper()} foi guardado na fila offline.")
+                    elif res: 
+                        st.success(f"Bem-vindo, {res}!")
+            
+            # MÓDULO DE SINCRONIZAÇÃO DA FILA
+            if len(st.session_state.fila_offline) > 0:
+                st.markdown("---")
+                st.error(f"⚠️ **MODO DE REDE INSTÁVEL ATIVADO**")
+                st.write(f"Você tem **{len(st.session_state.fila_offline)}** registro(s) pendente(s) guardado(s) na memória do navegador.")
                 
+                if st.button("🔄 TENTAR SINCRONIZAR AGORA", type="primary"):
+                    with st.spinner("Conectando ao banco..."):
+                        falhas_restantes = []
+                        sucessos = 0
+                        for pendente in st.session_state.fila_offline:
+                            conn_sync = conectar_bd()
+                            if conn_sync:
+                                try:
+                                    cur = conn_sync.cursor()
+                                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (pendente["codigo"], pendente["data"]))
+                                    cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (pendente["codigo"], pendente["data"], pendente["hora"], pendente["status"]))
+                                    conn_sync.commit()
+                                    sucessos += 1
+                                except Exception:
+                                    falhas_restantes.append(pendente)
+                                finally:
+                                    liberar_conn(conn_sync)
+                            else:
+                                falhas_restantes.append(pendente)
+                        
+                        st.session_state.fila_offline = falhas_restantes
+                        contar_presencas_data.clear()
+                        
+                        if len(falhas_restantes) == 0:
+                            st.success(f"Excelente! Todos os {sucessos} registros foram sincronizados com sucesso.")
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.warning(f"{sucessos} foram enviados, mas {len(falhas_restantes)} ainda falharam. Tente novamente em alguns minutos.")
+
     with t_sa:
         if not verificar_dia_letivo(hoje_real): st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
@@ -904,13 +982,14 @@ with tabs[indice_aba]:
                 if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
                     cod_f = al_falta_sel.split(" - ")[0]
                     conn = conectar_bd()
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
-                        conn.commit()
-                        carregar_faltas.clear()
-                        st.success("Justificativa salva com sucesso!"); st.rerun()
-                    finally: liberar_conn(conn)
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
+                            conn.commit()
+                            carregar_faltas.clear()
+                            st.success("Justificativa salva com sucesso!"); st.rerun()
+                        finally: liberar_conn(conn)
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
@@ -955,11 +1034,13 @@ with tabs[indice_aba]:
     query += " ORDER BY a.turma, a.nome"
     
     conn = conectar_bd()
-    try:
-        df_relatorio = pd.read_sql_query(query, conn, params=params)
-        st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
-    except: st.info("Sem dados para exibir no momento.")
-    finally: liberar_conn(conn)
+    if conn:
+        try:
+            df_relatorio = pd.read_sql_query(query, conn, params=params)
+            st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
+        except: st.info("Sem dados para exibir no momento.")
+        finally: liberar_conn(conn)
+    else: st.error("Sem conexão com o banco de dados.")
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -969,12 +1050,13 @@ with tabs[indice_aba]:
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     if dias_u:
         conn = conectar_bd()
-        try:
-            df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)])
-            if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
-            else: st.success("Nenhum aluno ativo nesta situação.")
-        except: st.info("Aguardando...")
-        finally: liberar_conn(conn)
+        if conn:
+            try:
+                df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)])
+                if not df_risco.empty: st.error(f"{len(df_risco)} alunos em risco"); st.dataframe(df_risco, hide_index=True)
+                else: st.success("Nenhum aluno ativo nesta situação.")
+            except: st.info("Aguardando...")
+            finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -983,11 +1065,12 @@ with tabs[indice_aba]:
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
         conn = conectar_bd()
-        try:
-            df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]])
-            st.dataframe(df_hist, hide_index=True)
-        except: st.warning("Erro ao carregar histórico.")
-        finally: liberar_conn(conn)
+        if conn:
+            try:
+                df_hist = pd.read_sql_query("SELECT data, tipo_registro, hora_entrada, status_entrada, hora_saida, motivo_saida FROM registros_v2 WHERE codigo_aluno = %s ORDER BY data DESC, hora_entrada DESC", conn, params=[aluno_sel.split(" - ")[0]])
+                st.dataframe(df_hist, hide_index=True)
+            except: st.warning("Erro ao carregar histórico.")
+            finally: liberar_conn(conn)
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
@@ -1250,20 +1333,23 @@ if eh_admin:
                 if f1_aluno:
                     cod_aluno = f1_aluno.split(" - ")[0]
                     conn_f1 = conectar_bd()
-                    try:
-                        cur_f1 = conn_f1.cursor()
-                        cur_f1.execute("""
-                            INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
-                            VALUES (%s, %s, %s, %s, %s) 
-                            ON CONFLICT (codigo_aluno, ano, periodo, area) 
-                            DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
-                        """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
-                        conn_f1.commit()
-                        carregar_faltas_primeira_chamada.clear()
-                        st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-                    finally: liberar_conn(conn_f1)
+                    if conn_f1:
+                        try:
+                            cur_f1 = conn_f1.cursor()
+                            cur_f1.execute("""
+                                INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
+                                VALUES (%s, %s, %s, %s, %s) 
+                                ON CONFLICT (codigo_aluno, ano, periodo, area) 
+                                DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
+                            """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
+                            conn_f1.commit()
+                            carregar_faltas_primeira_chamada.clear()
+                            st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
+                        except Exception as e:
+                            st.error(f"Erro ao salvar: {e}")
+                        finally: liberar_conn(conn_f1)
+                    else:
+                        st.error("Sem conexão com o banco de dados.")
                 else:
                     st.error("Por favor, selecione um estudante na lista.")
                     
@@ -1276,9 +1362,6 @@ if eh_admin:
         st.code(link_completo, language="text")
         st.markdown("---")
 
-        # -------------------------------------------------------------------
-        # ATUALIZAÇÃO IMPORTANTE: MÓDULO DE GESTÃO E EXCLUSÃO DE ALUNOS AQUI
-        # -------------------------------------------------------------------
         st.subheader("📧 Gerir E-mails e Alunos")
         col1, col2 = st.columns(2)
         
@@ -1287,24 +1370,24 @@ if eh_admin:
             novo_e = st.text_input("Novo E-mail do Responsável")
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd()
-                try:
-                    cur = conn.cursor()
-                    cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                    conn.commit()
-                    carregar_alunos.clear()
-                    st.success("Atualizado com sucesso!")
-                except Exception as e:
-                    conn.rollback()
-                    st.error(f"Erro ao salvar: {e}")
-                finally: 
-                    liberar_conn(conn)
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                        conn.commit()
+                        carregar_alunos.clear()
+                        st.success("Atualizado com sucesso!")
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"Erro ao salvar: {e}")
+                    finally: 
+                        liberar_conn(conn)
         
         with col2:
             st.write("Adição Manual de Aluno")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
             
-            # Adicionado Dropdown inteligente de Turmas
             lista_turmas = sorted(df_alunos['turma'].unique()) if not df_alunos.empty else []
             m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
             if m_tur_sel == "+ Criar Nova Turma":
@@ -1315,27 +1398,26 @@ if eh_admin:
             if st.button("CADASTRAR ALUNO"):
                 if m_cod and m_nom and m_tur and m_tur != "Selecione...":
                     conn = conectar_bd()
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                        conn.commit()
-                        carregar_alunos.clear()
-                        st.success("Cadastrado com sucesso!")
-                    except Exception as e:
-                        conn.rollback()
-                        # Evita a "tela vermelha" caso você insira uma matrícula já existente
-                        if "UniqueViolation" in str(type(e).__name__):
-                            st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
-                        else:
-                            st.error(f"Erro inesperado: {e}")
-                    finally: 
-                        liberar_conn(conn)
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                            conn.commit()
+                            carregar_alunos.clear()
+                            st.success("Cadastrado com sucesso!")
+                        except Exception as e:
+                            conn.rollback()
+                            if "UniqueViolation" in str(type(e).__name__):
+                                st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
+                            else:
+                                st.error(f"Erro inesperado: {e}")
+                        finally: 
+                            liberar_conn(conn)
                 else:
                     st.warning("Preencha todos os campos antes de cadastrar.")
 
         st.divider()
 
-        # NOVO: MÓDULO DE EXCLUSÃO DE ALUNO EM CASCATA
         st.markdown("#### 🗑️ Excluir Registro de Aluno")
         st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
         
@@ -1350,22 +1432,22 @@ if eh_admin:
         if btn_excluir and aluno_excluir:
             cod_del = aluno_excluir.split(" - ")[0]
             conn = conectar_bd()
-            try:
-                cur = conn.cursor()
-                # Exclusão segura apagando os vínculos (chaves estrangeiras) primeiro
-                cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
-                cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
-                cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
-                conn.commit()
-                carregar_alunos.clear() 
-                st.success(f"O registro {cod_del} foi completamente excluído!")
-                time.sleep(2) 
-                st.rerun()
-            except Exception as e:
-                conn.rollback()
-                st.error(f"Erro ao tentar excluir aluno: {e}")
-            finally:
-                liberar_conn(conn)
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
+                    conn.commit()
+                    carregar_alunos.clear() 
+                    st.success(f"O registro {cod_del} foi completamente excluído!")
+                    time.sleep(2) 
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Erro ao tentar excluir aluno: {e}")
+                finally:
+                    liberar_conn(conn)
 
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
@@ -1404,19 +1486,21 @@ if eh_admin:
             if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
                 ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
                 conn_del = conectar_bd()
-                try:
-                    cur = conn_del.cursor(); cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
-                    conn_del.commit(); st.success("Bloco removido do servidor!"); st.rerun()
-                finally: liberar_conn(conn_del)
+                if conn_del:
+                    try:
+                        cur = conn_del.cursor(); cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
+                        conn_del.commit(); st.success("Bloco removido do servidor!"); st.rerun()
+                    finally: liberar_conn(conn_del)
         else: st.info("O banco de dados de desempenho está vazio.")
 
         st.markdown("---")
         st.write("Atenção: Ao excluir dados de pesquisa de satisfação, isso não poderá ser desfeito.")
         if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
             conn_sat = conectar_bd()
-            try:
-                cur = conn_sat.cursor(); cur.execute("DELETE FROM satisfacao_v1")
-                conn_sat.commit(); carregar_satisfacao_por_ano.clear(); st.success("Respostas apagadas."); st.rerun()
-            finally: liberar_conn(conn_sat)
+            if conn_sat:
+                try:
+                    cur = conn_sat.cursor(); cur.execute("DELETE FROM satisfacao_v1")
+                    conn_sat.commit(); carregar_satisfacao_por_ano.clear(); st.success("Respostas apagadas."); st.rerun()
+                finally: liberar_conn(conn_sat)
 
     st.markdown('</div>', unsafe_allow_html=True)
