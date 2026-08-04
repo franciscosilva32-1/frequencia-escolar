@@ -275,15 +275,31 @@ def contar_presencas_data(data_str, turma="Todas"):
         return count
     except: return 0
 
+# --- AQUI ESTÁ A CORREÇÃO: LÓGICA INTELIGENTE DE FALTAS ---
 @st.cache_data(ttl=60)
 def carregar_faltas(data_str):
     try:
         conn = conectar_bd()
         if not conn: return pd.DataFrame()
-        df = pd.read_sql("SELECT r.codigo_aluno, a.nome, a.turma, r.motivo_saida FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data = %s AND r.tipo_registro = 'FALTA'", conn, params=[data_str])
+        # O SQL agora busca todos os alunos ativos que NÃO têm presença na data, 
+        # cruzando com a tabela de registros caso a justificativa (FALTA explícita) já exista.
+        query = """
+            SELECT a.codigo as codigo_aluno, a.nome, a.turma, r.motivo_saida 
+            FROM alunos_v2 a 
+            LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s AND r.tipo_registro = 'FALTA'
+            WHERE a.status = 'ATIVO' 
+            AND a.codigo NOT IN (
+                SELECT codigo_aluno FROM registros_v2 WHERE data = %s AND tipo_registro = 'PRESENCA'
+            )
+            ORDER BY a.turma, a.nome
+        """
+        df = pd.read_sql(query, conn, params=[data_str, data_str])
         liberar_conn(conn)
         return df
-    except: return pd.DataFrame()
+    except Exception as e: 
+        print(f"Erro ao carregar faltas: {e}")
+        return pd.DataFrame()
+# -----------------------------------------------------------
 
 @st.cache_data(ttl=3600)  
 def carregar_alunos():
@@ -411,7 +427,6 @@ def importar_csv_alunos(file):
         return True
     finally: liberar_conn(conn)
 
-# --- FUNÇÃO AUXILIAR DA FILA OFFLINE (RESILIENTE PARA FLUXO RÁPIDO) ---
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
     st.session_state.fila_offline.append(registro_pendente)
@@ -774,9 +789,6 @@ with tabs[indice_aba]:
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     
-    # -------------------------------------------------------------------
-    # ABA DE ENTRADA COM O MÓDULO DE SINCRONIZAÇÃO OFFLINE INTELIGENTE
-    # -------------------------------------------------------------------
     with t_en:
         if not verificar_dia_letivo(hoje_real): 
             st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
@@ -793,7 +805,6 @@ with tabs[indice_aba]:
                     elif res: 
                         st.success(f"Bem-vindo, {res}!")
             
-            # BOTÃO DE SINCRONIZAÇÃO (Visível apenas se a internet cair e gerar fila)
             if len(st.session_state.fila_offline) > 0:
                 st.markdown("---")
                 st.error(f"⚠️ **MODO DE REDE INSTÁVEL ATIVADO**")
@@ -828,9 +839,6 @@ with tabs[indice_aba]:
                         else:
                             st.warning(f"{sucessos} foram enviados, mas {len(falhas_restantes)} ainda falharam. Tente novamente em alguns minutos.")
 
-    # -------------------------------------------------------------------
-    # ABA DE SAÍDA ANTECIPADA: BUSCA POR CÓDIGO OU NOME
-    # -------------------------------------------------------------------
     with t_sa:
         if not verificar_dia_letivo(hoje_real): 
             st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
@@ -863,7 +871,7 @@ with tabs[indice_aba]:
                         st.warning("⚠️ Por favor, informe o código do cartão ou selecione o nome na lista antes de confirmar.")
 
     # -------------------------------------------------------------------
-    # ABA DE JUSTIFICAR FALTAS: FILTRO INTELIGENTE E MOTIVOS EXATOS
+    # ABA DE JUSTIFICAR FALTAS: CORRIGIDA COM INTELIGÊNCIA DINÂMICA
     # -------------------------------------------------------------------            
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
@@ -876,11 +884,14 @@ with tabs[indice_aba]:
             
             df_faltas_filtrado = df_faltas if turma_just == "Todas" else df_faltas[df_faltas['turma'] == turma_just]
 
-            if not df_faltas_filtrado.empty:
+            # NOVO: Filtra para exibir apenas os alunos que AINDA NÃO têm justificativa
+            df_pendentes = df_faltas_filtrado[df_faltas_filtrado['motivo_saida'].isnull()]
+            
+            if not df_pendentes.empty:
                 with st.form("form_justificar"):
                     al_falta_sel = st.selectbox(
                         "Selecione o Estudante Faltoso", 
-                        [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_faltas_filtrado.iterrows()]
+                        [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_pendentes.iterrows()]
                     )
                     motivo_falta = st.selectbox(
                         "Justificativa Oficial", 
@@ -893,21 +904,32 @@ with tabs[indice_aba]:
                         if conn:
                             try:
                                 cur = conn.cursor()
-                                cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
+                                # NOVO: Injeta o registro de falta explicitamente se ele não existir
+                                cur.execute("""
+                                    INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro, motivo_saida) 
+                                    VALUES (%s, %s, 'FALTA', %s)
+                                    ON CONFLICT (codigo_aluno, data, tipo_registro) 
+                                    DO UPDATE SET motivo_saida = EXCLUDED.motivo_saida
+                                """, (cod_f, d_just.strftime("%Y-%m-%d"), motivo_falta))
                                 conn.commit()
                                 carregar_faltas.clear()
-                                st.success("Justificativa salva com sucesso!"); st.rerun()
+                                st.success("Justificativa salva com sucesso!")
+                                time.sleep(1)
+                                st.rerun()
                             finally: liberar_conn(conn)
             else:
-                st.info(f"Nenhum aluno da turma {turma_just} faltou nesta data.")
+                st.info(f"Todos os alunos faltosos da turma {turma_just} já foram justificados.")
 
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
             if not faltas_justificadas.empty:
-                for _, f in faltas_justificadas.iterrows(): st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
-            else: st.write("Nenhuma falta justificada ainda.")
-        else: st.success("Nenhuma falta registada para esta data!")
+                for _, f in faltas_justificadas.iterrows(): 
+                    st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
+            else: 
+                st.write("Nenhuma falta justificada ainda.")
+        else: 
+            st.success("Nenhum aluno faltou nesta data! Todos os alunos ativos estão com 'PRESENCA'.")
     st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
