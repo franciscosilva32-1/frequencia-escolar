@@ -38,7 +38,6 @@ except ImportError:
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
-# Inicializando a fila offline na memória do navegador
 if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
 
@@ -54,7 +53,6 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
 @st.cache_resource
 def get_connection_pool():
-    # ThreadedConnectionPool é o mais seguro para Streamlit
     return pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
 
 def conectar_bd():
@@ -144,7 +142,6 @@ def renderizar_logo_central():
     if encoded_string:
         st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
 
-
 # ------------------------------------------------------------
 # 4. INICIALIZAÇÃO DE TABELAS (CACHE RESOURCE)
 # ------------------------------------------------------------
@@ -154,42 +151,24 @@ def inicializar_tabelas():
     if not conn: return
     try:
         cur = conn.cursor()
-        
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
-        
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
-            id SERIAL PRIMARY KEY,
-            codigo_aluno TEXT REFERENCES alunos_v2(codigo),
-            ano TEXT,
-            periodo TEXT,
-            area TEXT,
-            motivo TEXT,
-            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(codigo_aluno, ano, periodo, area)
+            id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
         conn.commit() 
-        
-        try:
-            cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
-            conn.commit()
+        try: cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'"); conn.commit()
         except Exception: conn.rollback() 
-            
         try:
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='faltas_primeira_chamada' AND constraint_type='UNIQUE'")
             constraints = cur.fetchall()
-            for c in constraints:
-                cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
+            for c in constraints: cur.execute(f"ALTER TABLE faltas_primeira_chamada DROP CONSTRAINT {c[0]}")
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD UNIQUE (codigo_aluno, ano, periodo, area)")
             conn.commit()
         except Exception: conn.rollback()
-
-        try:
-            cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'")
-            conn.commit()
+        try: cur.execute("ALTER TABLE avaliacoes_avs ADD COLUMN ano TEXT DEFAULT '2026'"); conn.commit()
         except Exception: conn.rollback()
-
         try:
             cur.execute("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='avaliacoes_avs' AND constraint_type='UNIQUE'")
             constraints = cur.fetchall()
@@ -197,31 +176,23 @@ def inicializar_tabelas():
             cur.execute("ALTER TABLE avaliacoes_avs ADD UNIQUE (ano, periodo, area, turma, nome, disciplina, questao)")
             conn.commit()
         except Exception: conn.rollback()
-
         cur.execute("""CREATE TABLE IF NOT EXISTS satisfacao_v1 (
-            id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, 
-            q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
+            id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
         )""")
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
-        
-        tabelas_para_proteger = ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']
-        for tb in tabelas_para_proteger:
-            try:
-                cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
-                conn.commit()
-            except Exception:
-                conn.rollback() 
-        
+        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']:
+            try: cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;"); conn.commit()
+            except Exception: conn.rollback() 
     except Exception as e: print(f"Erro inicialização: {e}")
     finally: liberar_conn(conn)
 
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. CSS (VISUAL PREMIUM E CORREÇÃO DO MODO ESCURO)
+# 5. CSS
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -230,20 +201,9 @@ st.markdown("""
     .stApp { background: var(--bg-color); }
     #MainMenu, footer, header {visibility: hidden;}
     html, body, [class*="css"], p, span, label, div { font-size: 1.15rem !important; }
-    
-    [data-testid="stRadio"] div[role="radiogroup"] > label { 
-        font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; 
-        background-color: #ffffff !important; 
-        color: #000000 !important; 
-        border: 2px solid #cbd5e1 !important; border-radius: 12px; 
-        box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; 
-    }
-    [data-testid="stRadio"] div[role="radiogroup"] > label * {
-        color: #000000 !important;
-        -webkit-text-fill-color: #000000 !important;
-    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label { font-size: 1.3rem !important; padding: 16px 15px !important; margin-bottom: 12px !important; background-color: #ffffff !important; color: #000000 !important; border: 2px solid #cbd5e1 !important; border-radius: 12px; box-shadow: 0 3px 6px rgba(0,0,0,0.04); cursor: pointer; transition: all 0.2s ease; }
+    [data-testid="stRadio"] div[role="radiogroup"] > label * { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
     [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent) !important; transform: translateY(-2px); }
-    
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
     .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
@@ -260,7 +220,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
     .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
     .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
-    
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
@@ -268,7 +227,6 @@ st.markdown("""
     [data-baseweb="select"] span { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.4rem !important;}
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     ul[data-baseweb="menu"] li { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
-    
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
@@ -340,12 +298,8 @@ def carregar_alunos():
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
     query = """
-        SELECT a.nome, a.turma, f.periodo, f.area, f.motivo, 
-               TO_CHAR(f.data_registro, 'DD/MM/YYYY') as data_registro 
-        FROM faltas_primeira_chamada f
-        JOIN alunos_v2 a ON f.codigo_aluno = a.codigo
-        WHERE f.ano = %s
-        ORDER BY f.periodo, f.area, a.turma, a.nome
+        SELECT a.nome, a.turma, f.periodo, f.area, f.motivo, TO_CHAR(f.data_registro, 'DD/MM/YYYY') as data_registro 
+        FROM faltas_primeira_chamada f JOIN alunos_v2 a ON f.codigo_aluno = a.codigo WHERE f.ano = %s ORDER BY f.periodo, f.area, a.turma, a.nome
     """
     conn = conectar_bd()
     if not conn: return pd.DataFrame()
@@ -357,8 +311,7 @@ def carregar_faltas_primeira_chamada(ano):
 
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
-    conditions = ["avs.ano = %s"]
-    params = [str(ano)]
+    conditions = ["avs.ano = %s"]; params = [str(ano)]
     if p != "Todos": conditions.append("avs.periodo = %s"); params.append(p)
     if a != "Todas": conditions.append("avs.area = %s"); params.append(a)
     if t != "Todas": conditions.append("COALESCE(al.turma, avs.turma) = %s"); params.append(t)
@@ -376,14 +329,12 @@ def obter_dados_acad_filtrados(ano, p, a, t):
 @st.cache_data(ttl=300)
 def obter_estatisticas_areas_cached(ano, p, a, t):
     df_filtrado = obter_dados_acad_filtrados(ano, p, a, t)
-    alertas_estudante = {}
-    area_stats = pd.DataFrame()
+    alertas_estudante = {}; area_stats = pd.DataFrame()
     if not df_filtrado.empty:
         area_stats = df_filtrado.groupby(['nome', 'turma', 'periodo', 'area']).agg(Total=('questao', 'count'), Brancos=('resposta', lambda x: (x == 'BRANCO').sum()), Duplas=('resposta', lambda x: (x == 'DUPLA').sum())).reset_index()
         area_stats['Faltou'] = area_stats['Total'] == area_stats['Brancos']
         for nome, group in area_stats.groupby('nome'):
-            alertas = []
-            faltas = group[group['Faltou']]
+            alertas = []; faltas = group[group['Faltou']]
             if not faltas.empty:
                 for _, r_f in faltas.iterrows(): alertas.append(f"FALTOU {r_f['area']} ({r_f['periodo']})")
             if group['Duplas'].sum() > 0: alertas.append("MARCAÇÃO DUPLA")
@@ -460,43 +411,30 @@ def importar_csv_alunos(file):
         return True
     finally: liberar_conn(conn)
 
-# --- FUNÇÃO AUXILIAR DA FILA OFFLINE ---
+# --- FUNÇÃO AUXILIAR DA FILA OFFLINE (RESILIENTE PARA FLUXO RÁPIDO) ---
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
     st.session_state.fila_offline.append(registro_pendente)
     return f"FILA OFFLINE ({cod})"
 
-# --- FUNÇÃO DE REGISTRO COM INTELIGÊNCIA OFFLINE ---
 def registrar_presenca(cod, data, h_limite):
-    agora = obter_hora_atual()
-    h_at = agora.strftime("%H:%M:%S")
-    status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
-    
+    agora = obter_hora_atual(); h_at = agora.strftime("%H:%M:%S"); status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
     conn = conectar_bd()
     if conn:
         try:
-            cur = conn.cursor()
-            cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
+            cur = conn.cursor(); cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
             res = cur.fetchone()
             if not res: return "erro_cod"
-            
             cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (cod, data))
             cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (cod, data, h_at, status))
-            
             if res[1]: disparar_email_background(res[1], res[0], f"ENTRADA|{status}", h_at, data)
-            conn.commit()
-            contar_presencas_data.clear()
-            carregar_faltas.clear()
+            conn.commit(); contar_presencas_data.clear(); carregar_faltas.clear()
             return res[0]
         except Exception as e:
             liberar_conn(conn)
-            # Se deu erro de conexão (timeout) na hora de executar, vai para a fila
             return ir_para_fila_offline(cod, data, h_at, status)
-        finally: 
-            liberar_conn(conn)
-    else:
-        # Se nem conseguiu conectar no banco, vai para a fila direto
-        return ir_para_fila_offline(cod, data, h_at, status)
+        finally: liberar_conn(conn)
+    else: return ir_para_fila_offline(cod, data, h_at, status)
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
@@ -511,9 +449,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 evento_email = "SAÍDA ANTECIPADA" if h_s_obj < h_limite_saida else "SAÍDA REGULAR"
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
-            conn.commit()
-            contar_presencas_data.clear()
-            carregar_faltas.clear()
+            conn.commit(); contar_presencas_data.clear(); carregar_faltas.clear()
             return res[0]
         return False
     except Exception: return False
@@ -525,21 +461,16 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     except: conteudo_str = conteudo_bytes.decode('latin-1')
     temp_df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
     temp_df.columns = [str(c).strip() for c in temp_df.columns]
-    
     col_qs = [c for c in temp_df.columns if re.search(r'^Q\s*\d+\s*Options', c, re.IGNORECASE)]
     idx_not = next((i for i, c in enumerate(temp_df.columns) if 'Not attempted' in c), -1)
     idx_f = temp_df.columns.get_loc(col_qs[0])
     discs = [str(c).strip().upper() for c in temp_df.columns[idx_not+1:idx_f] if 'AV' not in str(c).upper()] if idx_not != -1 else [area.upper()]
     q_p_d = len(col_qs) // len(discs)
-    
     dados_l = []
     nomes = temp_df.get('Nome', pd.Series(dtype=str)).astype(str).str.strip().tolist()
     col_keys = [cq.replace('Options', 'Key') for cq in col_qs]
-    
     for ck in col_keys:
-        if ck not in temp_df.columns:
-            temp_df[ck] = ''
-            
+        if ck not in temp_df.columns: temp_df[ck] = ''
     options_matrix = temp_df[col_qs].fillna('').astype(str).values
     keys_matrix = temp_df[col_keys].fillna('').astype(str).values
 
@@ -547,12 +478,9 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
         if not n or n.lower() == 'nan': continue
         for i in range(len(col_qs)):
             d_i = min(i // q_p_d, len(discs)-1)
-            rb = options_matrix[r_idx, i].strip()
-            g = keys_matrix[r_idx, i].strip().upper()
-            
+            rb = options_matrix[r_idx, i].strip(); g = keys_matrix[r_idx, i].strip().upper()
             r = 'BRANCO' if not rb else (rb.upper() if len(rb)==1 else 'DUPLA')
             acerto = 1 if r == g and r != 'BRANCO' else 0
-            
             dados_l.append((str(ano), periodo, area, turma, n, discs[d_i], i+1, r, g, acerto))
             
     conn = conectar_bd()
@@ -560,8 +488,7 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     try:
         cur = conn.cursor()
         execute_values(cur, "INSERT INTO avaliacoes_avs (ano, periodo, area, turma, nome, disciplina, questao, resposta, gabarito, acerto) VALUES %s ON CONFLICT (ano, periodo, area, turma, nome, disciplina, questao) DO UPDATE SET resposta=EXCLUDED.resposta, acerto=EXCLUDED.acerto", dados_l)
-        conn.commit()
-        obter_dados_acad_filtrados.clear()
+        conn.commit(); obter_dados_acad_filtrados.clear()
         return True, f"{len(dados_l)} registros salvos."
     except Exception as e: return False, str(e)
     finally: liberar_conn(conn)
@@ -573,7 +500,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     pdf.ln(20); pdf.set_text_color(0,0,0); pdf.set_font("Arial", "B", 14)
     pdf.cell(0, 10, f"ESTUDANTE: {aluno} ({turma})", 0, 1); pdf.cell(0, 10, f"MÉDIA (Filtro): {nota_g:.2f}", 0, 1)
     pdf.set_font("Arial", "B", 8); pdf.cell(0, 6, "LEGENDA: VERDE = ACERTO | VERMELHO = ERRO | LARANJA = BRANCO | ROXO = DUPLA", 0, 1); pdf.ln(2)
-    
     for p in sorted(df_b['periodo'].unique()):
         pdf.set_fill_color(230,230,230); pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, f"  {p}", 0, 1, fill=True)
         for d in sorted(df_b[df_b['periodo']==p]['disciplina'].unique()):
@@ -588,7 +514,6 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
                 col += 1; 
                 if col > 7: col, y = 0, y+15
             y = y+15 if col > 0 else y; pdf.set_y(y+5); pdf.set_text_color(0,0,0)
-
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
         progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
@@ -631,9 +556,6 @@ def gerar_pdf_relatorio_critico(df_critico):
         pdf.ln(5)
     out = pdf.output(dest='S'); return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
-# ------------------------------------------------------------
-# FUNÇÃO DA CÂMERA (CORRIGIDA)
-# ------------------------------------------------------------
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
@@ -649,18 +571,14 @@ def gerar_camera(label, btn_label, cam_id):
         document.getElementById("start-{cam_id}").onclick = () => {{
             const container = document.getElementById("reader-{cam_id}");
             container.style.display = "block";
-            
             if(!scanner_{cam_id}) scanner_{cam_id} = new Html5Qrcode("reader-{cam_id}");
-            
             const configuracao = {{ fps: 10, qrbox: {{ width: 220, height: 220 }} }};
-            
             const aoLerCodigo = (txt) => {{
                 const input = window.parent.document.querySelectorAll('input[aria-label*="{label}"]')[0];
                 if(input) {{ 
                     let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                     nativeInputValueSetter.call(input, txt);
                     input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    
                     setTimeout(() => {{ 
                         window.parent.document.querySelectorAll('button').forEach(b => {{ 
                             if(b.innerText.includes("{btn_label}")) b.click(); 
@@ -669,26 +587,18 @@ def gerar_camera(label, btn_label, cam_id):
                 }}
                 scanner_{cam_id}.stop().then(() => {{ container.style.display = "none"; }});
             }};
-
-            // Passo 1: Tenta iniciar a câmera traseira (environment)
             scanner_{cam_id}.start({{ facingMode: "environment" }}, configuracao, aoLerCodigo)
             .catch(erroTraseira => {{
-                console.warn("Câmera traseira falhou, tentando frontal...", erroTraseira);
-                // Passo 2: Se falhar (ex: notebook), tenta a câmera frontal/webcam (user)
                 scanner_{cam_id}.start({{ facingMode: "user" }}, configuracao, aoLerCodigo)
                 .catch(erroFrontal => {{
-                    // Passo 3: Se as duas falharem, exibe na tela o porquê (provavelmente permissão bloqueada)
-                    alert("⚠️ Erro ao acessar a câmera: Verifique se o navegador tem permissão. Detalhe técnico: " + erroFrontal);
+                    alert("⚠️ Erro ao acessar a câmera: Verifique se o navegador tem permissão.");
                     container.style.display = "none";
                 }});
             }});
         }};
-        
         document.getElementById("stop-{cam_id}").onclick = () => {{
             if(scanner_{cam_id}) {{ 
-                scanner_{cam_id}.stop().then(() => {{ 
-                    document.getElementById("reader-{cam_id}").style.display = "none"; 
-                }}).catch(err => console.error(err)); 
+                scanner_{cam_id}.stop().then(() => {{ document.getElementById("reader-{cam_id}").style.display = "none"; }}) 
             }}
         }};
     </script>
@@ -702,27 +612,12 @@ if st.query_params.get("modo") == "pesquisa":
     renderizar_logo_central()
     
     if st.session_state.pesquisa_enviada:
-        st.markdown("""
-        <div style='text-align: center; padding: 40px 10px;'>
-            <h1 style='font-size: 5rem; margin-bottom: 0;'>🎉</h1>
-            <h2 style='color: #10b981; font-weight: 900;'>Avaliação Recebida!</h2>
-            <p style='font-size: 1.4rem; color: #64748b; margin-top: 15px;'>
-                Muito obrigado por contribuir com a melhoria do <b>Centro Educa Mais Jansen Veloso</b>.<br>
-                Sua opinião faz toda a diferença!
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown("<div style='text-align: center; padding: 40px 10px;'><h1 style='font-size: 5rem; margin-bottom: 0;'>🎉</h1><h2 style='color: #10b981; font-weight: 900;'>Avaliação Recebida!</h2><p style='font-size: 1.4rem; color: #64748b; margin-top: 15px;'>Muito obrigado por contribuir com a melhoria do <b>Centro Educa Mais Jansen Veloso</b>.<br>Sua opinião faz toda a diferença!</p></div>", unsafe_allow_html=True)
         if st.button("Enviar nova avaliação", use_container_width=True):
-            st.session_state.pesquisa_enviada = False
-            st.rerun()
-            
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.stop()
+            st.session_state.pesquisa_enviada = False; st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True); st.stop()
         
-    st.markdown("<h2 style='color: var(--primary); text-align: center; margin-bottom: 5px;'>Pesquisa de Satisfação Escolar</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #64748b; font-weight: bold; margin-bottom: 25px;'>Sua opinião é 100% anônima e essencial para melhorarmos nossa escola.</p>", unsafe_allow_html=True)
-
+    st.markdown("<h2 style='color: var(--primary); text-align: center; margin-bottom: 5px;'>Pesquisa de Satisfação Escolar</h2><p style='text-align: center; color: #64748b; font-weight: bold; margin-bottom: 25px;'>Sua opinião é 100% anônima e essencial para melhorarmos nossa escola.</p>", unsafe_allow_html=True)
     cat = st.selectbox("1. Identifique seu perfil para iniciarmos:", ["", "Estudante", "Pais/Responsável", "Professor", "Servidor"])
 
     if cat:
@@ -731,11 +626,9 @@ if st.query_params.get("modo") == "pesquisa":
             if cat == "Estudante":
                 df_al = carregar_alunos()
                 lista_t = sorted(df_al['turma'].unique()) if not df_al.empty else []
-                turma_sel = st.selectbox("Qual é a sua Turma?", [""] + lista_t)
-                st.markdown("---")
+                turma_sel = st.selectbox("Qual é a sua Turma?", [""] + lista_t); st.markdown("---")
 
             opcoes = ["1 - 😡 Muito Insatisfeito", "2 - 😟 Insatisfeito", "3 - 😐 Neutro", "4 - 😊 Satisfeito", "5 - 🤩 Muito Satisfeito"]
-
             st.markdown("#### 🔹 Avaliação Geral")
             q1 = st.radio("Como você avalia a conservação e limpeza da escola?", opcoes, index=None)
             q2 = st.radio("Como você avalia o acolhimento e a atenção recebida pelos funcionários?", opcoes, index=None)
@@ -751,40 +644,32 @@ if st.query_params.get("modo") == "pesquisa":
             elif cat == "Professor":
                 q4 = st.radio("Como você avalia os recursos pedagógicos e o suporte da gestão escolar?", opcoes, index=None)
                 q5 = st.radio("Como você avalia o engajamento e a disciplina geral dos estudantes?", opcoes, index=None)
-            else: # Servidor
+            else: 
                 q4 = st.radio("Como você avalia as condições de trabalho e recursos disponíveis no seu setor?", opcoes, index=None)
                 q5 = st.radio("Como você avalia o clima organizacional e a colaboração da equipe?", opcoes, index=None)
 
             sugestao = st.text_area("Deixe aqui uma sugestão, crítica ou elogio (Opcional)")
 
             if st.form_submit_button("🚀 ENVIAR MINHA AVALIAÇÃO AGORA"):
-                if not all([q1, q2, q3, q4, q5]):
-                    st.error("⚠️ Atenção: Por favor, selecione uma nota para todas as 5 perguntas antes de enviar.")
-                elif cat == "Estudante" and not turma_sel:
-                    st.error("⚠️ Atenção: Por favor, selecione a sua turma no topo do formulário.")
+                if not all([q1, q2, q3, q4, q5]): st.error("⚠️ Atenção: Por favor, selecione uma nota para todas as 5 perguntas antes de enviar.")
+                elif cat == "Estudante" and not turma_sel: st.error("⚠️ Atenção: Por favor, selecione a sua turma no topo do formulário.")
                 else:
                     conn = conectar_bd()
                     if conn:
                         try:
                             cur = conn.cursor()
-                            cur.execute("INSERT INTO satisfacao_v1 (data_hora, categoria, turma, q1, q2, q3, q4, q5, sugestao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                                        (obter_hora_atual(), cat, turma_sel, int(q1[0]), int(q2[0]), int(q3[0]), int(q4[0]), int(q5[0]), sugestao))
-                            conn.commit()
-                            st.session_state.pesquisa_enviada = True
-                            st.rerun()
+                            cur.execute("INSERT INTO satisfacao_v1 (data_hora, categoria, turma, q1, q2, q3, q4, q5, sugestao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)", (obter_hora_atual(), cat, turma_sel, int(q1[0]), int(q2[0]), int(q3[0]), int(q4[0]), int(q5[0]), sugestao))
+                            conn.commit(); st.session_state.pesquisa_enviada = True; st.rerun()
                         except: st.error("Erro de conexão ao salvar avaliação. Tente novamente.")
                         finally: liberar_conn(conn)
-                    else:
-                        st.error("Não foi possível conectar ao banco de dados no momento.")
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop() 
+                    else: st.error("Não foi possível conectar ao banco de dados no momento.")
+    st.markdown("</div>", unsafe_allow_html=True); st.stop() 
 
 
 # ------------------------------------------------------------
 # 8. AUTH E DASHBOARD DO DIRETOR
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
-
 if not auth_cookie:
     st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"): st.image("logo.png", width=120)
@@ -794,14 +679,12 @@ if not auth_cookie:
         if passw in [SENHA_ADMIN, SENHA_OPERADOR]:
             cookies["auth_token"] = base64.b64encode(json.dumps({"admin": passw==SENHA_ADMIN}).encode()).decode(); cookies.save(); st.rerun()
         else: st.error("Incorreta")
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()
+    st.markdown('</div>', unsafe_allow_html=True); st.stop()
 
 try:
     user = json.loads(base64.b64decode(auth_cookie).decode())
     eh_admin = user.get('admin', user.get('eh_admin', False)) 
-except Exception:
-    cookies["auth_token"] = ""; cookies.save(); st.rerun()
+except Exception: cookies["auth_token"] = ""; cookies.save(); st.rerun()
 
 df_alunos = carregar_alunos()
 
@@ -813,7 +696,7 @@ renderizar_logo_central()
 st.markdown('<p class="main-title">PAINEL INTEGRADO</p>', unsafe_allow_html=True)
 st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 
-# --- FILTROS GLOBAIS (POSICIONADOS NO TOPO PARA CONTROLAR TUDO) ---
+# --- FILTROS GLOBAIS ---
 st.markdown("### 🎛️ Filtros Globais do Painel")
 c_data, c_ano, cf1, cf2, cf3 = st.columns([1.5, 1, 1.5, 1.5, 2])
 
@@ -821,15 +704,12 @@ anos_disponiveis = [str(y) for y in range(2024, 2035)]
 ano_atual = str(obter_hora_atual().year)
 if ano_atual not in anos_disponiveis: anos_disponiveis.append(ano_atual)
 
-# O novo filtro de data no topo!
 data_f_global = c_data.date_input("Data (Frequência)", obter_hora_atual().date(), key="filtro_data_global")
 ano_f = c_ano.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="filtro_ano_da")
 pf = cf1.selectbox("Período Acadêmico", ["Todos", "1º Período", "2º Período", "3º Período", "4º Período"], key="filtro_periodo_da")
 af = cf2.selectbox("Área Acadêmica", ["Todas", "LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="filtro_area_da")
 tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + sorted(df_alunos['turma'].unique() if not df_alunos.empty else []), key="filtro_turma_da")
 
-
-# --- PROCESSAMENTO DE DADOS (GLOBAL) ---
 
 hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
 data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
@@ -846,7 +726,6 @@ with st.spinner("Sincronizando dados..."):
 media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" if not dff.empty else "--"
 sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
 
-# --- CARTÕES DE MÉTRICAS RENDERIZADOS APÓS OS FILTROS ---
 st.markdown(f'''
 <div class="metrics-container">
     <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
@@ -871,8 +750,6 @@ indice_aba = 0
 with tabs[indice_aba]:
     st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
-    st.write("Ajuste os horários e confirme se a data de hoje é um dia letivo para liberar o registro dos estudantes.")
-    
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1: h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
     with c_cfg2: h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
@@ -882,28 +759,23 @@ with tabs[indice_aba]:
         col_d1, col_d2 = st.columns(2)
         with col_d1: data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
         with col_d2: st.write(""); st.write(""); is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
-        btn_salvar_dia = st.form_submit_button("💾 Salvar Configuração do Dia")
-        
-    if btn_salvar_dia:
-        conn = conectar_bd()
-        if conn:
-            try:
-                cur = conn.cursor()
-                cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
-                conn.commit()
-                verificar_dia_letivo.clear() 
-                st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada no calendário escolar.")
-            except Exception as e: st.error(f"Erro ao salvar: {e}")
-            finally: liberar_conn(conn)
-        else:
-            st.error("Sem conexão com o banco de dados.")
+        if st.form_submit_button("💾 Salvar Configuração do Dia"):
+            conn = conectar_bd()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
+                    conn.commit(); verificar_dia_letivo.clear(); st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada.")
+                except Exception as e: st.error(f"Erro ao salvar: {e}")
+                finally: liberar_conn(conn)
+            else: st.error("Sem conexão com o banco de dados.")
 
     st.markdown("---")
     
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     
     # -------------------------------------------------------------------
-    # ABA DE ENTRADA COM O NOVO MÓDULO DE SINCRONIZAÇÃO OFFLINE
+    # ABA DE ENTRADA COM O MÓDULO DE SINCRONIZAÇÃO OFFLINE INTELIGENTE
     # -------------------------------------------------------------------
     with t_en:
         if not verificar_dia_letivo(hoje_real): 
@@ -911,17 +783,17 @@ with tabs[indice_aba]:
         else:
             gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
             with st.form("f_en", clear_on_submit=True):
-                cod_en = st.text_input("Código Aluno (Entrada)")
+                cod_en = st.text_input("Código Aluno (Entrada)", placeholder="Passe o código de barras aqui...")
                 if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
                     res = registrar_presenca(cod_en.upper(), hoje_real, h_lim_e)
                     if res == "erro_cod": 
                         st.error("Código não encontrado.")
                     elif "FILA OFFLINE" in res: 
-                        st.warning(f"⚠️ Rede instável! O aluno {cod_en.upper()} foi guardado na fila offline.")
+                        st.warning(f"⚠️ Rede instável detectada pelo sistema! O aluno {cod_en.upper()} foi guardado na fila offline. Continue passando os alunos normalmente.")
                     elif res: 
                         st.success(f"Bem-vindo, {res}!")
             
-            # MÓDULO DE SINCRONIZAÇÃO DA FILA
+            # BOTÃO DE SINCRONIZAÇÃO (Visível apenas se a internet cair e gerar fila)
             if len(st.session_state.fila_offline) > 0:
                 st.markdown("---")
                 st.error(f"⚠️ **MODO DE REDE INSTÁVEL ATIVADO**")
@@ -952,44 +824,83 @@ with tabs[indice_aba]:
                         
                         if len(falhas_restantes) == 0:
                             st.success(f"Excelente! Todos os {sucessos} registros foram sincronizados com sucesso.")
-                            time.sleep(2)
-                            st.rerun()
+                            time.sleep(2); st.rerun()
                         else:
                             st.warning(f"{sucessos} foram enviados, mas {len(falhas_restantes)} ainda falharam. Tente novamente em alguns minutos.")
 
+    # -------------------------------------------------------------------
+    # ABA DE SAÍDA ANTECIPADA: BUSCA POR CÓDIGO OU NOME
+    # -------------------------------------------------------------------
     with t_sa:
-        if not verificar_dia_letivo(hoje_real): st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
+        if not verificar_dia_letivo(hoje_real): 
+            st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
             with st.form("f_sa", clear_on_submit=True):
-                cod_sa = st.text_input("Código Aluno (Saída)")
+                st.markdown("##### Identifique o estudante:")
+                
+                c_sa1, c_sa2 = st.columns(2)
+                with c_sa1: 
+                    cod_sa = st.text_input("Por Código (Bipe o Cartão)")
+                with c_sa2: 
+                    lista_alunos_saida = [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+                    nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
+                
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
                 mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
-                if st.form_submit_button("CONFIRMAR SAÍDA") and cod_sa:
-                    res = registrar_saida(cod_sa.upper(), mot, True, hoje_real, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
-                    if res: st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!"); st.rerun()
-                    else: st.error("Erro: Aluno sem registro de entrada hoje.")
                 
+                if st.form_submit_button("CONFIRMAR SAÍDA"):
+                    aluno_identificado = cod_sa.upper() if cod_sa else (nome_sa.split(" - ")[0] if nome_sa else None)
+                    
+                    if aluno_identificado:
+                        res = registrar_saida(aluno_identificado, mot, True, hoje_real, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
+                        if res: 
+                            st.success(f"Saída de {res} registrada às {hora_saida_manual.strftime('%H:%M')}!")
+                            st.rerun()
+                        else: 
+                            st.error("Erro: Aluno sem registro de entrada hoje.")
+                    else:
+                        st.warning("⚠️ Por favor, informe o código do cartão ou selecione o nome na lista antes de confirmar.")
+
+    # -------------------------------------------------------------------
+    # ABA DE JUSTIFICAR FALTAS: FILTRO INTELIGENTE E MOTIVOS EXATOS
+    # -------------------------------------------------------------------            
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", value=data_f_global)
         df_faltas = carregar_faltas(d_just.strftime("%Y-%m-%d"))
         
         if not df_faltas.empty:
-            with st.form("form_justificar"):
-                al_falta_sel = st.selectbox("Selecione o Estudante Faltoso", [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_faltas.iterrows()])
-                motivo_falta = st.selectbox("Justificativa", ["Atestado Médico", "Problemas Familiares", "Problemas de Transporte", "Outros"])
-                if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
-                    cod_f = al_falta_sel.split(" - ")[0]
-                    conn = conectar_bd()
-                    if conn:
-                        try:
-                            cur = conn.cursor()
-                            cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
-                            conn.commit()
-                            carregar_faltas.clear()
-                            st.success("Justificativa salva com sucesso!"); st.rerun()
-                        finally: liberar_conn(conn)
+            turmas_disponiveis = ["Todas"] + sorted(df_faltas['turma'].unique())
+            turma_just = st.selectbox("Filtrar por Turma", turmas_disponiveis)
+            
+            df_faltas_filtrado = df_faltas if turma_just == "Todas" else df_faltas[df_faltas['turma'] == turma_just]
+
+            if not df_faltas_filtrado.empty:
+                with st.form("form_justificar"):
+                    al_falta_sel = st.selectbox(
+                        "Selecione o Estudante Faltoso", 
+                        [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_faltas_filtrado.iterrows()]
+                    )
+                    motivo_falta = st.selectbox(
+                        "Justificativa Oficial", 
+                        ["DOENTE", "VIAGEM", "ACOMPANHAR PARENTE", "CONSULTA", "EXAME", "OUTROS"]
+                    )
+                    
+                    if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
+                        cod_f = al_falta_sel.split(" - ")[0]
+                        conn = conectar_bd()
+                        if conn:
+                            try:
+                                cur = conn.cursor()
+                                cur.execute("UPDATE registros_v2 SET motivo_saida=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (motivo_falta, cod_f, d_just.strftime("%Y-%m-%d")))
+                                conn.commit()
+                                carregar_faltas.clear()
+                                st.success("Justificativa salva com sucesso!"); st.rerun()
+                            finally: liberar_conn(conn)
+            else:
+                st.info(f"Nenhum aluno da turma {turma_just} faltou nesta data.")
+
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
@@ -1008,29 +919,11 @@ with tabs[indice_aba]:
     with c3: s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
     
-    params = [dt_f.strftime("%Y-%m-%d")]
-    query = """
-        SELECT a.codigo, a.nome, a.turma, 
-               COALESCE(r.tipo_registro, 'NÃO REGISTRADO (AUSENTE)') as tipo_registro, 
-               r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida 
-        FROM alunos_v2 a 
-        LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s
-        WHERE a.status = 'ATIVO'
-    """
-    
-    if t_f_gestao != "Todas":
-        query += " AND a.turma = %s"
-        params.append(t_f_gestao)
-        
-    if s_f == "Presentes":
-        query += " AND r.tipo_registro = 'PRESENCA'"
-    elif s_f == "Ausentes":
-        query += " AND (r.tipo_registro = 'FALTA' OR r.tipo_registro IS NULL)"
-        
-    if b_f:
-        query += " AND a.nome ILIKE %s"
-        params.append(f"%{b_f}%")
-        
+    params = [dt_f.strftime("%Y-%m-%d")]; query = "SELECT a.codigo, a.nome, a.turma, COALESCE(r.tipo_registro, 'NÃO REGISTRADO (AUSENTE)') as tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida FROM alunos_v2 a LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s WHERE a.status = 'ATIVO'"
+    if t_f_gestao != "Todas": query += " AND a.turma = %s"; params.append(t_f_gestao)
+    if s_f == "Presentes": query += " AND r.tipo_registro = 'PRESENCA'"
+    elif s_f == "Ausentes": query += " AND (r.tipo_registro = 'FALTA' OR r.tipo_registro IS NULL)"
+    if b_f: query += " AND a.nome ILIKE %s"; params.append(f"%{b_f}%")
     query += " ORDER BY a.turma, a.nome"
     
     conn = conectar_bd()
@@ -1319,7 +1212,6 @@ if eh_admin:
         st.markdown('<div class="card-panel">', unsafe_allow_html=True)
         
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
-        st.write("Selecione o estudante que não compareceu à primeira chamada, a área da avaliação e justifique o motivo.")
         with st.form("form_falta_1a", clear_on_submit=True):
             c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
             with c_f1: f1_ano = st.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual))
@@ -1342,22 +1234,16 @@ if eh_admin:
                                 ON CONFLICT (codigo_aluno, ano, periodo, area) 
                                 DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
                             """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
-                            conn_f1.commit()
-                            carregar_faltas_primeira_chamada.clear()
+                            conn_f1.commit(); carregar_faltas_primeira_chamada.clear()
                             st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
-                        except Exception as e:
-                            st.error(f"Erro ao salvar: {e}")
+                        except Exception as e: st.error(f"Erro ao salvar: {e}")
                         finally: liberar_conn(conn_f1)
-                    else:
-                        st.error("Sem conexão com o banco de dados.")
-                else:
-                    st.error("Por favor, selecione um estudante na lista.")
+                    else: st.error("Sem conexão com o banco de dados.")
+                else: st.error("Por favor, selecione um estudante na lista.")
                     
         st.markdown("---")
         
         st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
-        st.write("Copie o link abaixo e envie via WhatsApp para alunos, pais e servidores responderem de forma anônima:")
-        
         link_completo = f"https://seu-projeto.streamlit.app/?modo=pesquisa"
         st.code(link_completo, language="text")
         st.markdown("---")
@@ -1374,14 +1260,9 @@ if eh_admin:
                     try:
                         cur = conn.cursor()
                         cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                        conn.commit()
-                        carregar_alunos.clear()
-                        st.success("Atualizado com sucesso!")
-                    except Exception as e:
-                        conn.rollback()
-                        st.error(f"Erro ao salvar: {e}")
-                    finally: 
-                        liberar_conn(conn)
+                        conn.commit(); carregar_alunos.clear(); st.success("Atualizado com sucesso!")
+                    except Exception as e: conn.rollback(); st.error(f"Erro ao salvar: {e}")
+                    finally: liberar_conn(conn)
         
         with col2:
             st.write("Adição Manual de Aluno")
@@ -1390,10 +1271,8 @@ if eh_admin:
             
             lista_turmas = sorted(df_alunos['turma'].unique()) if not df_alunos.empty else []
             m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
-            if m_tur_sel == "+ Criar Nova Turma":
-                m_tur = st.text_input("Digite o nome da nova turma")
-            else:
-                m_tur = m_tur_sel
+            if m_tur_sel == "+ Criar Nova Turma": m_tur = st.text_input("Digite o nome da nova turma")
+            else: m_tur = m_tur_sel
 
             if st.button("CADASTRAR ALUNO"):
                 if m_cod and m_nom and m_tur and m_tur != "Selecione...":
@@ -1402,19 +1281,13 @@ if eh_admin:
                         try:
                             cur = conn.cursor()
                             cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                            conn.commit()
-                            carregar_alunos.clear()
-                            st.success("Cadastrado com sucesso!")
+                            conn.commit(); carregar_alunos.clear(); st.success("Cadastrado com sucesso!")
                         except Exception as e:
                             conn.rollback()
-                            if "UniqueViolation" in str(type(e).__name__):
-                                st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
-                            else:
-                                st.error(f"Erro inesperado: {e}")
-                        finally: 
-                            liberar_conn(conn)
-                else:
-                    st.warning("Preencha todos os campos antes de cadastrar.")
+                            if "UniqueViolation" in str(type(e).__name__): st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
+                            else: st.error(f"Erro inesperado: {e}")
+                        finally: liberar_conn(conn)
+                else: st.warning("Preencha todos os campos antes de cadastrar.")
 
         st.divider()
 
@@ -1422,12 +1295,8 @@ if eh_admin:
         st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
         
         c_del1, c_del2 = st.columns([3, 1])
-        with c_del1:
-            aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()], key="sel_del_aluno")
-        with c_del2:
-            st.write("") 
-            st.write("")
-            btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
+        with c_del1: aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()], key="sel_del_aluno")
+        with c_del2: st.write(""); st.write(""); btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
 
         if btn_excluir and aluno_excluir:
             cod_del = aluno_excluir.split(" - ")[0]
@@ -1438,16 +1307,11 @@ if eh_admin:
                     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
-                    conn.commit()
-                    carregar_alunos.clear() 
+                    conn.commit(); carregar_alunos.clear() 
                     st.success(f"O registro {cod_del} foi completamente excluído!")
-                    time.sleep(2) 
-                    st.rerun()
-                except Exception as e:
-                    conn.rollback()
-                    st.error(f"Erro ao tentar excluir aluno: {e}")
-                finally:
-                    liberar_conn(conn)
+                    time.sleep(2); st.rerun()
+                except Exception as e: conn.rollback(); st.error(f"Erro ao tentar excluir aluno: {e}")
+                finally: liberar_conn(conn)
 
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
@@ -1456,8 +1320,6 @@ if eh_admin:
 
         st.markdown("---")
         st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
-        st.write("Somente administradores podem enviar ou excluir dados do banco.")
-        
         c_up0, c_up1, c_up2, c_up3 = st.columns(4)
         with c_up0: ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
         with c_up1: p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
@@ -1475,8 +1337,7 @@ if eh_admin:
         st.subheader("🗑️ Limpeza Seletiva de Banco")
         
         conn_limpeza = conectar_bd()
-        try:
-            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
+        try: blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
         except: blocos_df = pd.DataFrame()
         finally: liberar_conn(conn_limpeza)
         
@@ -1494,7 +1355,6 @@ if eh_admin:
         else: st.info("O banco de dados de desempenho está vazio.")
 
         st.markdown("---")
-        st.write("Atenção: Ao excluir dados de pesquisa de satisfação, isso não poderá ser desfeito.")
         if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
             conn_sat = conectar_bd()
             if conn_sat:
