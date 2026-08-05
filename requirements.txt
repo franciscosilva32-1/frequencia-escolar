@@ -2,7 +2,6 @@ streamlit==1.38.0
 starlette==0.37.2
 pandas
 psycopg2-binary
-streamlit-cookies-manager
 plotly
 fpdf
 matplotlib
