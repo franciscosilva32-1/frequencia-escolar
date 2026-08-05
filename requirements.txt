@@ -1,17 +1,8 @@
-# --- FICHEIRO: requirements.txt ---
-# Este ficheiro é o "menu" de ferramentas que o servidor precisa de instalar.
-
-# Forçamos a instalação do Streamlit na versão 1.30.0 ou superior.
-# Esta é a solução definitiva para o erro de ecrã que estavas a ter, 
-# resolvendo o conflito com a biblioteca Starlette subjacente.
-streamlit>=1.30.0
-
-# Abaixo estão as restantes bibliotecas que o teu código importa e utiliza:
+streamlit>=1.38.0
 pandas
 psycopg2-binary
 streamlit-cookies-manager
 plotly
-html5-qrcode
-fpdf2
+fpdf
 matplotlib
 numpy
