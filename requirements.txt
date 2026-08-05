@@ -1,8 +1,6 @@
-streamlit==1.38.0
-starlette==0.37.2
-pandas
-psycopg2-binary
-plotly
-fpdf
-matplotlib
-numpy
+# --- FICHEIRO: requirements.txt ---
+# Este ficheiro diz ao servidor quais as bibliotecas externas necessárias para a aplicação funcionar.
+
+# Forçamos a instalação de uma versão recente do Streamlit (igual ou superior à 1.30.0).
+# Isto resolve o erro: "TypeError: GZipResponder.__init__() missing 1 required keyword-only argument: 'thread_minimum_size'"
+streamlit>=1.30.0
