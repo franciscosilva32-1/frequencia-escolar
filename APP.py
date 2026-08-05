@@ -1,3 +1,6 @@
+# --- FICHEIRO PRINCIPAL (ex: app.py) ---
+
+# Importação de bibliotecas: Aqui trazemos todas as ferramentas externas que o código vai usar.
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -22,6 +25,7 @@ import tempfile
 import numpy as np
 import zipfile
 
+# Tenta importar bibliotecas para geração de PDF e gráficos. Se falhar, o código continua a funcionar (evita quebrar o app).
 try:
     from fpdf import FPDF
 except ImportError:
@@ -36,31 +40,38 @@ except ImportError:
 # ------------------------------------------------------------
 # 1. CONFIGURAÇÃO INICIAL E COOKIES
 # ------------------------------------------------------------
+# Define o título da aba do navegador, o ícone e diz que a página deve ocupar toda a largura (layout="wide").
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
+# Cria variáveis de "sessão". Estas variáveis lembram-se de informações enquanto o utilizador navega pela página.
 if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
 
+# Inicializa o gestor de cookies para gerir o login.
 cookies = CookieManager()
 if not cookies.ready(): st.stop()
 
 # ------------------------------------------------------------
 # 2. BANCO DE DADOS (CONNECTION POOLING)
 # ------------------------------------------------------------
+# Puxa os segredos (senhas e links) configurados no Streamlit Secrets.
 DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
+# Cria um "pool" de conexões. É como ter vários telefones disponíveis para falar com a base de dados ao mesmo tempo, evitando filas.
 @st.cache_resource
 def get_connection_pool():
     return pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
 
+# Função simples para pedir um "telefone" emprestado para falar com a base de dados.
 def conectar_bd():
     try:
         return get_connection_pool().getconn()
     except:
         return None
 
+# Função para devolver o "telefone" quando acabarmos de usar.
 def liberar_conn(conn):
     if conn:
         get_connection_pool().putconn(conn)
@@ -68,17 +79,21 @@ def liberar_conn(conn):
 # ------------------------------------------------------------
 # 3. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
 # ------------------------------------------------------------
+# Garante que a hora está no fuso horário correto (UTC-3).
 def obter_hora_atual(): return datetime.utcnow() - timedelta(hours=3)
 
+# Transforma a data atual num formato fácil de ler em português.
 def data_formatada_ptbr():
     dt = obter_hora_atual()
     meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
     return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
 
+# Configurações de envio de e-mails automáticos.
 ATIVAR_EMAILS = True  
 EMAIL_ESCOLA = st.secrets.get("EMAIL_ESCOLA", "") 
 SENHA_APP_ESCOLA = st.secrets.get("SENHA_APP_ESCOLA", "") 
 
+# Dicionários: Listas de correspondência para padronizar cores e abreviações nos gráficos.
 DICIONARIO_CORES = {
     "LP": "#2563eb", "MAT": "#dc2626", "MTM": "#dc2626", "BIO": "#16a34a",
     "ART": "#d97706", "EDF": "#7c3aed", "ESP": "#db2777", "FIL": "#4f46e5",
@@ -104,6 +119,7 @@ DICIONARIO_PERGUNTAS_SATISFACAO = {
     "Servidor": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Condições de Trabalho", "Clima Organizacional"]
 }
 
+# Função que cria e envia um e-mail em "background" (segundo plano) para não bloquear o ecrã da aplicação.
 def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
     try: data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
     except: data_f = data
@@ -127,8 +143,10 @@ def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
                 server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls(); server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
                 server.send_message(msg); server.quit()
             except: pass
+    # Inicia uma tarefa paralela para enviar o e-mail.
     threading.Thread(target=enviar).start()
 
+# Transforma a imagem do logótipo num código de texto (base64) para ser desenhado na página.
 @st.cache_resource 
 def carregar_logo_base64():
     if os.path.exists("logo.png"):
@@ -145,6 +163,7 @@ def renderizar_logo_central():
 # ------------------------------------------------------------
 # 4. INICIALIZAÇÃO DE TABELAS (CACHE RESOURCE)
 # ------------------------------------------------------------
+# Esta função é executada uma vez quando o sistema liga. Ela verifica se as tabelas existem no banco de dados e cria-as se faltarem.
 @st.cache_resource
 def inicializar_tabelas():
     conn = conectar_bd()
@@ -158,6 +177,7 @@ def inicializar_tabelas():
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
         conn.commit() 
+        # Tenta adicionar colunas novas caso a tabela seja de uma versão antiga.
         try: cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'"); conn.commit()
         except Exception: conn.rollback() 
         try:
@@ -180,9 +200,11 @@ def inicializar_tabelas():
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
         )""")
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
+        # Cria índices para tornar as pesquisas na base de dados muito mais rápidas.
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
+        # Aplica segurança adicional nas tabelas.
         for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']:
             try: cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;"); conn.commit()
             except Exception: conn.rollback() 
@@ -194,6 +216,7 @@ inicializar_tabelas()
 # ------------------------------------------------------------
 # 5. CSS (Limpo de conflitos com classes removidas)
 # ------------------------------------------------------------
+# Injeta código CSS para estilizar os botões, tabelas e criar um design moderno para a página.
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
@@ -245,6 +268,9 @@ st.markdown("""
 # ------------------------------------------------------------
 # 6. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS SQL-FIRST
 # ------------------------------------------------------------
+# As funções abaixo buscam informações na base de dados.
+# O "@st.cache_data" faz com que o Streamlit memorize a resposta por um tempo (ttl=segundos) para não sobrecarregar o servidor com perguntas repetidas.
+
 @st.cache_data(ttl=300)
 def verificar_dia_letivo(data_atual):
     try:
@@ -319,6 +345,7 @@ def carregar_faltas_primeira_chamada(ano):
     except Exception: return pd.DataFrame()
     finally: liberar_conn(conn)
 
+# Função fundamental que filtra os resultados das provas de acordo com o ano, período, área e turma escolhidos no painel.
 @st.cache_data(ttl=300)
 def obter_dados_acad_filtrados(ano, p, a, t):
     conditions = ["avs.ano = %s"]; params = [str(ano)]
@@ -332,6 +359,7 @@ def obter_dados_acad_filtrados(ano, p, a, t):
     try: df = pd.read_sql(query, conn, params=params)
     except Exception: df = pd.DataFrame()
     finally: liberar_conn(conn)
+    # Corrige eventuais erros de digitação na base de dados
     if not df.empty and 'disciplina' in df.columns:
         df['disciplina'] = df['disciplina'].replace({'LÍNGUA PORTUGESA': 'LÍNGUA PORTUGUESA', 'SOCIOLGIA': 'SOCIOLOGIA'})
     return df
@@ -404,11 +432,13 @@ def calcular_satisfacao_global_cached(ano, tf):
         if not df_sat_eq.empty: sat_eq_str = f"{df_sat_eq['media_resposta'].mean():.1f} / 5"
     return sat_est_str, sat_pais_str, sat_eq_str
 
+# Função que lê um ficheiro CSV e guarda os estudantes na base de dados.
 def importar_csv_alunos(file):
     conteudo_bytes = file.read()
     try: conteudo_str = conteudo_bytes.decode('utf-8-sig')
     except: conteudo_str = conteudo_bytes.decode('latin-1')
     df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
+    # Normaliza os nomes para remover acentos e pôr tudo em maiúsculas
     def norm(c): return ''.join(x for x in unicodedata.normalize('NFD', str(c)) if unicodedata.category(x) != 'Mn').strip().upper()
     df.columns = [norm(col) for col in df.columns]
     dados = [(str(r['CODIGO']).upper(), str(r['NOME']).upper(), str(r['TURMA']).upper(), 'ATIVO') for _, r in df.iterrows()]
@@ -416,16 +446,19 @@ def importar_csv_alunos(file):
     if not conn: return False
     try:
         cur = conn.cursor()
+        # Insere dados, se já existir um aluno com o mesmo código, atualiza os dados dele.
         execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
         conn.commit(); carregar_alunos.clear()
         return True
     finally: liberar_conn(conn)
 
+# Adiciona um registo à "Fila Offline" caso a internet caia no momento do bip da entrada.
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
     st.session_state.fila_offline.append(registro_pendente)
     return f"FILA OFFLINE ({cod})"
 
+# Registar a entrada de um aluno e enviar o e-mail se necessário.
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual(); h_at = agora.strftime("%H:%M:%S"); status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
     conn = conectar_bd()
@@ -445,6 +478,7 @@ def registrar_presenca(cod, data, h_limite):
         finally: liberar_conn(conn)
     else: return ir_para_fila_offline(cod, data, h_at, status)
 
+# Registar a saída de um aluno.
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
     if not conn: return False
@@ -464,6 +498,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     except Exception: return False
     finally: liberar_conn(conn)
 
+# Lê o CSV gerado pela ferramenta de correção de provas e introduz as respostas na base de dados.
 def importar_csv_desempenho(file, ano, periodo, area, turma):
     conteudo_bytes = file.read()
     try: conteudo_str = conteudo_bytes.decode('utf-8-sig')
@@ -502,6 +537,7 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     except Exception as e: return False, str(e)
     finally: liberar_conn(conn)
 
+# Constrói o PDF do boletim académico do estudante (incluindo notas e gráfico).
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: return None
     pdf = FPDF(); pdf.add_page(); pdf.set_fill_color(10, 31, 53); pdf.rect(0, 0, 210, 35, 'F')
@@ -565,6 +601,7 @@ def gerar_pdf_relatorio_critico(df_critico):
         pdf.ln(5)
     out = pdf.output(dest='S'); return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
+# Cria e injeta na página o código HTML/JavaScript que permite ler Códigos QR ou de Barras pela câmara.
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
@@ -616,6 +653,7 @@ def gerar_camera(label, btn_label, cam_id):
 # ------------------------------------------------------------
 # 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
 # ------------------------------------------------------------
+# Este bloco cria uma página "secreta" que só aparece se quem abrir o site adicionar "?modo=pesquisa" no final do link. Serve para receber avaliações públicas sem precisar de senha.
 if st.query_params.get("modo") == "pesquisa":
     renderizar_logo_central()
     
@@ -677,6 +715,7 @@ if st.query_params.get("modo") == "pesquisa":
 # ------------------------------------------------------------
 # 8. AUTH E DASHBOARD DO DIRETOR
 # ------------------------------------------------------------
+# Este bloco trata de validar a senha (Login). Se não tiver o cookie correto salvo, mostra o ecrã de senha.
 auth_cookie = cookies.get("auth_token")
 if not auth_cookie:
     if os.path.exists("logo.png"): st.image("logo.png", width=120)
@@ -688,6 +727,7 @@ if not auth_cookie:
         else: st.error("Incorreta")
     st.stop()
 
+# Define se o utilizador é Administrador ou um utilizador normal, ativando/desativando menus.
 try:
     user = json.loads(base64.b64decode(auth_cookie).decode())
     eh_admin = user.get('admin', user.get('eh_admin', False)) 
@@ -754,6 +794,7 @@ if eh_admin: abas_do_sistema.append("⚙️ Manutenção do Sistema")
 tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
+# ABA: 📝 Registro (Controlo de Portaria, Entradas, Saídas e Justificativas)
 with tabs[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     c_cfg1, c_cfg2 = st.columns(2)
@@ -917,6 +958,7 @@ with tabs[indice_aba]:
             st.success("Nenhum aluno faltou nesta data! Todos os alunos ativos estão com 'PRESENCA'.")
 indice_aba += 1
 
+# ABA: 📊 Gestão Frequência (Tabela com todos os alunos e seu status no dia)
 with tabs[indice_aba]:
     st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -942,6 +984,7 @@ with tabs[indice_aba]:
     else: st.error("Sem conexão com o banco de dados.")
 indice_aba += 1
 
+# ABA: 🚨 Alertas (Identifica quem faltou vários dias seguidos)
 with tabs[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
@@ -956,6 +999,7 @@ with tabs[indice_aba]:
             finally: liberar_conn(conn)
 indice_aba += 1
 
+# ABA: 📈 Histórico (Procura por todos os registos passados de um aluno)
 with tabs[indice_aba]:
     st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
@@ -969,6 +1013,7 @@ with tabs[indice_aba]:
             finally: liberar_conn(conn)
 indice_aba += 1
 
+# ABA: 📑 Desempenho Acadêmico (Visualização de Notas, Gráficos e PDF)
 with tabs[indice_aba]:
     st.title("📊 Desempenho Acadêmico")
     st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
@@ -1163,6 +1208,7 @@ indice_aba += 1
 # ------------------------------------------------------------
 # 7. NOVA ABA: ANÁLISE DE SATISFAÇÃO DA COMUNIDADE
 # ------------------------------------------------------------
+# Permite ao gestor ler e analisar graficamente o que foi respondido na pesquisa de satisfação.
 with tabs[indice_aba]:
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
@@ -1203,6 +1249,7 @@ with tabs[indice_aba]:
                     st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
 indice_aba += 1
 
+# ABA DE ADMINISTRAÇÃO (Só visível se fizer login com a senha master)
 if eh_admin:
     with tabs[indice_aba]:
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
