@@ -192,7 +192,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. CSS
+# 5. CSS (Limpo de conflitos com classes removidas)
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -219,7 +219,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
     .stTabs [data-baseweb="tab"]:hover { background-color: #e2e8f0 !important; color: var(--primary) !important; }
     .stTabs [aria-selected="true"] { background-color: var(--primary) !important; color: #ffffff !important; border: 5px solid var(--accent) !important; border-bottom: none !important; transform: translateY(-4px); box-shadow: 0 -8px 25px rgba(255, 123, 0, 0.35) !important; }
-    .card-panel { background: white; border-radius: 20px; padding: 2.2rem; margin-bottom: 1.5rem; box-shadow: 0 8px 20px rgba(0,0,0,0.03); border: 2px solid #e2e8f0; }
     div[data-baseweb="input"] { border: 2px solid #cbd5e1 !important; border-radius: 12px !important; background-color: #ffffff !important; }
     div[data-baseweb="input"] input { color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-weight: 900 !important; font-size: 1.5rem !important; padding: 1rem 1.2rem !important; }
     div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 4px rgba(255, 123, 0, 0.2) !important; }
@@ -230,7 +229,6 @@ st.markdown("""
     .stButton > button { border-radius: 12px !important; font-weight: 800 !important; font-size: 1.3rem !important; padding: 0.8rem 2rem !important; border: none !important; transition: all 0.2s ease !important; }
     [data-testid="stFormSubmitButton"] > button { background: linear-gradient(135deg, var(--primary), #1a4b82) !important; color: white !important; box-shadow: 0 6px 15px rgba(10, 31, 53, 0.3) !important; width: 100% !important; text-transform: uppercase !important; font-size: 1.4rem !important;}
     [data-testid="stFormSubmitButton"] > button:active { transform: scale(0.95); }
-    .login-card { max-width: 600px; margin: 5vh auto; background: white; border-radius: 24px; padding: 3rem 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.1); border: 3px solid var(--primary); }
     .login-title { font-size: 2.2rem; font-weight: 900; color: var(--primary); margin-bottom: 1.5rem; text-align: center; }
     [data-testid="stDataFrame"] { font-size: 1.2rem !important; }
     .streamlit-expanderHeader { font-size: 1.3rem !important; font-weight: bold !important; }
@@ -275,14 +273,11 @@ def contar_presencas_data(data_str, turma="Todas"):
         return count
     except: return 0
 
-# --- AQUI ESTÁ A CORREÇÃO: LÓGICA INTELIGENTE DE FALTAS ---
 @st.cache_data(ttl=60)
 def carregar_faltas(data_str):
     try:
         conn = conectar_bd()
         if not conn: return pd.DataFrame()
-        # O SQL agora busca todos os alunos ativos que NÃO têm presença na data, 
-        # cruzando com a tabela de registros caso a justificativa (FALTA explícita) já exista.
         query = """
             SELECT a.codigo as codigo_aluno, a.nome, a.turma, r.motivo_saida 
             FROM alunos_v2 a 
@@ -299,7 +294,6 @@ def carregar_faltas(data_str):
     except Exception as e: 
         print(f"Erro ao carregar faltas: {e}")
         return pd.DataFrame()
-# -----------------------------------------------------------
 
 @st.cache_data(ttl=3600)  
 def carregar_alunos():
@@ -623,14 +617,13 @@ def gerar_camera(label, btn_label, cam_id):
 # 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
 # ------------------------------------------------------------
 if st.query_params.get("modo") == "pesquisa":
-    st.markdown("<div class='login-card' style='max-width: 750px;'>", unsafe_allow_html=True)
     renderizar_logo_central()
     
     if st.session_state.pesquisa_enviada:
         st.markdown("<div style='text-align: center; padding: 40px 10px;'><h1 style='font-size: 5rem; margin-bottom: 0;'>🎉</h1><h2 style='color: #10b981; font-weight: 900;'>Avaliação Recebida!</h2><p style='font-size: 1.4rem; color: #64748b; margin-top: 15px;'>Muito obrigado por contribuir com a melhoria do <b>Centro Educa Mais Jansen Veloso</b>.<br>Sua opinião faz toda a diferença!</p></div>", unsafe_allow_html=True)
         if st.button("Enviar nova avaliação", use_container_width=True):
             st.session_state.pesquisa_enviada = False; st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True); st.stop()
+        st.stop()
         
     st.markdown("<h2 style='color: var(--primary); text-align: center; margin-bottom: 5px;'>Pesquisa de Satisfação Escolar</h2><p style='text-align: center; color: #64748b; font-weight: bold; margin-bottom: 25px;'>Sua opinião é 100% anônima e essencial para melhorarmos nossa escola.</p>", unsafe_allow_html=True)
     cat = st.selectbox("1. Identifique seu perfil para iniciarmos:", ["", "Estudante", "Pais/Responsável", "Professor", "Servidor"])
@@ -678,7 +671,7 @@ if st.query_params.get("modo") == "pesquisa":
                         except: st.error("Erro de conexão ao salvar avaliação. Tente novamente.")
                         finally: liberar_conn(conn)
                     else: st.error("Não foi possível conectar ao banco de dados no momento.")
-    st.markdown("</div>", unsafe_allow_html=True); st.stop() 
+    st.stop() 
 
 
 # ------------------------------------------------------------
@@ -686,7 +679,6 @@ if st.query_params.get("modo") == "pesquisa":
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
 if not auth_cookie:
-    st.markdown('<div class="login-card">', unsafe_allow_html=True)
     if os.path.exists("logo.png"): st.image("logo.png", width=120)
     st.markdown('<div class="login-title">LOGIN ESCOLAR</div>', unsafe_allow_html=True)
     passw = st.text_input("SENHA", type="password")
@@ -694,7 +686,7 @@ if not auth_cookie:
         if passw in [SENHA_ADMIN, SENHA_OPERADOR]:
             cookies["auth_token"] = base64.b64encode(json.dumps({"admin": passw==SENHA_ADMIN}).encode()).decode(); cookies.save(); st.rerun()
         else: st.error("Incorreta")
-    st.markdown('</div>', unsafe_allow_html=True); st.stop()
+    st.stop()
 
 try:
     user = json.loads(base64.b64decode(auth_cookie).decode())
@@ -763,7 +755,6 @@ tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1: h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
@@ -870,9 +861,6 @@ with tabs[indice_aba]:
                     else:
                         st.warning("⚠️ Por favor, informe o código do cartão ou selecione o nome na lista antes de confirmar.")
 
-    # -------------------------------------------------------------------
-    # ABA DE JUSTIFICAR FALTAS: CORRIGIDA COM INTELIGÊNCIA DINÂMICA
-    # -------------------------------------------------------------------            
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", value=data_f_global)
@@ -883,8 +871,6 @@ with tabs[indice_aba]:
             turma_just = st.selectbox("Filtrar por Turma", turmas_disponiveis)
             
             df_faltas_filtrado = df_faltas if turma_just == "Todas" else df_faltas[df_faltas['turma'] == turma_just]
-
-            # NOVO: Filtra para exibir apenas os alunos que AINDA NÃO têm justificativa
             df_pendentes = df_faltas_filtrado[df_faltas_filtrado['motivo_saida'].isnull()]
             
             if not df_pendentes.empty:
@@ -904,7 +890,6 @@ with tabs[indice_aba]:
                         if conn:
                             try:
                                 cur = conn.cursor()
-                                # NOVO: Injeta o registro de falta explicitamente se ele não existir
                                 cur.execute("""
                                     INSERT INTO registros_v2 (codigo_aluno, data, tipo_registro, motivo_saida) 
                                     VALUES (%s, %s, 'FALTA', %s)
@@ -930,11 +915,10 @@ with tabs[indice_aba]:
                 st.write("Nenhuma falta justificada ainda.")
         else: 
             st.success("Nenhum aluno faltou nesta data! Todos os alunos ativos estão com 'PRESENCA'.")
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📊 Relatório Diário")
+    st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
     with c1: dt_f = st.date_input("Data", value=data_f_global, key="data_relatorio")
     with c2: t_f_gestao = st.selectbox("Turma (Frequência)", ["Todas"] + sorted(df_alunos['turma'].unique()) if not df_alunos.empty else ["Todas"], index=0 if tf=="Todas" else (["Todas"] + sorted(df_alunos['turma'].unique())).index(tf) , key="filtro_turma_gestao")
@@ -956,12 +940,10 @@ with tabs[indice_aba]:
         except: st.info("Sem dados para exibir no momento.")
         finally: liberar_conn(conn)
     else: st.error("Sem conexão com o banco de dados.")
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
-
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
+    st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     if dias_u:
         conn = conectar_bd()
@@ -972,11 +954,10 @@ with tabs[indice_aba]:
                 else: st.success("Nenhum aluno ativo nesta situação.")
             except: st.info("Aguardando...")
             finally: liberar_conn(conn)
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True); st.subheader("📈 Histórico Individual")
+    st.subheader("📈 Histórico Individual")
     aluno_sel = st.selectbox("Selecione o aluno", [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()] if not df_alunos.empty else [], key="historico_aluno")
     if aluno_sel:
         conn = conectar_bd()
@@ -986,11 +967,9 @@ with tabs[indice_aba]:
                 st.dataframe(df_hist, hide_index=True)
             except: st.warning("Erro ao carregar histórico.")
             finally: liberar_conn(conn)
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("📊 Desempenho Acadêmico")
     st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
     
@@ -1179,15 +1158,12 @@ with tabs[indice_aba]:
             st.success(f"🎉 Nenhum registro de falta na 1ª chamada encontrado para os filtros atuais!")
         else:
             st.dataframe(df_faltas_1a, use_container_width=True, hide_index=True)
-            
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
 # ------------------------------------------------------------
 # 7. NOVA ABA: ANÁLISE DE SATISFAÇÃO DA COMUNIDADE
 # ------------------------------------------------------------
 with tabs[indice_aba]:
-    st.markdown('<div class="card-panel">', unsafe_allow_html=True)
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
     
@@ -1225,14 +1201,10 @@ with tabs[indice_aba]:
                     data_str = sug['data_hora'].strftime("%d/%m/%Y %H:%M")
                     turma_str = f" ({sug['turma']})" if sug['turma'] else ""
                     st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
-
-    st.markdown('</div>', unsafe_allow_html=True)
 indice_aba += 1
 
 if eh_admin:
     with tabs[indice_aba]:
-        st.markdown('<div class="card-panel">', unsafe_allow_html=True)
-        
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
         with st.form("form_falta_1a", clear_on_submit=True):
             c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
@@ -1384,5 +1356,3 @@ if eh_admin:
                     cur = conn_sat.cursor(); cur.execute("DELETE FROM satisfacao_v1")
                     conn_sat.commit(); carregar_satisfacao_por_ano.clear(); st.success("Respostas apagadas."); st.rerun()
                 finally: liberar_conn(conn_sat)
-
-    st.markdown('</div>', unsafe_allow_html=True)
