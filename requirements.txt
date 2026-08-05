@@ -1,6 +1,17 @@
 # --- FICHEIRO: requirements.txt ---
-# Este ficheiro diz ao servidor quais as bibliotecas externas necessárias para a aplicação funcionar.
+# Este ficheiro é o "menu" de ferramentas que o servidor precisa de instalar.
 
-# Forçamos a instalação de uma versão recente do Streamlit (igual ou superior à 1.30.0).
-# Isto resolve o erro: "TypeError: GZipResponder.__init__() missing 1 required keyword-only argument: 'thread_minimum_size'"
+# Forçamos a instalação do Streamlit na versão 1.30.0 ou superior.
+# Esta é a solução definitiva para o erro de ecrã que estavas a ter, 
+# resolvendo o conflito com a biblioteca Starlette subjacente.
 streamlit>=1.30.0
+
+# Abaixo estão as restantes bibliotecas que o teu código importa e utiliza:
+pandas
+psycopg2-binary
+streamlit-cookies-manager
+plotly
+html5-qrcode
+fpdf2
+matplotlib
+numpy
