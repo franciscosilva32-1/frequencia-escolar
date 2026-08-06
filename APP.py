@@ -51,6 +51,7 @@ if not cookies.ready():
     time.sleep(1)
 
 # ------------------------------------------------------------
+# ------------------------------------------------------------
 # 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
@@ -68,18 +69,36 @@ def get_connection_pool():
     )
 
 def conectar_bd():
-    try:
-        conn = get_connection_pool().getconn()
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.close()
-        return conn
-    except:
-        return None
+    pool_bd = get_connection_pool()
+    tentativas = 3
+    
+    # O sistema tenta até 3 vezes encontrar uma conexão viva no pool
+    for _ in range(tentativas):
+        conn = None
+        try:
+            # Puxa uma conexão disponível
+            conn = pool_bd.getconn()
+            if conn:
+                # Health check: testa se a conexão está realmente viva
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+                return conn # Se chegou aqui, a conexão está perfeita!
+        except Exception:
+            # Se a conexão falhar (caiu ou expirou), descarta-a adequadamente
+            if conn:
+                pool_bd.putconn(conn, close=True)
+                
+    # Se falhar 3 vezes consecutivas, assume que a rede está indisponível
+    return None
 
 def liberar_conn(conn):
     if conn:
-        get_connection_pool().putconn(conn)
+        try:
+            # Devolve a conexão saudável ao pool para ser reutilizada
+            get_connection_pool().putconn(conn)
+        except Exception:
+            pass # Previne travamentos caso o pool já tenha sido encerrado
 
 # ------------------------------------------------------------
 # 3. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
