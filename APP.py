@@ -299,26 +299,66 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 6. LÓGICA DE NEGÓCIO E CACHES OTIMIZADOS SQL-FIRST
+# 6. LÓGICA DE NEGÓCIO E CACHES BLINDADOS COM FALLBACK
 # ------------------------------------------------------------
-@st.cache_data(ttl=300)
-def verificar_dia_letivo(data_atual):
+
+# === Módulo de Resiliência: Verificação de Dia Letivo ===
+def _fetch_dia_letivo_db(data_atual):
+    conn = conectar_bd()
+    if not conn: 
+        raise ConnectionError("Sem conexão com o banco de dados")
     try:
-        conn = conectar_bd()
-        if not conn: 
-            return False
-            
         cur = conn.cursor()
         cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
         res = cur.fetchone()
-        liberar_conn(conn)
-        
         if res: 
             return res[0]
-            
         return False
-    except: 
-        return False
+    finally:
+        liberar_conn(conn)
+
+@st.cache_data(ttl=300)
+def _verificar_dia_letivo_cache(data_atual):
+    return _fetch_dia_letivo_db(data_atual)
+
+def verificar_dia_letivo(data_atual):
+    if 'cache_dias_letivos' not in st.session_state:
+        st.session_state['cache_dias_letivos'] = {}
+        
+    try:
+        # Se a rede cair, esta função vai estourar um erro, impedindo o envenenamento do cache.
+        resultado = _verificar_dia_letivo_cache(data_atual)
+        st.session_state['cache_dias_letivos'][data_atual] = resultado
+        return resultado
+    except Exception:
+        # Puxa o cofre de segurança como plano B.
+        return st.session_state['cache_dias_letivos'].get(data_atual, False)
+
+# === Módulo de Resiliência: Carregamento de Alunos ===
+def _fetch_alunos_db():
+    conn = conectar_bd()
+    if not conn: 
+        raise ConnectionError("Sem conexão com o banco de dados")
+    try:
+        return pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
+    finally:
+        liberar_conn(conn)
+
+@st.cache_data(ttl=3600)
+def _carregar_alunos_cache():
+    return _fetch_alunos_db()
+
+def carregar_alunos():
+    try:
+        # Se a rede cair, esta função vai estourar um erro, impedindo o envenenamento do cache.
+        df = _carregar_alunos_cache()
+        st.session_state['ultimo_df_alunos_ok'] = df
+        return df
+    except Exception:
+        # Puxa o cofre de segurança como plano B.
+        if 'ultimo_df_alunos_ok' in st.session_state:
+            return st.session_state['ultimo_df_alunos_ok']
+        return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 @st.cache_data(ttl=60)
 def contar_presencas_data(data_str, turma="Todas"):
@@ -362,19 +402,6 @@ def carregar_faltas(data_str):
     except Exception as e: 
         print(f"Erro ao carregar faltas: {e}")
         return pd.DataFrame()
-
-@st.cache_data(ttl=3600)  
-def carregar_alunos():
-    try:
-        conn = conectar_bd()
-        if not conn: 
-            return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
-            
-        df = pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
-        liberar_conn(conn)
-        return df
-    except: 
-        return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
 
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
@@ -553,7 +580,7 @@ def importar_csv_alunos(file):
         cur = conn.cursor()
         execute_values(cur, "INSERT INTO alunos_v2 (codigo, nome, turma, status) VALUES %s ON CONFLICT (codigo) DO UPDATE SET nome=EXCLUDED.nome, turma=EXCLUDED.turma", dados)
         conn.commit()
-        carregar_alunos.clear()
+        _carregar_alunos_cache.clear()
         return True
     finally: 
         liberar_conn(conn)
@@ -563,7 +590,6 @@ def ir_para_fila_offline(cod, data, h_at, status):
     st.session_state.fila_offline.append(registro_pendente)
     return f"FILA OFFLINE ({cod})"
 
-# ====================== FUNÇÃO OTIMIZADA (100% CACHE LOCAL) ======================
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual()
     h_at = agora.strftime("%H:%M:%S")
@@ -590,7 +616,6 @@ def registrar_presenca(cod, data, h_limite):
     })
     
     return nome_aluno  
-# =================================================================================
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
@@ -928,7 +953,7 @@ if st.query_params.get("modo") == "pesquisa":
     renderizar_logo_central()
     
     if st.session_state.pesquisa_enviada:
-        st.markdown("<div style='text-align: center; padding: 40px 10px;'><h1 style='font-size: 5rem; margin-bottom: 0;'>🎉</h1><h2 style='color: #10b981; font-weight: 900;'>Avaliação Recebida!</h2><p style='font-size: 1.4rem; color: #64748b; margin-top: 15px;'>Muito obrigado por contribuir com a melhoria do <b>Centro Educa Mais Jansen Veloso</b>.<br>Sua opinião faz toda a diferença!</p></div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center; padding: 40px 10px;'><h1 style='font-size: 5rem; margin-bottom: 0;'>🎉</h1><h2 style='color: #10b981; font-weight: 900;'>Avaliação Recebida!</h2><p style='font-size: 1.4rem; color: #64748b; margin-top: 15px;'>Muito obrigado por contribuir com a melhoria da nossa escola.<br>Sua opinião faz toda a diferença!</p></div>", unsafe_allow_html=True)
         if st.button("Enviar nova avaliação", use_container_width=True):
             st.session_state.pesquisa_enviada = False
             st.rerun()
@@ -1031,7 +1056,7 @@ with c_out2:
 
 renderizar_logo_central()
 st.markdown('<p class="main-title">PAINEL INTEGRADO</p>', unsafe_allow_html=True)
-st.markdown(f'<p class="sub-title">CEMA Jansen Veloso • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="sub-title">Gestão Escolar • {data_formatada_ptbr()}</p>', unsafe_allow_html=True)
 
 # --- FILTROS GLOBAIS ---
 st.markdown("### 🎛️ Filtros Globais do Painel")
@@ -1128,7 +1153,7 @@ with tabs[indice_aba]:
                     cur = conn.cursor()
                     cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
                     conn.commit()
-                    verificar_dia_letivo.clear()
+                    _verificar_dia_letivo_cache.clear()
                     st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada.")
                 except Exception as e: 
                     st.error(f"Erro ao salvar: {e}")
@@ -1170,8 +1195,17 @@ with tabs[indice_aba]:
                             if conn_sync:
                                 try:
                                     cur = conn_sync.cursor()
-                                    dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in st.session_state.fila_offline]
                                     
+                                    # ===== CORREÇÃO DA AUDITORIA: LIMPEZA DE FALTAS ANTES DO INSERT =====
+                                    dados_delete = [(p["codigo"], p["data"]) for p in st.session_state.fila_offline]
+                                    execute_values(
+                                        cur,
+                                        "DELETE FROM registros_v2 r USING (VALUES %s) AS v(cod, dt) WHERE r.codigo_aluno = v.cod AND r.data = v.dt::DATE AND r.tipo_registro = 'FALTA'",
+                                        dados_delete
+                                    )
+                                    # ====================================================================
+                                    
+                                    dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in st.session_state.fila_offline]
                                     execute_values(
                                         cur, 
                                         "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING", 
@@ -1778,7 +1812,7 @@ if eh_admin:
                         cur = conn.cursor()
                         cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
                         conn.commit()
-                        carregar_alunos.clear()
+                        _carregar_alunos_cache.clear()
                         st.success("Atualizado com sucesso!")
                     except Exception as e: 
                         conn.rollback()
@@ -1811,7 +1845,7 @@ if eh_admin:
                             cur = conn.cursor()
                             cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
                             conn.commit()
-                            carregar_alunos.clear()
+                            _carregar_alunos_cache.clear()
                             st.success("Cadastrado com sucesso!")
                         except Exception as e:
                             conn.rollback()
@@ -1851,7 +1885,7 @@ if eh_admin:
                     cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
                     conn.commit()
-                    carregar_alunos.clear() 
+                    _carregar_alunos_cache.clear() 
                     st.success(f"O registro {cod_del} foi completamente excluído!")
                     time.sleep(2)
                     st.rerun()
