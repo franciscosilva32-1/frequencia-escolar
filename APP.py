@@ -42,10 +42,13 @@ if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
 if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
 
 cookies = CookieManager()
-if not cookies.ready(): st.stop()
+# [AUDITORIA - SOLUÇÃO 5]: Remoção do st.stop() para evitar bloqueio da página em caso de rede lenta.
+if not cookies.ready(): 
+    st.warning("⏳ A carregar preferências do sistema... A interface de registo continuará a funcionar.")
+    time.sleep(1)
 
 # ------------------------------------------------------------
-# 2. BANCO DE DADOS (CONNECTION POOLING)
+# 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -53,11 +56,21 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
 @st.cache_resource
 def get_connection_pool():
-    return pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
+    # [AUDITORIA - SOLUÇÃO 1]: Adição de timeouts (connect_timeout e statement_timeout) para impedir congelamento de tela.
+    return pool.ThreadedConnectionPool(
+        1, 20, DATABASE_URL,
+        connect_timeout=3,
+        options="-c statement_timeout=5000"
+    )
 
 def conectar_bd():
     try:
-        return get_connection_pool().getconn()
+        conn = get_connection_pool().getconn()
+        # [AUDITORIA - SOLUÇÃO 6]: Health check para evitar conexões "zumbis".
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        return conn
     except:
         return None
 
@@ -426,43 +439,32 @@ def ir_para_fila_offline(cod, data, h_at, status):
     st.session_state.fila_offline.append(registro_pendente)
     return f"FILA OFFLINE ({cod})"
 
-# ====================== FUNÇÃO OTIMIZADA (INSTANTÂNEA) ======================
+# ====================== FUNÇÃO OTIMIZADA (100% CACHE LOCAL) ======================
 def registrar_presenca(cod, data, h_limite):
     agora = obter_hora_atual()
     h_at = agora.strftime("%H:%M:%S")
     status = "PRESENTE" if agora.time() <= h_limite else "ATRASO"
     
-    # Validação prévia do código (para não poluir a fila com erros)
-    conn = conectar_bd()
-    nome_aluno = None
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT nome FROM alunos_v2 WHERE codigo = %s", (cod,))
-            res = cur.fetchone()
-            if not res:
-                liberar_conn(conn)
-                return "erro_cod"
-            nome_aluno = res[0]
-            liberar_conn(conn)
-        except:
-            liberar_conn(conn)
-            # Se houver erro de banco, ainda vai para a fila
-            nome_aluno = "DESCONHECIDO (ERRO DB)"
-    else:
-        nome_aluno = "DESCONHECIDO (OFFLINE)"
+    # [AUDITORIA - SOLUÇÃO 2]: Lemos a lista de alunos direto da memória, sem aceder à internet/banco de dados.
+    df_alunos_cache = carregar_alunos()
+    aluno = df_alunos_cache[df_alunos_cache['codigo'] == cod]
     
-    # ADICIONA INSTANTANEAMENTE À FILA OFFLINE DO NAVEGADOR (SEM ESPERAR BANCO DE DADOS)
+    if aluno.empty:
+        return "erro_cod"
+    
+    nome_aluno = aluno.iloc[0]['nome']
+    
+    # Adicionamos instantaneamente à fila na memória da sessão
     st.session_state.fila_offline.append({
         "codigo": cod, 
-        "data": data, 
+        "data": str(data), 
         "hora": h_at, 
         "status": status,
         "nome": nome_aluno
     })
     
-    return nome_aluno  # Retorna o nome para exibir sucesso instantâneo
-# ============================================================================
+    return nome_aluno  
+# =================================================================================
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
@@ -584,7 +586,7 @@ def gerar_pdf_relatorio_critico(df_critico):
         pdf.ln(5)
     out = pdf.output(dest='S'); return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
-# ====================== FUNÇÃO DE CÂMERA OTIMIZADA (INSTANTÂNEA E CONTÍNUA) ======================
+# ====================== FUNÇÃO DE CÂMERA OTIMIZADA ======================
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
@@ -631,7 +633,7 @@ def gerar_camera(label, btn_label, cam_id):
         }};
     </script>
     """, height=450)
-# =============================================================================================
+# ========================================================================
 
 # ------------------------------------------------------------
 # 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
@@ -692,7 +694,6 @@ if st.query_params.get("modo") == "pesquisa":
                         finally: liberar_conn(conn)
                     else: st.error("Não foi possível conectar ao banco de dados no momento.")
     st.stop() 
-
 
 # ------------------------------------------------------------
 # 8. AUTH E DASHBOARD DO DIRETOR
@@ -810,45 +811,49 @@ with tabs[indice_aba]:
                 if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
                     res = registrar_presenca(cod_en.upper(), hoje_real, h_lim_e)
                     if res == "erro_cod": 
-                        st.error("Código não encontrado.")
-                    elif "FILA OFFLINE" in res: 
-                        st.warning(f"⚠️ Rede instável detectada pelo sistema! O aluno {cod_en.upper()} foi guardado na fila offline. Continue passando os alunos normalmente.")
+                        st.error("Código não encontrado na base de estudantes ativa.")
                     elif res: 
-                        st.success(f"Bem-vindo, {res}!")
+                        st.success(f"Registo instantâneo concluído para: {res}!")
             
             if len(st.session_state.fila_offline) > 0:
                 st.markdown("---")
-                st.error(f"⚠️ **MODO DE REDE INSTÁVEL ATIVADO**")
-                st.write(f"Você tem **{len(st.session_state.fila_offline)}** registro(s) pendente(s) guardado(s) na memória do navegador.")
+                st.info(f"⚠️ **MODO SUPER-RÁPIDO ATIVADO**")
+                st.write(f"Tem **{len(st.session_state.fila_offline)}** estudante(s) na fila aguardando sincronização com a nuvem.")
                 
                 if st.button("🔄 TENTAR SINCRONIZAR AGORA", type="primary"):
-                    with st.spinner("Conectando ao banco..."):
-                        falhas_restantes = []
-                        sucessos = 0
-                        for pendente in st.session_state.fila_offline:
+                    with st.spinner("A enviar todos os registos pendentes (Sincronização em Lote)..."):
+                        if st.session_state.fila_offline:
                             conn_sync = conectar_bd()
                             if conn_sync:
                                 try:
                                     cur = conn_sync.cursor()
-                                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno=%s AND data=%s AND tipo_registro='FALTA'", (pendente["codigo"], pendente["data"]))
-                                    cur.execute("INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES (%s, %s, %s, %s, 'PRESENCA') ON CONFLICT DO NOTHING", (pendente["codigo"], pendente["data"], pendente["hora"], pendente["status"]))
+                                    
+                                    # [AUDITORIA - SOLUÇÃO 4]: Sincronização em lote usando execute_values.
+                                    # Formata os dados num array de tuplos para inserir todos de uma vez
+                                    dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in st.session_state.fila_offline]
+                                    
+                                    # Insere em lote ignorando os que eventualmente já existam (ON CONFLICT DO NOTHING)
+                                    execute_values(
+                                        cur, 
+                                        "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING", 
+                                        dados_insercao
+                                    )
                                     conn_sync.commit()
-                                    sucessos += 1
-                                except Exception:
-                                    falhas_restantes.append(pendente)
+                                    
+                                    qtd_sucesso = len(st.session_state.fila_offline)
+                                    st.session_state.fila_offline = []
+                                    contar_presencas_data.clear()
+                                    
+                                    st.success(f"Excelente! Todos os {qtd_sucesso} registos foram sincronizados de forma segura.")
+                                    time.sleep(2)
+                                    st.rerun()
+                                except Exception as e:
+                                    conn_sync.rollback()
+                                    st.error(f"Falha técnica durante a sincronização em lote: {e}")
                                 finally:
                                     liberar_conn(conn_sync)
                             else:
-                                falhas_restantes.append(pendente)
-                        
-                        st.session_state.fila_offline = falhas_restantes
-                        contar_presencas_data.clear()
-                        
-                        if len(falhas_restantes) == 0:
-                            st.success(f"Excelente! Todos os {sucessos} registros foram sincronizados com sucesso.")
-                            time.sleep(2); st.rerun()
-                        else:
-                            st.warning(f"{sucessos} foram enviados, mas {len(falhas_restantes)} ainda falharam. Tente novamente em alguns minutos.")
+                                st.warning("Sem ligação à internet no momento. Pode continuar o trabalho, os dados estão seguros na fila.")
 
     with t_sa:
         if not verificar_dia_letivo(hoje_real): 
