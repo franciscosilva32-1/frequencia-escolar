@@ -46,9 +46,10 @@ if 'pesquisa_enviada' not in st.session_state:
 
 cookies = CookieManager()
 
+# === CORREÇÃO DO ERRO DE SESSIONINFO AQUI ===
 if not cookies.ready(): 
-    st.warning("⏳ A carregar preferências do sistema... A interface de registo continuará a funcionar.")
-    time.sleep(1)
+    st.warning("⏳ A inicializar as configurações de segurança. Por favor, aguarde um segundo...")
+    st.stop() # Pára a execução até que a sessão esteja 100% pronta, evitando conflitos.
 
 # ------------------------------------------------------------
 # 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
@@ -1124,12 +1125,12 @@ indice_aba = 0
 # =====================================================================
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
-    st.markdown("<p style='text-align:center; color:#64748b;'>Bipe os cartões. O sistema guardará tudo na memória instantaneamente sem tocar na rede.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; color:#64748b;'>Bipe os cartões ou digite manualmente. O sistema guardará tudo na memória instantaneamente sem tocar na rede.</p>", unsafe_allow_html=True)
     
     gerar_camera("Entrada", "REGISTRAR", "cam_popup")
     
     with st.form("f_popup", clear_on_submit=True):
-        cod_en = st.text_input("Código do Estudante", placeholder="Passe o código de barras...")
+        cod_en = st.text_input("Código do Estudante", placeholder="Bipe o cartão ou digite manualmente...")
         
         if st.form_submit_button("REGISTRAR", use_container_width=True) and cod_en:
             cod_limpo = cod_en.strip().upper()
