@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_values
@@ -34,75 +34,81 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL E COOKIES
+# 1. CONFIGURAÇÃO INICIAL E COOKIES (CORRIGIDO)
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
-if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
-if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
+if 'fila_offline' not in st.session_state:
+    st.session_state.fila_offline = []
+if 'pesquisa_enviada' not in st.session_state:
+    st.session_state.pesquisa_enviada = False
 
-from streamlit_cookies_manager import CookieManager
+# Inicialização segura dos Cookies (sem EncryptedCookieManager)
 cookies = CookieManager()
 
-# === CORREÇÃO DO ERRO DE SESSIONINFO AQUI ===
-if not cookies.ready(): 
-    st.warning("⏳ A inicializar as configurações de segurança. Por favor, aguarde um segundo...")
-    st.stop() # Pára a execução até que a sessão esteja 100% pronta, evitando conflitos.
+# Aguarda o navegador estar 100% pronto para evitar o erro "CookiesNotReady"
+if not cookies.ready():
+    st.warning("⏳ A inicializar as configurações. Por favor, aguarde um instante...")
+    st.stop()
 
 # ------------------------------------------------------------
-# 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
+# 2. BANCO DE DADOS (POOL OTIMIZADO PARA SUPABASE - TRANSACTION POOLER)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 
-@st.cache_resource
+@st.cache_resource(ttl=600)
 def get_connection_pool():
+    url = st.secrets.get("DATABASE_URL")
+    
+    # Força SSL (Obrigatório para o Supabase)
+    if url and "sslmode" not in url:
+        if "?" in url:
+            url += "&sslmode=require"
+        else:
+            url += "?sslmode=require"
+            
+    # IMPORTANTE: Pool limitado a 2 conexões para não estourar o limite de 10 do Supabase!
     return pool.ThreadedConnectionPool(
         1, 
-        20, 
-        DATABASE_URL,
-        connect_timeout=3,
-        options="-c statement_timeout=5000"
+        2, 
+        url,
+        connect_timeout=5 # Tempo limite curto para não travar o sistema
     )
 
 def conectar_bd():
-    pool_bd = get_connection_pool()
-    tentativas = 3
-    
-    # O sistema tenta até 3 vezes encontrar uma conexão viva no pool
-    for _ in range(tentativas):
-        conn = None
-        try:
-            # Puxa uma conexão disponível
-            conn = pool_bd.getconn()
-            if conn:
-                # Health check: testa se a conexão está realmente viva
-                cur = conn.cursor()
-                cur.execute("SELECT 1")
-                cur.close()
-                return conn # Se chegou aqui, a conexão está perfeita!
-        except Exception:
-            # Se a conexão falhar (caiu ou expirou), descarta-a adequadamente
-            if conn:
-                pool_bd.putconn(conn, close=True)
-                
-    # Se falhar 3 vezes consecutivas, assume que a rede está indisponível
-    return None
+    try:
+        conn = get_connection_pool().getconn()
+        # TESTE DE VIDA: Se a conexão estiver morta, essa linha vai gerar erro
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return conn
+    except Exception:
+        # Se der erro, descarta a conexão zumbi e retorna None
+        if 'conn' in locals() and conn:
+            try:
+                get_connection_pool().putconn(conn, close=True)
+            except:
+                pass
+        return None
 
 def liberar_conn(conn):
     if conn:
         try:
-            # Devolve a conexão saudável ao pool para ser reutilizada
             get_connection_pool().putconn(conn)
         except Exception:
-            pass # Previne travamentos caso o pool já tenha sido encerrado
+            try:
+                conn.close()
+            except:
+                pass
 
 # ------------------------------------------------------------
 # 3. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
 # ------------------------------------------------------------
 def obter_hora_atual(): 
-    return datetime.utcnow() - timedelta(hours=3)
+    # Corrigindo o aviso de depreciação do utcnow()
+    return datetime.now(timezone.utc) - timedelta(hours=3)
 
 def data_formatada_ptbr():
     dt = obter_hora_atual()
@@ -192,7 +198,7 @@ def renderizar_logo_central():
         st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 4. INICIALIZAÇÃO DE TABELAS (CACHE RESOURCE)
+# 4. INICIALIZAÇÃO DE TABELAS
 # ------------------------------------------------------------
 @st.cache_resource
 def inicializar_tabelas():
@@ -265,7 +271,7 @@ def inicializar_tabelas():
 inicializar_tabelas()
 
 # ------------------------------------------------------------
-# 5. CSS (Limpo de conflitos com classes removidas)
+# 5. CSS
 # ------------------------------------------------------------
 st.markdown("""
 <style>
@@ -318,8 +324,6 @@ st.markdown("""
 # ------------------------------------------------------------
 # 6. LÓGICA DE NEGÓCIO E CACHES BLINDADOS COM FALLBACK
 # ------------------------------------------------------------
-
-# === Módulo de Resiliência: Verificação de Dia Letivo ===
 def _fetch_dia_letivo_db(data_atual):
     conn = conectar_bd()
     if not conn: 
@@ -343,15 +347,12 @@ def verificar_dia_letivo(data_atual):
         st.session_state['cache_dias_letivos'] = {}
         
     try:
-        # Se a rede cair, esta função vai estourar um erro, impedindo o envenenamento do cache.
         resultado = _verificar_dia_letivo_cache(data_atual)
         st.session_state['cache_dias_letivos'][data_atual] = resultado
         return resultado
     except Exception:
-        # Puxa o cofre de segurança como plano B.
         return st.session_state['cache_dias_letivos'].get(data_atual, False)
 
-# === Módulo de Resiliência: Carregamento de Alunos ===
 def _fetch_alunos_db():
     conn = conectar_bd()
     if not conn: 
@@ -367,12 +368,10 @@ def _carregar_alunos_cache():
 
 def carregar_alunos():
     try:
-        # Se a rede cair, esta função vai estourar um erro, impedindo o envenenamento do cache.
         df = _carregar_alunos_cache()
         st.session_state['ultimo_df_alunos_ok'] = df
         return df
     except Exception:
-        # Puxa o cofre de segurança como plano B.
         if 'ultimo_df_alunos_ok' in st.session_state:
             return st.session_state['ultimo_df_alunos_ok']
         return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
@@ -881,7 +880,7 @@ def gerar_pdf_relatorio_critico(df_critico):
         return out.encode('latin-1')
     return bytes(out)
 
-# ====================== FUNÇÃO DE CÂMERA OTIMIZADA ======================
+# ====================== CÂMERA OTIMIZADA ======================
 def gerar_camera(label, btn_label, cam_id):
     components.html(f"""
     <div style="text-align:center; max-width:450px; margin: 0 auto; padding:15px; border-radius:15px; background:white; border: 2px solid #e2e8f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
@@ -934,10 +933,9 @@ def gerar_camera(label, btn_label, cam_id):
         }};
     </script>
     """, height=450)
-# ========================================================================
 
 # ------------------------------------------------------------
-# 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO (OCULTO VIA URL)
+# 7. MÓDULO PÚBLICO: PESQUISA DE SATISFAÇÃO
 # ------------------------------------------------------------
 if st.query_params.get("modo") == "pesquisa":
     renderizar_logo_central()
@@ -1119,7 +1117,7 @@ tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
 # =====================================================================
-# NOVO: MODAL POP-UP DE ENTRADA RÁPIDA (100% OFFLINE)
+# POP-UP DE ENTRADA RÁPIDA (100% OFFLINE)
 # =====================================================================
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
@@ -1135,7 +1133,6 @@ def popup_entrada_rapida(data_hoje, hora_limite):
             agora = obter_hora_atual()
             h_at = agora.strftime("%H:%M:%S")
             
-            # Decide presente ou atraso baseado na hora exata do bipe local
             status = "PRESENTE" if agora.time() <= hora_limite else "ATRASO"
             
             st.session_state.fila_offline.append({
@@ -1210,14 +1207,12 @@ with tabs[indice_aba]:
                                 try:
                                     cur = conn_sync.cursor()
                                     
-                                    # 1. Puxar todos os códigos válidos para evitar erro fatal (Foreign Key)
                                     cur.execute("SELECT codigo FROM alunos_v2")
                                     codigos_validos = {row[0] for row in cur.fetchall()}
                                     
                                     registros_validos = []
                                     codigos_invalidos = set()
                                     
-                                    # 2. Filtrar a fila
                                     for p in st.session_state.fila_offline:
                                         if p["codigo"] in codigos_validos:
                                             registros_validos.append(p)
@@ -1225,7 +1220,6 @@ with tabs[indice_aba]:
                                             codigos_invalidos.add(p["codigo"])
                                             
                                     if registros_validos:
-                                        # Apaga faltas anteriores para não duplicar/conflitar
                                         dados_delete = [(p["codigo"], p["data"]) for p in registros_validos]
                                         execute_values(
                                             cur,
@@ -1233,7 +1227,6 @@ with tabs[indice_aba]:
                                             dados_delete
                                         )
                                         
-                                        # Insere as presenças em lote
                                         dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in registros_validos]
                                         execute_values(
                                             cur, 
@@ -1243,7 +1236,6 @@ with tabs[indice_aba]:
                                         
                                     conn_sync.commit()
                                     
-                                    # Limpa a fila e os caches
                                     st.session_state.fila_offline = [] 
                                     contar_presencas_data.clear()
                                     
