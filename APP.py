@@ -34,7 +34,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO E COOKIES (Corrigido conforme relatório)
+# 1. CONFIGURAÇÃO E COOKIES (Corrigido)
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
@@ -43,14 +43,13 @@ if 'fila_offline' not in st.session_state:
 if 'pesquisa_enviada' not in st.session_state:
     st.session_state.pesquisa_enviada = False
 
-# Corrige o erro "CookiesNotReady" lendo o cookie apenas após a inicialização
 cookies = CookieManager()
 if not cookies.ready():
     st.warning("⏳ A inicializar as configurações. Por favor, aguarde um instante...")
     st.stop()
 
 # ------------------------------------------------------------
-# 2. BANCO DE DADOS COM DIAGNÓSTICO EXPLÍCITO
+# 2. BANCO DE DADOS COM DIAGNÓSTICO NA TELA
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -60,58 +59,49 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 def get_connection_pool():
     url = st.secrets.get("DATABASE_URL")
     if not url:
-        print("🚨 ERRO CRÍTICO: DATABASE_URL não encontrada no secrets.toml!")
-        print("👉 Verifique se a URL está na seção [secrets] do arquivo .streamlit/secrets.toml")
-        return None
+        st.error("🚨 ERRO CRÍTICO: DATABASE_URL não encontrada no secrets.toml!")
+        st.stop()
 
-    # Garante SSL
     if url and "sslmode" not in url:
         if "?" in url:
             url += "&sslmode=require"
         else:
             url += "?sslmode=require"
-            
-    print(f"🔌 Tentando iniciar o pool de conexões para: {url[:60]}...")
+
     try:
-        # Limite de 2 conexões para o pool
         return pool.ThreadedConnectionPool(1, 2, url, connect_timeout=10)
     except Exception as e:
-        print(f"🚨 ERRO CRÍTICO AO CRIAR O POOL DE CONEXÕES: {e}")
-        print("👉 Verifique se o IP do Streamlit não está bloqueado no Supabase (Network Restrictions 0.0.0.0/0)")
-        return None
+        st.error(f"🚨 ERRO FATAL AO CRIAR POOL DE CONEXÕES: {e}")
+        st.stop()
 
+# ==================== FUNÇÃO CORRIGIDA (MOSTRA O ERRO NA TELA) ====================
 def conectar_bd():
     pool_obj = get_connection_pool()
     if not pool_obj:
-        print("❌ Pool de conexões falhou na criação. Verifique o erro no terminal acima.")
-        return None
-
+        st.error("🚨 ERRO FATAL: O pool de conexões não foi criado. Verifique o arquivo secrets.toml")
+        st.stop()
+        
     for tentativa in range(1, 4):
-        conn = None
         try:
-            print(f"🔄 Tentativa de conexão {tentativa}/3...")
             conn = pool_obj.getconn()
-            
-            # Teste de vida da conexão
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
-                
-            print("✅ Conexão com o banco estabelecida com sucesso!")
             return conn
-            
         except Exception as e:
-            # Aqui o erro EXATO aparecerá no terminal do Streamlit!
-            print(f"⚠️ Tentativa {tentativa} falhou. ERRO EXATO: {e}")
+            erro_exato = str(e)
+            if tentativa == 3:
+                # Se falhar 3 vezes, mostra o erro na tela e para o aplicativo
+                st.error(f"🚨 FALHA NA CONEXÃO APÓS 3 TENTATIVAS. ERRO EXATO: {erro_exato}")
+                st.warning("💡 Dica: Se o erro for 'password authentication failed', a senha no secrets.toml está errada. Se for 'timeout', o IP não está liberado no Supabase.")
+                st.stop()
+            else:
+                st.warning(f"⚠️ Tentativa {tentativa}/3 falhou: {erro_exato}. Tentando novamente...")
+                time.sleep(2)
             if conn:
-                try:
-                    pool_obj.putconn(conn, close=True)
-                except:
-                    pass
-            time.sleep(2)
-
-    print("🚨 Todas as 3 tentativas falharam. Limpando cache do pool e retornando None.")
-    get_connection_pool.clear()
+                try: pool_obj.putconn(conn, close=True)
+                except: pass
     return None
+# ================================================================================
 
 def liberar_conn(conn):
     if conn:
@@ -124,7 +114,7 @@ def liberar_conn(conn):
                 pass
 
 # ------------------------------------------------------------
-# 3. FUNÇÕES DE SUPORTE E SESSÃO SEGURA
+# 3. FUNÇÕES DE SUPORTE
 # ------------------------------------------------------------
 def obter_hora_atual(): 
     return datetime.now(timezone.utc) - timedelta(hours=3)
@@ -917,7 +907,7 @@ if st.query_params.get("modo") == "pesquisa":
     st.stop() 
 
 # ------------------------------------------------------------
-# 8. AUTH E DASHBOARD DO DIRETOR (Com proteção de sessão)
+# 8. AUTH E DASHBOARD DO DIRETOR
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
 if not auth_cookie:
@@ -929,24 +919,21 @@ if not auth_cookie:
         if passw in [SENHA_ADMIN, SENHA_OPERADOR]:
             cookies["auth_token"] = base64.b64encode(json.dumps({"admin": passw==SENHA_ADMIN}).encode()).decode()
             cookies.save()
-            # Registra o timestamp do login para expiração da sessão
             st.session_state['auth_timestamp'] = datetime.now(timezone.utc).timestamp()
             st.rerun()
         else: 
             st.error("Incorreta")
     st.stop()
 
-# Verifica se a sessão expirou (1 hora de inatividade)
 if 'auth_timestamp' in st.session_state:
     tempo_decorrido = datetime.now(timezone.utc).timestamp() - st.session_state['auth_timestamp']
-    if tempo_decorrido > 3600: # 1 hora = 3600 segundos
+    if tempo_decorrido > 3600:
         cookies["auth_token"] = ""
         cookies.save()
         if 'auth_timestamp' in st.session_state: del st.session_state['auth_timestamp']
         st.warning("Sua sessão expirou. Por favor, faça login novamente.")
         st.rerun()
 else:
-    # Se não tiver timestamp, atualiza com o horário atual
     st.session_state['auth_timestamp'] = datetime.now(timezone.utc).timestamp()
 
 try:
