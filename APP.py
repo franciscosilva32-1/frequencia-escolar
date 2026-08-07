@@ -34,16 +34,14 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL E COOKIES
+1. CONFIGURAÇÃO INICIAL E COOKIES
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 
-if 'fila_offline' not in st.session_state:
-    st.session_state.fila_offline = []
-    
-if 'pesquisa_enviada' not in st.session_state:
-    st.session_state.pesquisa_enviada = False
+if 'fila_offline' not in st.session_state: st.session_state.fila_offline = []
+if 'pesquisa_enviada' not in st.session_state: st.session_state.pesquisa_enviada = False
 
+from streamlit_cookies_manager import CookieManager
 cookies = CookieManager()
 
 # === CORREÇÃO DO ERRO DE SESSIONINFO AQUI ===
