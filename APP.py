@@ -43,7 +43,7 @@ if 'fila_offline' not in st.session_state:
 if 'pesquisa_enviada' not in st.session_state:
     st.session_state.pesquisa_enviada = False
 
-# Inicialização segura dos Cookies (sem EncryptedCookieManager)
+# Inicialização segura dos Cookies
 cookies = CookieManager()
 
 # Aguarda o navegador estar 100% pronto para evitar o erro "CookiesNotReady"
@@ -52,7 +52,7 @@ if not cookies.ready():
     st.stop()
 
 # ------------------------------------------------------------
-# 2. BANCO DE DADOS (POOL OTIMIZADO PARA SUPABASE - TRANSACTION POOLER)
+# 2. BANCO DE DADOS (POOL OTIMIZADO COM DIAGNÓSTICO)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
 SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
@@ -61,53 +61,73 @@ SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
 @st.cache_resource(ttl=600)
 def get_connection_pool():
     url = st.secrets.get("DATABASE_URL")
-    
-    # Força SSL (Obrigatório para o Supabase)
+    if not url:
+        print("🚨 ERRO CRÍTICO: DATABASE_URL não encontrada no secrets.toml!")
+        return None
+
+    # Garante SSL (obrigatório para o Supabase)
     if url and "sslmode" not in url:
         if "?" in url:
             url += "&sslmode=require"
         else:
             url += "?sslmode=require"
-            
-    # IMPORTANTE: Pool limitado a 2 conexões para não estourar o limite de 10 do Supabase!
-    return pool.ThreadedConnectionPool(
-        1, 
-        2, 
-        url,
-        connect_timeout=5 # Tempo limite curto para não travar o sistema
-    )
+
+    print("🔌 Tentando iniciar o pool de conexões...")
+    try:
+        # Timeout maior e apenas 2 conexões para não estourar o limite do Supabase
+        return pool.ThreadedConnectionPool(1, 2, url, connect_timeout=10)
+    except Exception as e:
+        print(f"🚨 ERRO AO CRIAR O POOL DE CONEXÕES: {e}")
+        return None
 
 def conectar_bd():
-    try:
-        conn = get_connection_pool().getconn()
-        # TESTE DE VIDA: Se a conexão estiver morta, essa linha vai gerar erro
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-        return conn
-    except Exception:
-        # Se der erro, descarta a conexão zumbi e retorna None
-        if 'conn' in locals() and conn:
-            try:
-                get_connection_pool().putconn(conn, close=True)
-            except:
-                pass
+    pool_obj = get_connection_pool()
+    if not pool_obj:
+        print("❌ Pool de conexões falhou na criação. Verifique o erro acima.")
         return None
+
+    # Tenta conectar 3 vezes
+    for tentativa in range(1, 4):
+        conn = None
+        try:
+            print(f"🔄 Tentativa de conexão {tentativa}/3...")
+            conn = pool_obj.getconn()
+            
+            # Teste de vida
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                
+            print("✅ Conexão com o banco estabelecida com sucesso!")
+            return conn
+            
+        except Exception as e:
+            print(f"⚠️ Tentativa {tentativa} falhou. Erro: {e}")
+            if conn:
+                try:
+                    pool_obj.putconn(conn, close=True)
+                except:
+                    pass
+            time.sleep(2) # Espera 2 segundos antes de tentar de novo
+
+    # Se falhou 3 vezes, limpa o cache do pool e retorna None
+    print("🚨 Todas as 3 tentativas falharam. Limpando cache do pool para forçar uma recriação.")
+    get_connection_pool.clear()
+    return None
 
 def liberar_conn(conn):
     if conn:
         try:
             get_connection_pool().putconn(conn)
         except Exception:
-            try:
+            try: 
                 conn.close()
-            except:
+            except: 
                 pass
 
 # ------------------------------------------------------------
 # 3. FUNÇÕES DE SUPORTE (TEMPO, E-MAIL E CORES)
 # ------------------------------------------------------------
 def obter_hora_atual(): 
-    # Corrigindo o aviso de depreciação do utcnow()
     return datetime.now(timezone.utc) - timedelta(hours=3)
 
 def data_formatada_ptbr():
