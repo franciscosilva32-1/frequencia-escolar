@@ -51,7 +51,6 @@ if not cookies.ready():
     time.sleep(1)
 
 # ------------------------------------------------------------
-# ------------------------------------------------------------
 # 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
@@ -609,33 +608,6 @@ def ir_para_fila_offline(cod, data, h_at, status):
     st.session_state.fila_offline.append(registro_pendente)
     return f"FILA OFFLINE ({cod})"
 
-def registrar_presenca(cod, data, h_limite):
-    agora = obter_hora_atual()
-    h_at = agora.strftime("%H:%M:%S")
-    
-    if agora.time() <= h_limite:
-        status = "PRESENTE"
-    else:
-        status = "ATRASO"
-    
-    df_alunos_cache = carregar_alunos()
-    aluno = df_alunos_cache[df_alunos_cache['codigo'] == cod]
-    
-    if aluno.empty:
-        return "erro_cod"
-    
-    nome_aluno = aluno.iloc[0]['nome']
-    
-    st.session_state.fila_offline.append({
-        "codigo": cod, 
-        "data": str(data), 
-        "hora": h_at, 
-        "status": status,
-        "nome": nome_aluno
-    })
-    
-    return nome_aluno  
-
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     conn = conectar_bd()
     if not conn: 
@@ -1147,6 +1119,37 @@ if eh_admin:
 tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
+# =====================================================================
+# NOVO: MODAL POP-UP DE ENTRADA RÁPIDA (100% OFFLINE)
+# =====================================================================
+@st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
+def popup_entrada_rapida(data_hoje, hora_limite):
+    st.markdown("<p style='text-align:center; color:#64748b;'>Bipe os cartões. O sistema guardará tudo na memória instantaneamente sem tocar na rede.</p>", unsafe_allow_html=True)
+    
+    gerar_camera("Entrada", "REGISTRAR", "cam_popup")
+    
+    with st.form("f_popup", clear_on_submit=True):
+        cod_en = st.text_input("Código do Estudante", placeholder="Passe o código de barras...")
+        
+        if st.form_submit_button("REGISTRAR", use_container_width=True) and cod_en:
+            cod_limpo = cod_en.strip().upper()
+            agora = obter_hora_atual()
+            h_at = agora.strftime("%H:%M:%S")
+            
+            # Decide presente ou atraso baseado na hora exata do bipe local
+            status = "PRESENTE" if agora.time() <= hora_limite else "ATRASO"
+            
+            st.session_state.fila_offline.append({
+                "codigo": cod_limpo, 
+                "data": str(data_hoje), 
+                "hora": h_at, 
+                "status": status
+            })
+            st.success(f"✅ Registrado na fila: {cod_limpo} às {h_at}")
+    
+    st.info(f"📦 Estudantes aguardando sincronização: **{len(st.session_state.fila_offline)}**")
+# =====================================================================
+
 with tabs[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     c_cfg1, c_cfg2 = st.columns(2)
@@ -1189,55 +1192,68 @@ with tabs[indice_aba]:
         if not verificar_dia_letivo(hoje_real): 
             st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
-            gerar_camera("Entrada", "REGISTRAR ENTRADA", "c_in")
+            st.markdown("### 🏃‍♂️ Controle de Entrada")
+            st.write("Use o Modo Rápido durante o horário de pico. Ele funciona instantaneamente sem internet e você sincroniza tudo com o banco de dados no final.")
             
-            with st.form("f_en", clear_on_submit=True):
-                cod_en = st.text_input("Código Aluno (Entrada)", placeholder="Passe o código de barras aqui...")
-                
-                if st.form_submit_button("REGISTRAR ENTRADA") and cod_en:
-                    res = registrar_presenca(cod_en.upper(), hoje_real, h_lim_e)
-                    
-                    if res == "erro_cod": 
-                        st.error("Código não encontrado na base de estudantes ativa.")
-                    elif res: 
-                        st.success(f"Registo instantâneo concluído para: {res}!")
+            if st.button("🟢 ABRIR JANELA DE ENTRADA RÁPIDA", type="primary", use_container_width=True):
+                popup_entrada_rapida(hoje_real, h_lim_e)
             
             if len(st.session_state.fila_offline) > 0:
                 st.markdown("---")
-                st.info(f"⚠️ **MODO SUPER-RÁPIDO ATIVADO**")
-                st.write(f"Tem **{len(st.session_state.fila_offline)}** estudante(s) na fila aguardando sincronização com a nuvem.")
+                st.warning(f"⚠️ **SINCRONIZAÇÃO PENDENTE**")
+                st.write(f"Tem **{len(st.session_state.fila_offline)}** estudante(s) na fila da memória aguardando envio para o banco.")
                 
-                if st.button("🔄 TENTAR SINCRONIZAR AGORA", type="primary"):
-                    with st.spinner("A enviar todos os registos pendentes (Sincronização em Lote)..."):
+                if st.button("🔄 SINCRONIZAR AGORA COM O BANCO", type="primary"):
+                    with st.spinner("A ligar ao banco de dados e a processar todos os registos em lote..."):
                         if st.session_state.fila_offline:
                             conn_sync = conectar_bd()
                             if conn_sync:
                                 try:
                                     cur = conn_sync.cursor()
                                     
-                                    # ===== CORREÇÃO DA AUDITORIA: LIMPEZA DE FALTAS ANTES DO INSERT =====
-                                    dados_delete = [(p["codigo"], p["data"]) for p in st.session_state.fila_offline]
-                                    execute_values(
-                                        cur,
-                                        "DELETE FROM registros_v2 r USING (VALUES %s) AS v(cod, dt) WHERE r.codigo_aluno = v.cod AND r.data = v.dt::DATE AND r.tipo_registro = 'FALTA'",
-                                        dados_delete
-                                    )
-                                    # ====================================================================
+                                    # 1. Puxar todos os códigos válidos para evitar erro fatal (Foreign Key)
+                                    cur.execute("SELECT codigo FROM alunos_v2")
+                                    codigos_validos = {row[0] for row in cur.fetchall()}
                                     
-                                    dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in st.session_state.fila_offline]
-                                    execute_values(
-                                        cur, 
-                                        "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING", 
-                                        dados_insercao
-                                    )
+                                    registros_validos = []
+                                    codigos_invalidos = set()
+                                    
+                                    # 2. Filtrar a fila
+                                    for p in st.session_state.fila_offline:
+                                        if p["codigo"] in codigos_validos:
+                                            registros_validos.append(p)
+                                        else:
+                                            codigos_invalidos.add(p["codigo"])
+                                            
+                                    if registros_validos:
+                                        # Apaga faltas anteriores para não duplicar/conflitar
+                                        dados_delete = [(p["codigo"], p["data"]) for p in registros_validos]
+                                        execute_values(
+                                            cur,
+                                            "DELETE FROM registros_v2 r USING (VALUES %s) AS v(cod, dt) WHERE r.codigo_aluno = v.cod AND r.data = v.dt::DATE AND r.tipo_registro = 'FALTA'",
+                                            dados_delete
+                                        )
+                                        
+                                        # Insere as presenças em lote
+                                        dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in registros_validos]
+                                        execute_values(
+                                            cur, 
+                                            "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING", 
+                                            dados_insercao
+                                        )
+                                        
                                     conn_sync.commit()
                                     
-                                    qtd_sucesso = len(st.session_state.fila_offline)
-                                    st.session_state.fila_offline = []
+                                    # Limpa a fila e os caches
+                                    st.session_state.fila_offline = [] 
                                     contar_presencas_data.clear()
                                     
-                                    st.success(f"Excelente! Todos os {qtd_sucesso} registos foram sincronizados de forma segura.")
-                                    time.sleep(2)
+                                    if codigos_invalidos:
+                                        st.warning(f"Sincronização feita ({len(registros_validos)} salvos). ATENÇÃO: Os seguintes códigos não existem no banco e foram ignorados: {', '.join(codigos_invalidos)}")
+                                    else:
+                                        st.success(f"Excelente! Todos os {len(registros_validos)} registos foram sincronizados de forma segura e perfeita.")
+                                        
+                                    time.sleep(3)
                                     st.rerun()
                                 except Exception as e:
                                     conn_sync.rollback()
@@ -1245,7 +1261,7 @@ with tabs[indice_aba]:
                                 finally:
                                     liberar_conn(conn_sync)
                             else:
-                                st.warning("Sem ligação à internet no momento. Pode continuar o trabalho, os dados estão seguros na fila.")
+                                st.error("Sem ligação à internet no momento. Tente novamente mais tarde, os dados continuam salvos na fila.")
 
     with t_sa:
         if not verificar_dia_letivo(hoje_real): 
