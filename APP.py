@@ -34,6 +34,9 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
+import streamlit as st
+from streamlit_cookies_manager import EncryptedCookieManager
+
 # 1. Inicialização do gerenciador de cookies
 cookies = EncryptedCookieManager(
     prefix="sistema_escolar/streamlit-cookies-manager/",
