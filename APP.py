@@ -34,23 +34,25 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # ------------------------------------------------------------
-# 1. CONFIGURAÇÃO INICIAL E COOKIES
-# ------------------------------------------------------------
-st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
+# 1. Inicialização do gerenciador de cookies
+cookies = EncryptedCookieManager(
+    prefix="sistema_escolar/streamlit-cookies-manager/",
+    password="sua_senha_segura_aqui"  # Recomendado utilizar st.secrets["COOKIES_PASSWORD"]
+)
 
-if 'fila_offline' not in st.session_state:
-    st.session_state.fila_offline = []
-    
-if 'pesquisa_enviada' not in st.session_state:
-    st.session_state.pesquisa_enviada = False
+# 2. VERIFICAÇÃO DE SEGURANÇA: Aguarda o componente carregar os dados do navegador
+if not cookies.ready():
+    st.stop()  # Interrompe a execução atual de forma limpa até que os cookies estejam prontos
 
-cookies = CookieManager()
+# 3. Leitura segura do token de autenticação (Linha 1043 ajustada)
+auth_cookie = cookies.get("auth_token")
 
-# === CORREÇÃO DO ERRO DE SESSIONINFO AQUI ===
-if not cookies.ready(): 
-    st.warning("⏳ A inicializar as configurações de segurança. Por favor, aguarde um segundo...")
-    st.stop() # Pára a execução até que a sessão esteja 100% pronta, evitando conflitos.
-
+# 4. Fluxo de autenticação e carregamento do painel
+if auth_cookie:
+    st.success("Sessão iniciada com sucesso.")
+    # Insira aqui o restante da lógica do painel do gestor/diretor
+else:
+    st.warning("Por favor, efetue o login para continuar.")
 # ------------------------------------------------------------
 # 2. BANCO DE DADOS (CONNECTION POOLING OTIMIZADO)
 # ------------------------------------------------------------
