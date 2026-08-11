@@ -1020,25 +1020,46 @@ if eh_admin:
 tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
+# =====================================================================
+# POP-UP DE ENTRADA RÁPIDA (100% OFFLINE COM VOZ)
+# =====================================================================
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
-    st.markdown("<p style='text-align:center; color:#64748b;'>Bipe os cartões ou digite manualmente. O sistema guardará tudo na memória instantaneamente sem tocar na rede.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; color:#64748b;'>Bipe os cartões ou digite manualmente. A câmera permanece ligada para o próximo aluno.</p>", unsafe_allow_html=True)
+    
     gerar_camera("Entrada", "REGISTRAR", "cam_popup")
+    
     with st.form("f_popup", clear_on_submit=True):
         cod_en = st.text_input("Código do Estudante", placeholder="Bipe o cartão ou digite manualmente...")
+        
         if st.form_submit_button("REGISTRAR", use_container_width=True) and cod_en:
             cod_limpo = cod_en.strip().upper()
             agora = obter_hora_atual()
             h_at = agora.strftime("%H:%M:%S")
+            
             status = "PRESENTE" if agora.time() <= hora_limite else "ATRASO"
+            
             st.session_state.fila_offline.append({
                 "codigo": cod_limpo, 
                 "data": str(data_hoje), 
                 "hora": h_at, 
                 "status": status
             })
+            
             st.success(f"✅ Registrado na fila: {cod_limpo} às {h_at}")
+            
+            # Adiciona a leitura em voz alta (TTS)
+            st.markdown("""
+            <script>
+                var utterance = new SpeechSynthesisUtterance("BEM-VINDO, ESTUDANTE!");
+                utterance.lang = 'pt-BR';
+                utterance.rate = 1.2;
+                window.speechSynthesis.speak(utterance);
+            </script>
+            """, unsafe_allow_html=True)
+    
     st.info(f"📦 Estudantes aguardando sincronização: **{len(st.session_state.fila_offline)}**")
+# =====================================================================
 
 with tabs[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
@@ -1047,6 +1068,7 @@ with tabs[indice_aba]:
         h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
     with c_cfg2: 
         h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
+    
     with st.form("form_controle_dias"):
         st.markdown("📅 **Ativação do Calendário:**")
         col_d1, col_d2 = st.columns(2)
@@ -1056,6 +1078,7 @@ with tabs[indice_aba]:
             st.write("")
             st.write("")
             is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
+            
         if st.form_submit_button("💾 Salvar Configuração do Dia"):
             conn = conectar_bd()
             if conn:
@@ -1073,6 +1096,7 @@ with tabs[indice_aba]:
                 st.error("Sem conexão com o banco de dados.")
 
     st.markdown("---")
+    
     t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
     
     with t_en:
@@ -1081,12 +1105,15 @@ with tabs[indice_aba]:
         else:
             st.markdown("### 🏃‍♂️ Controle de Entrada")
             st.write("Use o Modo Rápido durante o horário de pico. Ele funciona instantaneamente sem internet e você sincroniza tudo com o banco de dados no final.")
+            
             if st.button("🟢 ABRIR JANELA DE ENTRADA RÁPIDA", type="primary", use_container_width=True):
                 popup_entrada_rapida(hoje_real, h_lim_e)
+            
             if len(st.session_state.fila_offline) > 0:
                 st.markdown("---")
                 st.warning(f"⚠️ **SINCRONIZAÇÃO PENDENTE**")
                 st.write(f"Tem **{len(st.session_state.fila_offline)}** estudante(s) na fila da memória aguardando envio para o banco.")
+                
                 if st.button("🔄 SINCRONIZAR AGORA COM O BANCO", type="primary"):
                     with st.spinner("A ligar ao banco de dados e a processar todos os registos em lote..."):
                         if st.session_state.fila_offline:
@@ -1094,15 +1121,19 @@ with tabs[indice_aba]:
                             if conn_sync:
                                 try:
                                     cur = conn_sync.cursor()
+                                    
                                     cur.execute("SELECT codigo FROM alunos_v2")
                                     codigos_validos = {row[0] for row in cur.fetchall()}
+                                    
                                     registros_validos = []
                                     codigos_invalidos = set()
+                                    
                                     for p in st.session_state.fila_offline:
                                         if p["codigo"] in codigos_validos:
                                             registros_validos.append(p)
                                         else:
                                             codigos_invalidos.add(p["codigo"])
+                                            
                                     if registros_validos:
                                         dados_delete = [(p["codigo"], p["data"]) for p in registros_validos]
                                         execute_values(
@@ -1110,19 +1141,24 @@ with tabs[indice_aba]:
                                             "DELETE FROM registros_v2 r USING (VALUES %s) AS v(cod, dt) WHERE r.codigo_aluno = v.cod AND r.data = v.dt::DATE AND r.tipo_registro = 'FALTA'",
                                             dados_delete
                                         )
+                                        
                                         dados_insercao = [(p["codigo"], p["data"], p["hora"], p["status"], 'PRESENCA') for p in registros_validos]
                                         execute_values(
                                             cur, 
                                             "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING", 
                                             dados_insercao
                                         )
+                                        
                                     conn_sync.commit()
+                                    
                                     st.session_state.fila_offline = [] 
                                     contar_presencas_data.clear()
+                                    
                                     if codigos_invalidos:
                                         st.warning(f"Sincronização feita ({len(registros_validos)} salvos). ATENÇÃO: Os seguintes códigos não existem no banco e foram ignorados: {', '.join(codigos_invalidos)}")
                                     else:
                                         st.success(f"Excelente! Todos os {len(registros_validos)} registos foram sincronizados de forma segura e perfeita.")
+                                        
                                     time.sleep(3)
                                     st.rerun()
                                 except Exception as e:
@@ -1138,16 +1174,20 @@ with tabs[indice_aba]:
             st.error("⚠️ REGISTRO BLOQUEADO: A data de HOJE não foi ativada como Dia Letivo no painel logo acima.")
         else:
             gerar_camera("Saída", "CONFIRMAR SAÍDA", "c_out")
+            
             with st.form("f_sa", clear_on_submit=True):
                 st.markdown("##### Identifique o estudante:")
+                
                 c_sa1, c_sa2 = st.columns(2)
                 with c_sa1: 
                     cod_sa = st.text_input("Por Código (Bipe o Cartão)")
                 with c_sa2: 
                     lista_alunos_saida = [""] + [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
+                
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
                 mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
+                
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
                         aluno_identificado = cod_sa.upper()
@@ -1155,6 +1195,7 @@ with tabs[indice_aba]:
                         aluno_identificado = nome_sa.split(" - ")[0]
                     else:
                         aluno_identificado = None
+                    
                     if aluno_identificado:
                         res = registrar_saida(aluno_identificado, mot, True, hoje_real, hora_saida_manual.strftime("%H:%M:%S"), h_lim_s)
                         if res: 
@@ -1169,14 +1210,18 @@ with tabs[indice_aba]:
         st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", value=data_f_global)
         df_faltas = carregar_faltas(d_just.strftime("%Y-%m-%d"))
+        
         if not df_faltas.empty:
             turmas_disponiveis = ["Todas"] + sorted(df_faltas['turma'].unique())
             turma_just = st.selectbox("Filtrar por Turma", turmas_disponiveis)
+            
             if turma_just == "Todas":
                 df_faltas_filtrado = df_faltas
             else:
                 df_faltas_filtrado = df_faltas[df_faltas['turma'] == turma_just]
+                
             df_pendentes = df_faltas_filtrado[df_faltas_filtrado['motivo_saida'].isnull()]
+            
             if not df_pendentes.empty:
                 with st.form("form_justificar"):
                     al_falta_sel = st.selectbox(
@@ -1187,6 +1232,7 @@ with tabs[indice_aba]:
                         "Justificativa Oficial", 
                         ["DOENTE", "VIAGEM", "ACOMPANHAR PARENTE", "CONSULTA", "EXAME", "OUTROS"]
                     )
+                    
                     if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
                         cod_f = al_falta_sel.split(" - ")[0]
                         conn = conectar_bd()
@@ -1208,9 +1254,11 @@ with tabs[indice_aba]:
                                 liberar_conn(conn)
             else:
                 st.info(f"Todos os alunos faltosos da turma {turma_just} já foram justificados.")
+
             st.markdown("---")
             st.write("**Faltas já justificadas nesta data:**")
             faltas_justificadas = df_faltas[df_faltas['motivo_saida'].notna()]
+            
             if not faltas_justificadas.empty:
                 for _, f in faltas_justificadas.iterrows(): 
                     st.info(f"👤 {f['nome']} ({f['turma']}) - Justificativa: **{f['motivo_saida']}**")
@@ -1229,27 +1277,35 @@ with tabs[indice_aba]:
         lista_turmas_gestao = ["Todas"]
         if not df_alunos.empty:
             lista_turmas_gestao += sorted(df_alunos['turma'].unique())
+            
         index_turma = 0
         if tf != "Todas" and tf in lista_turmas_gestao:
             index_turma = lista_turmas_gestao.index(tf)
+            
         t_f_gestao = st.selectbox("Turma (Frequência)", lista_turmas_gestao, index=index_turma, key="filtro_turma_gestao")
     with c3: 
         s_f = st.selectbox("Status", ["Todos", "Presentes", "Ausentes"], key="filtro_status_gestao")
     with c4: 
         b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
+    
     params = [dt_f.strftime("%Y-%m-%d")]
     query = "SELECT a.codigo, a.nome, a.turma, COALESCE(r.tipo_registro, 'NÃO REGISTRADO (AUSENTE)') as tipo_registro, r.hora_entrada, r.status_entrada, r.hora_saida, r.motivo_saida FROM alunos_v2 a LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s WHERE a.status = 'ATIVO'"
+    
     if t_f_gestao != "Todas": 
         query += " AND a.turma = %s"
         params.append(t_f_gestao)
+        
     if s_f == "Presentes": 
         query += " AND r.tipo_registro = 'PRESENCA'"
     elif s_f == "Ausentes": 
         query += " AND (r.tipo_registro = 'FALTA' OR r.tipo_registro IS NULL)"
+        
     if b_f: 
         query += " AND a.nome ILIKE %s"
         params.append(f"%{b_f}%")
+        
     query += " ORDER BY a.turma, a.nome"
+    
     conn = conectar_bd()
     if conn:
         try:
@@ -1266,6 +1322,7 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
+    
     if dias_u:
         conn = conectar_bd()
         if conn:
@@ -1284,10 +1341,13 @@ indice_aba += 1
 
 with tabs[indice_aba]:
     st.subheader("📈 Histórico Individual")
+    
     lista_historico = [""]
     if not df_alunos.empty:
         lista_historico += [f"{r['codigo']} - {r['nome']} ({r['turma']}) - {r['status']}" for _, r in df_alunos.iterrows()]
+        
     aluno_sel = st.selectbox("Selecione o aluno", lista_historico, key="historico_aluno")
+    
     if aluno_sel:
         conn = conectar_bd()
         if conn:
@@ -1303,8 +1363,10 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.title("📊 Desempenho Acadêmico")
     st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
+    
     sub_da = ["🏆 Destaques", "🧑‍🎓 Estudantes", "🚫 Faltosos na Prova", "📈 Gráficos", "📋 Questões Críticas", "📝 Faltou 1ª Chamada"]
     stabs = st.tabs(sub_da)
+    
     alertas_estudante, area_stats = obter_estatisticas_areas_cached(ano_f, pf, af, tf)
     
     with stabs[0]:
@@ -1315,6 +1377,7 @@ with tabs[indice_aba]:
                     rev = st.toggle("Revelar", key=f"rev_{idx}")
                 else: 
                     rev = False
+                    
                 if idx == 0:
                     medalha = "🥇 1º LUGAR"
                 elif idx == 1:
@@ -1323,12 +1386,14 @@ with tabs[indice_aba]:
                     medalha = "🥉 3º LUGAR"
                 else:
                     medalha = f"⭐ {idx+1}º LUGAR"
+                    
                 if rev:
                     classe_nome = "top7-name"
                     texto_nome = f"{r['nome']} ({r['turma']})"
                 else:
                     classe_nome = "top7-name-hidden"
                     texto_nome = "OCULTO"
+                    
                 st.markdown(f'<div class="top7-card"><div class="top7-medal">{medalha}</div><div class="{classe_nome}">{texto_nome}</div><div class="top7-details">NOTA (FILTRADA): {r["acerto"]*10:.2f} | {r["turma"]}</div></div>', unsafe_allow_html=True)
     
     with stabs[1]:
@@ -1346,16 +1411,19 @@ with tabs[indice_aba]:
                 filtro_erros = st.checkbox("Somente c/ erros", key="filtro_erros_est")
 
             res_al, erros_n = obter_resumo_estudantes_cached(ano_f, pf, af, tf)
+            
             if bus_al: 
                 res_al = res_al[res_al['nome'].str.contains(bus_al.upper())]
             if filtro_erros: 
                 res_al = res_al[res_al['nome'].isin(erros_n)]
+                
             if filtro_desempenho == "INSUFICIENTE": 
                 res_al = res_al[res_al['acerto']*10 < 6.0]
             elif filtro_desempenho == "BOM": 
                 res_al = res_al[(res_al['acerto']*10 >= 6.0) & (res_al['acerto']*10 <= 7.5)]
             elif filtro_desempenho == "ÓTIMO": 
                 res_al = res_al[res_al['acerto']*10 > 7.5]
+
             if ordenar_por == "Maior Nota": 
                 res_al = res_al.sort_values(by=['acerto', 'nome'], ascending=[False, True])
             elif ordenar_por == "Menor Nota": 
@@ -1365,16 +1433,21 @@ with tabs[indice_aba]:
 
             total_estudantes_avaliados = len(res_al)
             filtros_ativos = (tf != "Todas") or (pf != "Todos") or (af != "Todas") or bool(bus_al) or filtro_erros or (filtro_desempenho != "Todos") or (ordenar_por != "Alfabética")
+            
             lista_completa = res_al.to_dict('records')
+            
             if filtros_ativos:
                 lista_visualizacao = lista_completa
             else:
                 lista_visualizacao = res_al.head(20).to_dict('records')
+            
             st.markdown("---")
             gerar_em_lote = st.checkbox("📦 Gerar todos os boletins listados acima em lote (Arquivo ZIP)", key="chk_lote")
+            
             if gerar_em_lote:
                 st.warning(f"Você está prestes a gerar **{len(lista_completa)} boletins** de uma só vez.")
                 zip_key = f"zip_{ano_f}_{pf}_{af}_{tf}_{bus_al}_{filtro_desempenho}_{filtro_erros}_{ordenar_por}"
+                
                 if st.button("⚙️ PROCESSAR BOLETINS EM LOTE", type="primary"):
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
@@ -1384,10 +1457,13 @@ with tabs[indice_aba]:
                                 df_bol_ind = dff[dff['nome'] == a['nome']]
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                                
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
                                     zip_file.writestr(f"Boletim_{a['turma']}_{safe_name}.pdf", pdf_bytes)
+                                    
                         st.session_state[zip_key] = zip_buffer.getvalue()
+                        
                 if zip_key in st.session_state:
                     st.success("✅ Arquivo ZIP gerado com sucesso!")
                     st.download_button("📥 BAIXAR ARQUIVO ZIP COM OS BOLETINS", data=st.session_state[zip_key], file_name=f"Boletins_{tf.replace(' ', '_')}_{ano_f}.zip", mime="application/zip")
@@ -1396,31 +1472,40 @@ with tabs[indice_aba]:
                     st.info(f"📊 **Total de estudantes avaliados:** {total_estudantes_avaliados} (Exibindo os 20 primeiros).")
                 else: 
                     st.info(f"📊 **Total de estudantes encontrados:** {len(lista_visualizacao)}.")
+                
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
+                
                 if not dff.empty:
                     medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     piores_por_aluno = medias_gerais_turma.sort_values(['nome', 'Nota']).groupby('nome').head(3)
                 else:
                     piores_por_aluno = pd.DataFrame(columns=['nome', 'disciplina', 'periodo', 'Nota'])
+                
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     if alerta_str:
                         tag = f" &nbsp; 🚨 [{alerta_str}]"
                     else:
                         tag = ""
+                        
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
+                        
                         df_bol_ind = dff[dff['nome'] == a['nome']]
                         df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
+                        
                         piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
+                        
                         if not piores_3.empty: 
                             st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
+                        
                         if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
                             b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
                             if b_pdf: 
                                 st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                             else: 
                                 st.error("Erro ao gerar PDF.")
+                            
                         st.markdown(f"#### 📈 Evolução ao Longo do Ano ({ano_f})")
                         progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
@@ -1428,17 +1513,20 @@ with tabs[indice_aba]:
                             st.line_chart(progresso.pivot(index='periodo', columns='disciplina', values='Nota'), height=250)
                         except: 
                             pass
+                        
                         st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
                         medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         for _, mb in medias_b.iterrows(): 
                             st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
                             st.progress(min(mb['Nota'] / 10, 1.0))
+                        
                         st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
                         for p_m in sorted(df_bol_ind['periodo'].unique()):
                             for d_m in sorted(df_bol_ind[df_bol_ind['periodo']==p_m]['disciplina'].unique()):
                                 st.markdown(f"**{d_m} - {p_m}**")
                                 q_df = df_bol_ind[(df_bol_ind['periodo']==p_m) & (df_bol_ind['disciplina']==d_m)].sort_values("questao")
                                 grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
+                                
                                 for _, q in q_df.iterrows():
                                     if q['acerto'] == 1:
                                         cor = "#10b981"
@@ -1448,12 +1536,15 @@ with tabs[indice_aba]:
                                         cor = "#8b5cf6"
                                     else:
                                         cor = "#ef4444"
+                                        
                                     grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q["questao"]}<br>R:{q["resposta"]} G:{q["gabarito"]}</div>'
+                                    
                                 st.markdown(grid+'</div><br>', unsafe_allow_html=True)
                             
     with stabs[2]:
         if not dff.empty and not area_stats.empty:
             estudantes_faltosos = area_stats[area_stats['Faltou']]
+            
             if not estudantes_faltosos.empty:
                 st.error(f"⚠️ **REGISTO DE FALTAS NA PROVA ({len(estudantes_faltosos)})**")
                 cols_f = st.columns(3)
@@ -1469,15 +1560,19 @@ with tabs[indice_aba]:
                 col_agrup = 'area'
             else:
                 col_agrup = 'disciplina'
+                
             for p in sorted(dff['periodo'].unique()):
                 st.markdown(f"#### 📊 Desempenho: {p}")
                 resumo_graf = dff[dff['periodo'] == p].groupby(col_agrup).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
                 resumo_graf['Nota'] = (resumo_graf['Acertos'] / resumo_graf['Total']) * 10
+                
                 if tipo_grafico == "Área":
                     resumo_graf['Abreviacao'] = resumo_graf['area'].str.upper()
                 else:
                     resumo_graf['Abreviacao'] = resumo_graf['disciplina'].apply(lambda x: DICIONARIO_ABREVIACAO.get(x.upper(), x[:4].upper()))
+                    
                 resumo_graf['Nome Completo'] = resumo_graf[col_agrup].str.upper()
+                
                 fig_g = px.bar(
                     resumo_graf.sort_values('Nota'), 
                     x='Abreviacao', y='Nota', color='Abreviacao', 
@@ -1492,21 +1587,26 @@ with tabs[indice_aba]:
         if not dff.empty:
             st.subheader("❌ Top 3 Erros (Por Matéria e Turma)")
             q_err_top3 = obter_top3_erros_cached(ano_f, pf, af, tf)
+            
             if not q_err_top3.empty:
                 pdf_data = gerar_pdf_relatorio_critico(q_err_top3)
                 if pdf_data: 
                     st.download_button("📥 BAIXAR RELATÓRIO EM PDF", data=pdf_data, file_name="Questoes_Criticas.pdf", mime="application/pdf")
+                    
                 st.markdown("---")
                 for t in sorted(q_err_top3['turma'].unique()):
                     st.markdown(f"### 🏫 Turma: **{t}**")
                     df_t = q_err_top3[q_err_top3['turma'] == t]
+                    
                     for p in sorted(df_t['periodo'].unique()):
                         st.markdown(f"#### 📅 Período: **{p}**")
                         df_p = df_t[df_t['periodo'] == p]
+                        
                         for d in sorted(df_p['disciplina'].unique()):
                             st.markdown(f"- **{d}**")
                             for _, r in df_p[df_p['disciplina'] == d].iterrows(): 
                                 st.write(f"  - Questão {r['questao']} (Erro: **{r['Taxa de Erro (%)']:.1f}%**)")
+                                
                         st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("---")
             else: 
@@ -1516,12 +1616,16 @@ with tabs[indice_aba]:
         st.markdown("#### 📝 Histórico de Faltas na 1ª Chamada")
         st.write(f"Visualizando dados do Ano Letivo: **{ano_f}**")
         df_faltas_1a = carregar_faltas_primeira_chamada(ano_f)
+        
         if pf != "Todos" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['periodo'] == pf]
+            
         if af != "Todas" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['area'] == af]
+            
         if tf != "Todas" and not df_faltas_1a.empty:
             df_faltas_1a = df_faltas_1a[df_faltas_1a['turma'] == tf]
+        
         if df_faltas_1a.empty:
             st.success(f"🎉 Nenhum registro de falta na 1ª chamada encontrado para os filtros atuais!")
         else:
@@ -1534,16 +1638,21 @@ indice_aba += 1
 with tabs[indice_aba]:
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
+    
     df_sat_ano = carregar_satisfacao_por_ano(ano_f)
+    
     if df_sat_ano.empty:
         st.warning(f"Nenhuma avaliação registrada para o ano de {ano_f}.")
     else:
         cat_sat = st.selectbox("Selecione o Segmento para Análise Gráfica:", ["Todos", "Estudante", "Pais/Responsável", "Professor", "Servidor"], key="filtro_cat_sat")
+        
         df_sat_filtrado = df_sat_ano.copy()
         if cat_sat != "Todos": 
             df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['categoria'] == cat_sat]
+            
         if cat_sat in ["Todos", "Estudante"] and tf != "Todas": 
             df_sat_filtrado = df_sat_filtrado[df_sat_filtrado['turma'] == tf]
+            
         if df_sat_filtrado.empty:
             st.info("Nenhum dado encontrado para os filtros selecionados.")
         else:
@@ -1552,6 +1661,7 @@ with tabs[indice_aba]:
                 'Pergunta': nomes_perguntas,
                 'Média (Max 5)': [df_sat_filtrado['q1'].mean(), df_sat_filtrado['q2'].mean(), df_sat_filtrado['q3'].mean(), df_sat_filtrado['q4'].mean(), df_sat_filtrado['q5'].mean()]
             })
+            
             fig_sat = px.bar(df_grafico_sat, x='Pergunta', y='Média (Max 5)', text='Média (Max 5)', color='Pergunta', title=f"Média de Satisfação: {cat_sat}")
             fig_sat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
             fig_sat.update_layout(yaxis=dict(range=[0, 5.5]), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
@@ -1560,6 +1670,7 @@ with tabs[indice_aba]:
             st.markdown("---")
             st.subheader("📝 Mural de Sugestões e Feedbacks")
             df_sugestoes = df_sat_filtrado[df_sat_filtrado['sugestao'].notna() & (df_sat_filtrado['sugestao'].str.strip() != "")]
+            
             if df_sugestoes.empty: 
                 st.success("Não há sugestões em texto para este grupo.")
             else:
@@ -1569,6 +1680,7 @@ with tabs[indice_aba]:
                         turma_str = f" ({sug['turma']})"
                     else:
                         turma_str = ""
+                        
                     st.info(f"**Data:** {data_str} | **Perfil:** {sug['categoria']}{turma_str}\n\n**Mensagem:** {sug['sugestao']}")
 indice_aba += 1
 
@@ -1583,11 +1695,14 @@ if eh_admin:
                 f1_per = st.selectbox("Período Acadêmico", ["1º Período", "2º Período", "3º Período", "4º Período"])
             with c_f3: 
                 f1_area = st.selectbox("Área Acadêmica", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
+            
             lista_alunos_falta = [""]
             if not df_alunos.empty:
                 lista_alunos_falta += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+                
             f1_aluno = st.selectbox("Selecione o Estudante", lista_alunos_falta)
             f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justificativa", "Outros"])
+            
             if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
                 if f1_aluno:
                     cod_aluno = f1_aluno.split(" - ")[0]
@@ -1612,7 +1727,9 @@ if eh_admin:
                         st.error("Sem conexão com o banco de dados.")
                 else: 
                     st.error("Por favor, selecione um estudante na lista.")
+                    
         st.markdown("---")
+        
         st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
         link_completo = f"https://seu-projeto.streamlit.app/?modo=pesquisa"
         st.code(link_completo, language="text")
@@ -1620,12 +1737,15 @@ if eh_admin:
 
         st.subheader("📧 Gerir E-mails e Alunos")
         col1, col2 = st.columns(2)
+        
         with col1:
             lista_emails_aluno = [""]
             if not df_alunos.empty:
                 lista_emails_aluno += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+                
             al_email = st.selectbox("Selecione o Aluno", lista_emails_aluno)
             novo_e = st.text_input("Novo E-mail do Responsável")
+            
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd()
                 if conn:
@@ -1640,19 +1760,24 @@ if eh_admin:
                         st.error(f"Erro ao salvar: {e}")
                     finally: 
                         liberar_conn(conn)
+        
         with col2:
             st.write("Adição Manual de Aluno")
             m_cod = st.text_input("Matrícula")
             m_nom = st.text_input("Nome Completo")
+            
             if not df_alunos.empty:
                 lista_turmas = sorted(df_alunos['turma'].unique()) 
             else:
                 lista_turmas = []
+                
             m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
+            
             if m_tur_sel == "+ Criar Nova Turma": 
                 m_tur = st.text_input("Digite o nome da nova turma")
             else: 
                 m_tur = m_tur_sel
+
             if st.button("CADASTRAR ALUNO"):
                 if m_cod and m_nom and m_tur and m_tur != "Selecione...":
                     conn = conectar_bd()
@@ -1673,19 +1798,24 @@ if eh_admin:
                             liberar_conn(conn)
                 else: 
                     st.warning("Preencha todos os campos antes de cadastrar.")
+
         st.divider()
+
         st.markdown("#### 🗑️ Excluir Registro de Aluno")
         st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
+        
         c_del1, c_del2 = st.columns([3, 1])
         with c_del1: 
             lista_excluir = [""]
             if not df_alunos.empty:
                 lista_excluir += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
             aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", lista_excluir, key="sel_del_aluno")
+            
         with c_del2: 
             st.write("")
             st.write("")
             btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
+
         if btn_excluir and aluno_excluir:
             cod_del = aluno_excluir.split(" - ")[0]
             conn = conectar_bd()
@@ -1705,12 +1835,15 @@ if eh_admin:
                     st.error(f"Erro ao tentar excluir aluno: {e}")
                 finally: 
                     liberar_conn(conn)
+
         st.divider()
         up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
+        
         if st.button("PROCESSAR LISTA") and up_al:
             if importar_csv_alunos(up_al): 
                 st.success("Base de Alunos Sincronizada!")
                 st.rerun()
+
         st.markdown("---")
         st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
         c_up0, c_up1, c_up2, c_up3 = st.columns(4)
@@ -1725,6 +1858,7 @@ if eh_admin:
             if not df_alunos.empty:
                 lista_turmas_up = sorted(df_alunos['turma'].unique())
             t_up = st.selectbox("Turma:", lista_turmas_up, key="tup")
+        
         arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
         if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
             with st.spinner("Processando e injetando dados em lote..."):
@@ -1734,8 +1868,10 @@ if eh_admin:
                     st.rerun()
                 else: 
                     st.error(msg)
+            
         st.markdown("---")
         st.subheader("🗑️ Limpeza Seletiva de Banco")
+        
         conn_limpeza = conectar_bd()
         try: 
             blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
@@ -1743,9 +1879,11 @@ if eh_admin:
             blocos_df = pd.DataFrame()
         finally: 
             liberar_conn(conn_limpeza)
+        
         if not blocos_df.empty:
             lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
             bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
+            
             if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
                 ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
                 conn_del = conectar_bd()
@@ -1760,6 +1898,7 @@ if eh_admin:
                         liberar_conn(conn_del)
         else: 
             st.info("O banco de dados de desempenho está vazio.")
+
         st.markdown("---")
         if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
             conn_sat = conectar_bd()
