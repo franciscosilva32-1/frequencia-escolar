@@ -74,14 +74,15 @@ def get_connection_pool():
         st.error(f"🚨 ERRO FATAL AO CRIAR POOL DE CONEXÕES: {e}")
         st.stop()
 
-# ==================== FUNÇÃO CORRIGIDA (MOSTRA O ERRO NA TELA) ====================
+# ==================== FUNÇÃO CORRIGIDA (UNBOUNDLOCALERROR FIX) ====================
 def conectar_bd():
     pool_obj = get_connection_pool()
     if not pool_obj:
-        st.error("🚨 ERRO FATAL: O pool de conexões não foi criado. Verifique o arquivo secrets.toml")
+        st.error("🚨 ERRO: Pool de conexões não foi criado.")
         st.stop()
         
     for tentativa in range(1, 4):
+        conn = None  # <--- FIX: Garante que a variável existe antes de tentar qualquer coisa
         try:
             conn = pool_obj.getconn()
             with conn.cursor() as cur:
@@ -90,16 +91,17 @@ def conectar_bd():
         except Exception as e:
             erro_exato = str(e)
             if tentativa == 3:
-                # Se falhar 3 vezes, mostra o erro na tela e para o aplicativo
                 st.error(f"🚨 FALHA NA CONEXÃO APÓS 3 TENTATIVAS. ERRO EXATO: {erro_exato}")
-                st.warning("💡 Dica: Se o erro for 'password authentication failed', a senha no secrets.toml está errada. Se for 'timeout', o IP não está liberado no Supabase.")
                 st.stop()
             else:
                 st.warning(f"⚠️ Tentativa {tentativa}/3 falhou: {erro_exato}. Tentando novamente...")
                 time.sleep(2)
+            
             if conn:
-                try: pool_obj.putconn(conn, close=True)
-                except: pass
+                try:
+                    pool_obj.putconn(conn, close=True)
+                except:
+                    pass
     return None
 # ================================================================================
 
