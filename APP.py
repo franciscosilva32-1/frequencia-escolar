@@ -21,6 +21,7 @@ import plotly.express as px
 import tempfile
 import numpy as np
 import zipfile
+import requests
 
 try:
     from fpdf import FPDF
@@ -69,7 +70,6 @@ def get_connection_pool():
             url += "?sslmode=require"
 
     try:
-        # Pool aumentado para 10 conexões
         return pool.ThreadedConnectionPool(1, 10, url, connect_timeout=10)
     except Exception as e:
         st.error(f"🚨 ERRO FATAL AO CRIAR POOL DE CONEXÕES: {e}")
@@ -567,32 +567,108 @@ def importar_csv_alunos(file):
         liberar_conn(conn)
 
 # ------------------------------------------------------------
-# NOVA FUNÇÃO importar_csv_entrada (REFATORADA)
+# FUNÇÕES PARA LEITURA DE PLANILHA GOOGLE (AJUSTADAS)
 # ------------------------------------------------------------
-def importar_csv_entrada(file, data_base, hora_limite):
+def normalizar_colunas(df):
+    """Normaliza os nomes das colunas: remove acentos, espaços extras, converte para maiúsculas."""
+    import unicodedata
+    new_cols = []
+    for col in df.columns:
+        # Remove acentos
+        col_norm = ''.join(c for c in unicodedata.normalize('NFD', str(col)) 
+                           if unicodedata.category(c) != 'Mn')
+        # Remove espaços extras e converte para upper
+        col_norm = col_norm.strip().upper()
+        new_cols.append(col_norm)
+    df.columns = new_cols
+    return df
+
+def ler_planilha_google(url, data_base):
     """
-    Processa CSV com registros de entrada.
-    Colunas esperadas: CODIGO (obrigatório), HORA (obrigatório, HH:MM ou HH:MM:SS),
-    DATA (opcional, YYYY-MM-DD). Se DATA ausente, usa data_base.
+    Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
+    Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
+    """
+    try:
+        # Converte URL de compartilhamento para URL de exportação CSV
+        if 'docs.google.com/spreadsheets' in url:
+            import re
+            match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
+            if match:
+                sheet_id = match.group(1)
+                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+            else:
+                csv_url = url
+        else:
+            csv_url = url
+        
+        # Baixa o CSV
+        response = requests.get(csv_url, timeout=30)
+        response.raise_for_status()
+        
+        from io import StringIO
+        content = response.text
+        
+        # Tenta ler com separador vírgula; se falhar, tenta ponto e vírgula
+        try:
+            df = pd.read_csv(StringIO(content), sep=',')
+        except:
+            df = pd.read_csv(StringIO(content), sep=';')
+        
+        # Normaliza nomes das colunas
+        df = normalizar_colunas(df)
+        
+        # Mapeia colunas esperadas
+        colunas_mapeadas = {}
+        for col in df.columns:
+            if 'CODIGO' in col:
+                colunas_mapeadas['CODIGO'] = col
+            elif 'HORA' in col and 'ENTRADA' in col:
+                colunas_mapeadas['HORA'] = col
+            elif 'DATA' in col:
+                colunas_mapeadas['DATA'] = col
+        
+        # Verifica se as colunas obrigatórias existem
+        if 'CODIGO' not in colunas_mapeadas or 'HORA' not in colunas_mapeadas:
+            st.error("A planilha deve conter as colunas 'CODIGO' e 'HORA DE ENTRADA'.")
+            return None
+        
+        # Renomeia para padronizar
+        df.rename(columns={
+            colunas_mapeadas['CODIGO']: 'CODIGO',
+            colunas_mapeadas['HORA']: 'HORA'
+        }, inplace=True)
+        
+        # Se tiver coluna DATA, renomeia e filtra
+        if 'DATA' in colunas_mapeadas:
+            df.rename(columns={colunas_mapeadas['DATA']: 'DATA'}, inplace=True)
+            # Converte DATA para date
+            df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
+            # Filtra apenas a data base
+            df = df[df['DATA'] == data_base]
+        else:
+            # Se não tiver DATA, assume que todos os registros são da data base
+            df['DATA'] = data_base
+        
+        # Remove linhas com dados faltantes
+        df = df.dropna(subset=['CODIGO', 'HORA'])
+        
+        return df
+    except Exception as e:
+        st.error(f"Erro ao ler a planilha: {e}")
+        return None
+
+# ------------------------------------------------------------
+# FUNÇÃO CENTRAL DE PROCESSAMENTO DE ENTRADA (DF)
+# ------------------------------------------------------------
+def processar_entrada_df(df, data_base, hora_limite):
+    """
+    Processa um DataFrame com registros de entrada.
+    Colunas esperadas: CODIGO (obrigatório), HORA (obrigatório),
+    DATA (opcional, já tratada). 
     Retorna: (total_linhas, salvos, emails_disparados, erros)
     """
-    conteudo = file.read()
-    try:
-        conteudo_str = conteudo.decode('utf-8-sig')
-    except:
-        conteudo_str = conteudo.decode('latin-1')
-    df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
-    df.columns = [col.strip().upper() for col in df.columns]
-
-    if 'CODIGO' not in df.columns or 'HORA' not in df.columns:
-        return 0, 0, 0, ["O CSV deve conter as colunas 'CODIGO' e 'HORA'."]
-
-    if 'DATA' not in df.columns:
-        df['DATA'] = data_base
-
-    df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
-    df['HORA'] = pd.to_datetime(df['HORA'], format='%H:%M', errors='coerce').dt.time
-    df = df.dropna(subset=['DATA', 'HORA'])
+    if df.empty:
+        return 0, 0, 0, ["Nenhum registro encontrado para a data selecionada."]
 
     # Buscar todos os alunos ativos uma única vez
     conn = conectar_bd()
@@ -608,7 +684,7 @@ def importar_csv_entrada(file, data_base, hora_limite):
     if not alunos:
         return 0, 0, 0, ["Nenhum aluno ativo encontrado."]
 
-    # Buscar registros de entrada já existentes para as datas do CSV (evita duplicatas)
+    # Buscar registros de entrada já existentes para a data_base (evita duplicatas)
     datas_unicas = df['DATA'].unique()
     registros_existentes = set()
     if len(datas_unicas) > 0:
@@ -631,9 +707,13 @@ def importar_csv_entrada(file, data_base, hora_limite):
     erros = []
 
     for idx, row in df.iterrows():
-        codigo = row['CODIGO'].strip().upper()
+        codigo = str(row['CODIGO']).strip().upper()
         data = row['DATA']
-        hora = row['HORA']
+        # HORA pode vir como string ou objeto time
+        hora = pd.to_datetime(row['HORA'], format='%H:%M', errors='coerce').time()
+        if pd.isna(hora):
+            erros.append(f"Linha {idx+1}: Hora inválida '{row['HORA']}'.")
+            continue
 
         if codigo not in alunos:
             erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
@@ -675,8 +755,29 @@ def importar_csv_entrada(file, data_base, hora_limite):
         emails_disparados += 1
 
     return len(df), salvos, emails_disparados, erros
-# ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
+# ------------------------------------------------------------
+def importar_csv_entrada(file, data_base, hora_limite):
+    conteudo = file.read()
+    try:
+        conteudo_str = conteudo.decode('utf-8-sig')
+    except:
+        conteudo_str = conteudo.decode('latin-1')
+    df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
+    df = normalizar_colunas(df)
+    # Garante que a coluna DATA exista
+    if 'DATA' not in df.columns:
+        df['DATA'] = data_base
+    else:
+        df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
+        df = df[df['DATA'] == data_base]
+    return processar_entrada_df(df, data_base, hora_limite)
+
+# ------------------------------------------------------------
+# OUTRAS FUNÇÕES EXISTENTES
+# ------------------------------------------------------------
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
     st.session_state.fila_offline.append(registro_pendente)
@@ -1158,7 +1259,6 @@ def popup_entrada_rapida(data_hoje, hora_limite):
             
             st.success(f"✅ Registrado na fila: {cod_limpo} às {h_at}")
             
-            # Adiciona a leitura em voz alta (TTS)
             st.markdown("""
             <script>
                 var utterance = new SpeechSynthesisUtterance("BEM-VINDO, ESTUDANTE!");
@@ -1176,7 +1276,7 @@ with tabs[indice_aba]:
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1:
         h_lim_e = st.time_input("🟢 Horário Limite de Entrada", datetime.strptime("07:30", "%H:%M").time())
-        st.session_state.h_lim_e_atual = h_lim_e   # salva para uso no upload de CSV
+        st.session_state.h_lim_e_atual = h_lim_e
     with c_cfg2:
         h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
     
@@ -1280,33 +1380,75 @@ with tabs[indice_aba]:
                             else:
                                 st.error("Sem ligação à internet no momento. Tente novamente mais tarde, os dados continuam salvos na fila.")
 
-            # ========== NOVO BLOCO: UPLOAD DE CSV DE ENTRADA EM LOTE ==========
+            # ========== UPLOAD DE CSV E PLANILHA GOOGLE ==========
             st.markdown("---")
-            with st.expander("📤 Carregar CSV de Entrada em Lote"):
+            with st.expander("📤 Carregar Entradas em Lote (CSV ou Planilha Google)"):
                 st.info("""
-                **Formato esperado (separador ;):**
-                - Coluna **CODIGO** (obrigatória)
-                - Coluna **HORA** (obrigatória) – formato `HH:MM` ou `HH:MM:SS`
-                - Coluna **DATA** (opcional) – formato `YYYY-MM-DD`. Se ausente, usa a data atual.
+                **Formato esperado (separador ; ou ,):**
+                - Coluna **CÓDIGO** (obrigatória)
+                - Coluna **HORA DE ENTRADA** (obrigatória) – formato `HH:MM` ou `HH:MM:SS`
+                - Coluna **DATA** (opcional) – formato `YYYY-MM-DD`. Se ausente, o sistema usará a data selecionada.
+                
+                **Para planilha Google:** publique-a na web (Arquivo → Publicar na web) e cole o link abaixo.
                 """)
+                
                 with st.form("form_upload_entrada", clear_on_submit=True):
-                    data_upload = st.date_input("Data base (usada se o CSV não tiver DATA)", value=obter_hora_atual().date(), key="data_upload_entrada")
-                    arquivo_csv = st.file_uploader("Escolha o arquivo CSV", type=["csv"], key="csv_entrada")
-                    if st.form_submit_button("🚀 PROCESSAR CSV"):
-                        if not arquivo_csv:
-                            st.warning("Selecione um arquivo CSV.")
+                    # Data base para filtro
+                    data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", 
+                                             value=obter_hora_atual().date(), 
+                                             key="data_base_entrada")
+                    
+                    # Opção 1: Upload de arquivo CSV
+                    arquivo_csv = st.file_uploader("Opção 1: Escolha um arquivo CSV", type=["csv"], key="csv_entrada")
+                    
+                    st.markdown("---")
+                    st.markdown("**OU**")
+                    
+                    # Opção 2: Link da planilha Google
+                    link_planilha = st.text_input("Opção 2: Insira o link da planilha Google (pública)", 
+                                                 placeholder="https://docs.google.com/spreadsheets/d/...")
+                    
+                    if st.form_submit_button("🚀 CARREGAR DADOS DA PLANILHA"):
+                        df_processar = None
+                        fonte = ""
+                        
+                        if arquivo_csv:
+                            # Processar CSV
+                            conteudo = arquivo_csv.read()
+                            try:
+                                conteudo_str = conteudo.decode('utf-8-sig')
+                            except:
+                                conteudo_str = conteudo.decode('latin-1')
+                            df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=';')
+                            df_processar = normalizar_colunas(df_processar)
+                            # Se não tiver DATA, adiciona a data base
+                            if 'DATA' not in df_processar.columns:
+                                df_processar['DATA'] = data_base
+                            else:
+                                df_processar['DATA'] = pd.to_datetime(df_processar['DATA'], errors='coerce').dt.date
+                            # Filtra pela data base
+                            df_processar = df_processar[df_processar['DATA'] == data_base]
+                            fonte = "CSV"
+                        elif link_planilha:
+                            # Processar planilha Google (já filtra pela data base)
+                            df_processar = ler_planilha_google(link_planilha, data_base)
+                            fonte = "Planilha Google"
                         else:
-                            with st.spinner("Processando registros..."):
+                            st.warning("Por favor, forneça um arquivo CSV ou um link de planilha Google.")
+                            st.stop()
+                        
+                        if df_processar is not None:
+                            with st.spinner(f"Processando registros da {fonte}..."):
                                 hora_limite = st.session_state.get('h_lim_e_atual', datetime.strptime("07:30", "%H:%M").time())
-                                total, salvos, emails, erros = importar_csv_entrada(arquivo_csv, data_upload.strftime("%Y-%m-%d"), hora_limite)
-                                st.success(f"✅ Processamento concluído: {salvos} registros salvos, {emails} e-mails disparados (de {total} linhas processadas).")
+                                total, salvos, emails, erros = processar_entrada_df(df_processar, data_base, hora_limite)
+                                st.success(f"✅ Processamento concluído: {salvos} registros salvos, {emails} e-mails disparados (de {total} linhas lidas).")
                                 if erros:
                                     with st.expander("⚠️ Detalhes dos erros"):
                                         for e in erros:
                                             st.error(e)
                                 contar_presencas_data.clear()
                                 carregar_faltas.clear()
-            # ========== FIM DO NOVO BLOCO ==========
+            # ========== FIM DO BLOCO ==========
 
     with t_sa:
         if not verificar_dia_letivo(hoje_real): 
@@ -1408,7 +1550,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 # ================================================================
-# ABA "📊 GESTÃO FREQUÊNCIA" – REFORMULADA COM CONTADORES
+# ABA "📊 GESTÃO FREQUÊNCIA" – COM CONTADORES
 # ================================================================
 with tabs[indice_aba]:
     st.subheader("📊 Relatório Diário")
@@ -1428,7 +1570,6 @@ with tabs[indice_aba]:
     with c4:
         b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
 
-    # Construção da consulta com a nova coluna status_exibicao
     params = [dt_f.strftime("%Y-%m-%d")]
     query = """
         SELECT a.codigo, a.nome, a.turma,
@@ -1470,7 +1611,7 @@ with tabs[indice_aba]:
             df_relatorio = pd.read_sql_query(query, conn, params=params)
             df_relatorio.rename(columns={'status_exibicao': 'Status'}, inplace=True)
             
-            # ====== CONTADORES ======
+            # Contadores
             total = len(df_relatorio)
             presentes = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA'])
             com_atraso = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA COM ATRASO'])
@@ -1478,7 +1619,6 @@ with tabs[indice_aba]:
             ausentes = len(df_relatorio[df_relatorio['Status'] == 'NÃO REGISTRADO (AUSENTE)'])
             falta_sem_justificativa = len(df_relatorio[df_relatorio['Status'] == 'FALTA'])
             
-            # Exibe os contadores em cards
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             col1.metric("Total", total)
             col2.metric("✅ Presentes", presentes)
@@ -1498,7 +1638,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 # ------------------------------------------------------------
-# AS DEMAIS ABAS PERMANECEM IGUAIS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
+# DEMAIS ABAS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
 # ------------------------------------------------------------
 with tabs[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
@@ -2089,4 +2229,4 @@ if eh_admin:
                     st.success("Respostas apagadas.")
                     st.rerun()
                 finally: 
-                    liberar_conn(conn_sat)
+                    liberar_
