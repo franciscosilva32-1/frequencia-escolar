@@ -21,7 +21,7 @@ import plotly.express as px
 import tempfile
 import numpy as np
 import zipfile
-import requests
+import requests   # <-- ESSENCIAL para ler a planilha
 
 try:
     from fpdf import FPDF
@@ -567,29 +567,29 @@ def importar_csv_alunos(file):
         liberar_conn(conn)
 
 # ------------------------------------------------------------
-# FUNÇÕES PARA LEITURA DE PLANILHA GOOGLE (AJUSTADAS)
+# 6.1 FUNÇÃO PARA NORMALIZAR COLUNAS
 # ------------------------------------------------------------
 def normalizar_colunas(df):
     """Normaliza os nomes das colunas: remove acentos, espaços extras, converte para maiúsculas."""
     import unicodedata
     new_cols = []
     for col in df.columns:
-        # Remove acentos
         col_norm = ''.join(c for c in unicodedata.normalize('NFD', str(col)) 
                            if unicodedata.category(c) != 'Mn')
-        # Remove espaços extras e converte para upper
         col_norm = col_norm.strip().upper()
         new_cols.append(col_norm)
     df.columns = new_cols
     return df
 
+# ------------------------------------------------------------
+# 6.2 FUNÇÃO PARA LER PLANILHA GOOGLE
+# ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
     """
     Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
     Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
     """
     try:
-        # Converte URL de compartilhamento para URL de exportação CSV
         if 'docs.google.com/spreadsheets' in url:
             import re
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
@@ -601,23 +601,19 @@ def ler_planilha_google(url, data_base):
         else:
             csv_url = url
         
-        # Baixa o CSV
         response = requests.get(csv_url, timeout=30)
         response.raise_for_status()
         
         from io import StringIO
         content = response.text
         
-        # Tenta ler com separador vírgula; se falhar, tenta ponto e vírgula
         try:
             df = pd.read_csv(StringIO(content), sep=',')
         except:
             df = pd.read_csv(StringIO(content), sep=';')
         
-        # Normaliza nomes das colunas
         df = normalizar_colunas(df)
         
-        # Mapeia colunas esperadas
         colunas_mapeadas = {}
         for col in df.columns:
             if 'CODIGO' in col:
@@ -627,50 +623,35 @@ def ler_planilha_google(url, data_base):
             elif 'DATA' in col:
                 colunas_mapeadas['DATA'] = col
         
-        # Verifica se as colunas obrigatórias existem
         if 'CODIGO' not in colunas_mapeadas or 'HORA' not in colunas_mapeadas:
-            st.error("A planilha deve conter as colunas 'CODIGO' e 'HORA DE ENTRADA'.")
+            st.error("A planilha deve conter as colunas 'CÓDIGO' e 'HORA DE ENTRADA'.")
             return None
         
-        # Renomeia para padronizar
         df.rename(columns={
             colunas_mapeadas['CODIGO']: 'CODIGO',
             colunas_mapeadas['HORA']: 'HORA'
         }, inplace=True)
         
-        # Se tiver coluna DATA, renomeia e filtra
         if 'DATA' in colunas_mapeadas:
             df.rename(columns={colunas_mapeadas['DATA']: 'DATA'}, inplace=True)
-            # Converte DATA para date
             df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
-            # Filtra apenas a data base
             df = df[df['DATA'] == data_base]
         else:
-            # Se não tiver DATA, assume que todos os registros são da data base
             df['DATA'] = data_base
         
-        # Remove linhas com dados faltantes
         df = df.dropna(subset=['CODIGO', 'HORA'])
-        
         return df
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
         return None
 
 # ------------------------------------------------------------
-# FUNÇÃO CENTRAL DE PROCESSAMENTO DE ENTRADA (DF)
+# 6.3 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
 # ------------------------------------------------------------
 def processar_entrada_df(df, data_base, hora_limite):
-    """
-    Processa um DataFrame com registros de entrada.
-    Colunas esperadas: CODIGO (obrigatório), HORA (obrigatório),
-    DATA (opcional, já tratada). 
-    Retorna: (total_linhas, salvos, emails_disparados, erros)
-    """
     if df.empty:
         return 0, 0, 0, ["Nenhum registro encontrado para a data selecionada."]
 
-    # Buscar todos os alunos ativos uma única vez
     conn = conectar_bd()
     if not conn:
         return 0, 0, 0, ["Erro de conexão com o banco de dados."]
@@ -684,7 +665,6 @@ def processar_entrada_df(df, data_base, hora_limite):
     if not alunos:
         return 0, 0, 0, ["Nenhum aluno ativo encontrado."]
 
-    # Buscar registros de entrada já existentes para a data_base (evita duplicatas)
     datas_unicas = df['DATA'].unique()
     registros_existentes = set()
     if len(datas_unicas) > 0:
@@ -709,7 +689,6 @@ def processar_entrada_df(df, data_base, hora_limite):
     for idx, row in df.iterrows():
         codigo = str(row['CODIGO']).strip().upper()
         data = row['DATA']
-        # HORA pode vir como string ou objeto time
         hora = pd.to_datetime(row['HORA'], format='%H:%M', errors='coerce').time()
         if pd.isna(hora):
             erros.append(f"Linha {idx+1}: Hora inválida '{row['HORA']}'.")
@@ -719,7 +698,6 @@ def processar_entrada_df(df, data_base, hora_limite):
             erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
             continue
 
-        # Verifica duplicata em memória
         if (codigo, data) in registros_existentes:
             erros.append(f"Linha {idx+1}: Aluno {codigo} já possui registro de entrada nessa data.")
             continue
@@ -757,7 +735,7 @@ def processar_entrada_df(df, data_base, hora_limite):
     return len(df), salvos, emails_disparados, erros
 
 # ------------------------------------------------------------
-# FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
+# 6.4 FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
 # ------------------------------------------------------------
 def importar_csv_entrada(file, data_base, hora_limite):
     conteudo = file.read()
@@ -767,7 +745,6 @@ def importar_csv_entrada(file, data_base, hora_limite):
         conteudo_str = conteudo.decode('latin-1')
     df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
     df = normalizar_colunas(df)
-    # Garante que a coluna DATA exista
     if 'DATA' not in df.columns:
         df['DATA'] = data_base
     else:
@@ -776,7 +753,7 @@ def importar_csv_entrada(file, data_base, hora_limite):
     return processar_entrada_df(df, data_base, hora_limite)
 
 # ------------------------------------------------------------
-# OUTRAS FUNÇÕES EXISTENTES
+# 6.5 DEMAIS FUNÇÕES EXISTENTES (IR_PARA_FILA, REGISTRAR_SAIDA, ETC.)
 # ------------------------------------------------------------
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
@@ -869,6 +846,9 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     finally: 
         liberar_conn(conn)
 
+# ------------------------------------------------------------
+# 6.6 FUNÇÕES DE GERAÇÃO DE PDF E CÂMERA (MANTIDAS)
+# ------------------------------------------------------------
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: 
         return None
@@ -1120,7 +1100,7 @@ if st.query_params.get("modo") == "pesquisa":
     st.stop() 
 
 # ------------------------------------------------------------
-# 8. AUTH E DASHBOARD DO DIRETOR
+# 8. AUTH E DASHBOARD
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
 if not auth_cookie:
@@ -1232,7 +1212,7 @@ tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
 # =====================================================================
-# POP-UP DE ENTRADA RÁPIDA (100% OFFLINE COM VOZ)
+# POP-UP DE ENTRADA RÁPIDA
 # =====================================================================
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
@@ -1393,7 +1373,6 @@ with tabs[indice_aba]:
                 """)
                 
                 with st.form("form_upload_entrada", clear_on_submit=True):
-                    # Data base para filtro
                     data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", 
                                              value=obter_hora_atual().date(), 
                                              key="data_base_entrada")
@@ -1413,7 +1392,6 @@ with tabs[indice_aba]:
                         fonte = ""
                         
                         if arquivo_csv:
-                            # Processar CSV
                             conteudo = arquivo_csv.read()
                             try:
                                 conteudo_str = conteudo.decode('utf-8-sig')
@@ -1421,16 +1399,13 @@ with tabs[indice_aba]:
                                 conteudo_str = conteudo.decode('latin-1')
                             df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=';')
                             df_processar = normalizar_colunas(df_processar)
-                            # Se não tiver DATA, adiciona a data base
                             if 'DATA' not in df_processar.columns:
                                 df_processar['DATA'] = data_base
                             else:
                                 df_processar['DATA'] = pd.to_datetime(df_processar['DATA'], errors='coerce').dt.date
-                            # Filtra pela data base
                             df_processar = df_processar[df_processar['DATA'] == data_base]
                             fonte = "CSV"
                         elif link_planilha:
-                            # Processar planilha Google (já filtra pela data base)
                             df_processar = ler_planilha_google(link_planilha, data_base)
                             fonte = "Planilha Google"
                         else:
@@ -1611,7 +1586,6 @@ with tabs[indice_aba]:
             df_relatorio = pd.read_sql_query(query, conn, params=params)
             df_relatorio.rename(columns={'status_exibicao': 'Status'}, inplace=True)
             
-            # Contadores
             total = len(df_relatorio)
             presentes = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA'])
             com_atraso = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA COM ATRASO'])
@@ -2229,4 +2203,4 @@ if eh_admin:
                     st.success("Respostas apagadas.")
                     st.rerun()
                 finally: 
-                    liberar_
+                    liberar_conn(conn_sat)
