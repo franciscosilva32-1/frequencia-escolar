@@ -69,7 +69,8 @@ def get_connection_pool():
             url += "?sslmode=require"
 
     try:
-        return pool.ThreadedConnectionPool(1, 2, url, connect_timeout=10)
+        # Pool aumentado para 10 conexões
+        return pool.ThreadedConnectionPool(1, 10, url, connect_timeout=10)
     except Exception as e:
         st.error(f"🚨 ERRO FATAL AO CRIAR POOL DE CONEXÕES: {e}")
         st.stop()
@@ -565,7 +566,9 @@ def importar_csv_alunos(file):
     finally: 
         liberar_conn(conn)
 
-# ================= NOVA FUNÇÃO PARA IMPORTAR CSV DE ENTRADA =================
+# ------------------------------------------------------------
+# NOVA FUNÇÃO importar_csv_entrada (REFATORADA)
+# ------------------------------------------------------------
 def importar_csv_entrada(file, data_base, hora_limite):
     """
     Processa CSV com registros de entrada.
@@ -591,6 +594,7 @@ def importar_csv_entrada(file, data_base, hora_limite):
     df['HORA'] = pd.to_datetime(df['HORA'], format='%H:%M', errors='coerce').dt.time
     df = df.dropna(subset=['DATA', 'HORA'])
 
+    # Buscar todos os alunos ativos uma única vez
     conn = conectar_bd()
     if not conn:
         return 0, 0, 0, ["Erro de conexão com o banco de dados."]
@@ -603,6 +607,24 @@ def importar_csv_entrada(file, data_base, hora_limite):
 
     if not alunos:
         return 0, 0, 0, ["Nenhum aluno ativo encontrado."]
+
+    # Buscar registros de entrada já existentes para as datas do CSV (evita duplicatas)
+    datas_unicas = df['DATA'].unique()
+    registros_existentes = set()
+    if len(datas_unicas) > 0:
+        conn2 = conectar_bd()
+        if conn2:
+            try:
+                cur2 = conn2.cursor()
+                placeholders = ','.join(['%s'] * len(datas_unicas))
+                cur2.execute(f"""
+                    SELECT codigo_aluno, data FROM registros_v2
+                    WHERE data IN ({placeholders}) AND tipo_registro = 'PRESENCA'
+                """, list(datas_unicas))
+                for row in cur2.fetchall():
+                    registros_existentes.add((row[0], row[1]))
+            finally:
+                liberar_conn(conn2)
 
     registros_para_inserir = []
     emails_para_disparar = []
@@ -617,16 +639,10 @@ def importar_csv_entrada(file, data_base, hora_limite):
             erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
             continue
 
-        # Evita duplicata (já existe entrada para esse aluno nessa data)
-        conn2 = conectar_bd()
-        try:
-            cur2 = conn2.cursor()
-            cur2.execute("SELECT 1 FROM registros_v2 WHERE codigo_aluno = %s AND data = %s AND tipo_registro = 'PRESENCA'", (codigo, data))
-            if cur2.fetchone():
-                erros.append(f"Linha {idx+1}: Aluno {codigo} já possui registro de entrada nessa data.")
-                continue
-        finally:
-            liberar_conn(conn2)
+        # Verifica duplicata em memória
+        if (codigo, data) in registros_existentes:
+            erros.append(f"Linha {idx+1}: Aluno {codigo} já possui registro de entrada nessa data.")
+            continue
 
         status = 'PRESENTE' if hora <= hora_limite else 'ATRASO'
         registros_para_inserir.append((codigo, data, hora.strftime("%H:%M:%S"), status, 'PRESENCA'))
@@ -638,18 +654,19 @@ def importar_csv_entrada(file, data_base, hora_limite):
     salvos = 0
     if registros_para_inserir:
         conn3 = conectar_bd()
-        try:
-            cur3 = conn3.cursor()
-            execute_values(cur3,
-                "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING",
-                registros_para_inserir
-            )
-            salvos = cur3.rowcount
-            conn3.commit()
-        except Exception as e:
-            erros.append(f"Erro na inserção em lote: {e}")
-        finally:
-            liberar_conn(conn3)
+        if conn3:
+            try:
+                cur3 = conn3.cursor()
+                execute_values(cur3,
+                    "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING",
+                    registros_para_inserir
+                )
+                salvos = cur3.rowcount
+                conn3.commit()
+            except Exception as e:
+                erros.append(f"Erro na inserção em lote: {e}")
+            finally:
+                liberar_conn(conn3)
 
     emails_disparados = 0
     for nome, email, hora_str, data_str, status in emails_para_disparar:
@@ -658,7 +675,7 @@ def importar_csv_entrada(file, data_base, hora_limite):
         emails_disparados += 1
 
     return len(df), salvos, emails_disparados, erros
-# ============================================================================
+# ------------------------------------------------------------
 
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
@@ -1462,7 +1479,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 # ------------------------------------------------------------
-# AS DEMAIS ABAS PERMANECEM IGUAIS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
+# AS DEMAIS ABAS PERMANECEM IGUAIS
 # ------------------------------------------------------------
 with tabs[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
@@ -1843,4 +1860,214 @@ if eh_admin:
                 lista_alunos_falta += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
                 
             f1_aluno = st.selectbox("Selecione o Estudante", lista_alunos_falta)
-            f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justific
+            f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justificativa", "Outros"])
+            
+            if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
+                if f1_aluno:
+                    cod_aluno = f1_aluno.split(" - ")[0]
+                    conn_f1 = conectar_bd()
+                    if conn_f1:
+                        try:
+                            cur_f1 = conn_f1.cursor()
+                            cur_f1.execute("""
+                                INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
+                                VALUES (%s, %s, %s, %s, %s) 
+                                ON CONFLICT (codigo_aluno, ano, periodo, area) 
+                                DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
+                            """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
+                            conn_f1.commit()
+                            carregar_faltas_primeira_chamada.clear()
+                            st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
+                        except Exception as e: 
+                            st.error(f"Erro ao salvar: {e}")
+                        finally: 
+                            liberar_conn(conn_f1)
+                    else: 
+                        st.error("Sem conexão com o banco de dados.")
+                else: 
+                    st.error("Por favor, selecione um estudante na lista.")
+                    
+        st.markdown("---")
+        
+        st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
+        link_completo = f"https://seu-projeto.streamlit.app/?modo=pesquisa"
+        st.code(link_completo, language="text")
+        st.markdown("---")
+
+        st.subheader("📧 Gerir E-mails e Alunos")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            lista_emails_aluno = [""]
+            if not df_alunos.empty:
+                lista_emails_aluno += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+                
+            al_email = st.selectbox("Selecione o Aluno", lista_emails_aluno)
+            novo_e = st.text_input("Novo E-mail do Responsável")
+            
+            if st.button("SALVAR E-MAIL") and al_email and novo_e:
+                conn = conectar_bd()
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                        conn.commit()
+                        _carregar_alunos_cache.clear()
+                        st.success("Atualizado com sucesso!")
+                    except Exception as e: 
+                        conn.rollback()
+                        st.error(f"Erro ao salvar: {e}")
+                    finally: 
+                        liberar_conn(conn)
+        
+        with col2:
+            st.write("Adição Manual de Aluno")
+            m_cod = st.text_input("Matrícula")
+            m_nom = st.text_input("Nome Completo")
+            
+            if not df_alunos.empty:
+                lista_turmas = sorted(df_alunos['turma'].unique()) 
+            else:
+                lista_turmas = []
+                
+            m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
+            
+            if m_tur_sel == "+ Criar Nova Turma": 
+                m_tur = st.text_input("Digite o nome da nova turma")
+            else: 
+                m_tur = m_tur_sel
+
+            if st.button("CADASTRAR ALUNO"):
+                if m_cod and m_nom and m_tur and m_tur != "Selecione...":
+                    conn = conectar_bd()
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                            conn.commit()
+                            _carregar_alunos_cache.clear()
+                            st.success("Cadastrado com sucesso!")
+                        except Exception as e:
+                            conn.rollback()
+                            if "UniqueViolation" in str(type(e).__name__): 
+                                st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
+                            else: 
+                                st.error(f"Erro inesperado: {e}")
+                        finally: 
+                            liberar_conn(conn)
+                else: 
+                    st.warning("Preencha todos os campos antes de cadastrar.")
+
+        st.divider()
+
+        st.markdown("#### 🗑️ Excluir Registro de Aluno")
+        st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
+        
+        c_del1, c_del2 = st.columns([3, 1])
+        with c_del1: 
+            lista_excluir = [""]
+            if not df_alunos.empty:
+                lista_excluir += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+            aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", lista_excluir, key="sel_del_aluno")
+            
+        with c_del2: 
+            st.write("")
+            st.write("")
+            btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
+
+        if btn_excluir and aluno_excluir:
+            cod_del = aluno_excluir.split(" - ")[0]
+            conn = conectar_bd()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
+                    conn.commit()
+                    _carregar_alunos_cache.clear() 
+                    st.success(f"O registro {cod_del} foi completamente excluído!")
+                    time.sleep(2)
+                    st.rerun()
+                except Exception as e: 
+                    conn.rollback()
+                    st.error(f"Erro ao tentar excluir aluno: {e}")
+                finally: 
+                    liberar_conn(conn)
+
+        st.divider()
+        up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
+        
+        if st.button("PROCESSAR LISTA") and up_al:
+            if importar_csv_alunos(up_al): 
+                st.success("Base de Alunos Sincronizada!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
+        c_up0, c_up1, c_up2, c_up3 = st.columns(4)
+        with c_up0: 
+            ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
+        with c_up1: 
+            p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
+        with c_up2: 
+            a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
+        with c_up3: 
+            lista_turmas_up = ["Todas"]
+            if not df_alunos.empty:
+                lista_turmas_up = sorted(df_alunos['turma'].unique())
+            t_up = st.selectbox("Turma:", lista_turmas_up, key="tup")
+        
+        arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
+        if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
+            with st.spinner("Processando e injetando dados em lote..."):
+                sucesso, msg = importar_csv_desempenho(arquivo_avs, ano_up, p_up, a_up, t_up)
+                if sucesso: 
+                    st.success(msg)
+                    st.rerun()
+                else: 
+                    st.error(msg)
+            
+        st.markdown("---")
+        st.subheader("🗑️ Limpeza Seletiva de Banco")
+        
+        conn_limpeza = conectar_bd()
+        try: 
+            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
+        except: 
+            blocos_df = pd.DataFrame()
+        finally: 
+            liberar_conn(conn_limpeza)
+        
+        if not blocos_df.empty:
+            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
+            bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
+            
+            if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
+                ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
+                conn_del = conectar_bd()
+                if conn_del:
+                    try:
+                        cur = conn_del.cursor()
+                        cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
+                        conn_del.commit()
+                        st.success("Bloco removido do servidor!")
+                        st.rerun()
+                    finally: 
+                        liberar_conn(conn_del)
+        else: 
+            st.info("O banco de dados de desempenho está vazio.")
+
+        st.markdown("---")
+        if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
+            conn_sat = conectar_bd()
+            if conn_sat:
+                try:
+                    cur = conn_sat.cursor()
+                    cur.execute("DELETE FROM satisfacao_v1")
+                    conn_sat.commit()
+                    carregar_satisfacao_por_ano.clear()
+                    st.success("Respostas apagadas.")
+                    st.rerun()
+                finally: 
+                    liberar_conn(conn_sat)
