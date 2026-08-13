@@ -21,7 +21,7 @@ import plotly.express as px
 import tempfile
 import numpy as np
 import zipfile
-import requests   # <-- ESSENCIAL para ler a planilha
+import requests
 
 try:
     from fpdf import FPDF
@@ -204,7 +204,7 @@ def renderizar_logo_central():
         st.markdown(f'<div style="display: flex; justify-content: center; margin-bottom: 10px;"><img src="data:image/png;base64,{encoded_string}" width="170"></div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 4. INICIALIZAÇÃO DE TABELAS
+# 4. INICIALIZAÇÃO DE TABELAS (INCLUINDO CONFIGURACOES)
 # ------------------------------------------------------------
 @st.cache_resource
 def inicializar_tabelas():
@@ -219,6 +219,14 @@ def inicializar_tabelas():
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
+        # NOVA TABELA: configuracoes
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave TEXT PRIMARY KEY,
+                valor TEXT,
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit() 
         try: 
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
@@ -255,7 +263,7 @@ def inicializar_tabelas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         conn.commit()
-        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo']:
+        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'configuracoes']:
             try: 
                 cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
                 conn.commit()
@@ -567,10 +575,59 @@ def importar_csv_alunos(file):
         liberar_conn(conn)
 
 # ------------------------------------------------------------
-# 6.1 FUNÇÃO PARA NORMALIZAR COLUNAS
+# 6.1 FUNÇÕES PARA GERENCIAR O LINK DA PLANILHA
+# ------------------------------------------------------------
+def salvar_link_planilha(link):
+    conn = conectar_bd()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO configuracoes (chave, valor, atualizado_em)
+            VALUES ('link_entrada', %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = CURRENT_TIMESTAMP
+        """, (link,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao salvar link: {e}")
+        return False
+    finally:
+        liberar_conn(conn)
+
+def obter_link_planilha():
+    conn = conectar_bd()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT valor FROM configuracoes WHERE chave = 'link_entrada'")
+        res = cur.fetchone()
+        return res[0] if res else None
+    except Exception:
+        return None
+    finally:
+        liberar_conn(conn)
+
+def excluir_link_planilha():
+    conn = conectar_bd()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM configuracoes WHERE chave = 'link_entrada'")
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        liberar_conn(conn)
+
+# ------------------------------------------------------------
+# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS
 # ------------------------------------------------------------
 def normalizar_colunas(df):
-    """Normaliza os nomes das colunas: remove acentos, espaços extras, converte para maiúsculas."""
     import unicodedata
     new_cols = []
     for col in df.columns:
@@ -582,13 +639,9 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.2 FUNÇÃO PARA LER PLANILHA GOOGLE
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (usa link salvo ou fornecido)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
-    """
-    Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
-    Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
-    """
     try:
         if 'docs.google.com/spreadsheets' in url:
             import re
@@ -646,7 +699,7 @@ def ler_planilha_google(url, data_base):
         return None
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
+# 6.4 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
 # ------------------------------------------------------------
 def processar_entrada_df(df, data_base, hora_limite):
     if df.empty:
@@ -735,7 +788,7 @@ def processar_entrada_df(df, data_base, hora_limite):
     return len(df), salvos, emails_disparados, erros
 
 # ------------------------------------------------------------
-# 6.4 FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
+# 6.5 FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
 # ------------------------------------------------------------
 def importar_csv_entrada(file, data_base, hora_limite):
     conteudo = file.read()
@@ -753,7 +806,7 @@ def importar_csv_entrada(file, data_base, hora_limite):
     return processar_entrada_df(df, data_base, hora_limite)
 
 # ------------------------------------------------------------
-# 6.5 DEMAIS FUNÇÕES EXISTENTES (IR_PARA_FILA, REGISTRAR_SAIDA, ETC.)
+# 6.6 DEMAIS FUNÇÕES EXISTENTES
 # ------------------------------------------------------------
 def ir_para_fila_offline(cod, data, h_at, status):
     registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
@@ -846,9 +899,6 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     finally: 
         liberar_conn(conn)
 
-# ------------------------------------------------------------
-# 6.6 FUNÇÕES DE GERAÇÃO DE PDF E CÂMERA (MANTIDAS)
-# ------------------------------------------------------------
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
     if not FPDF: 
         return None
@@ -1360,7 +1410,7 @@ with tabs[indice_aba]:
                             else:
                                 st.error("Sem ligação à internet no momento. Tente novamente mais tarde, os dados continuam salvos na fila.")
 
-            # ========== UPLOAD DE CSV E PLANILHA GOOGLE ==========
+            # ========== UPLOAD DE CSV E PLANILHA GOOGLE COM LINK SALVO ==========
             st.markdown("---")
             with st.expander("📤 Carregar Entradas em Lote (CSV ou Planilha Google)"):
                 st.info("""
@@ -1369,25 +1419,62 @@ with tabs[indice_aba]:
                 - Coluna **HORA DE ENTRADA** (obrigatória) – formato `HH:MM` ou `HH:MM:SS`
                 - Coluna **DATA** (opcional) – formato `YYYY-MM-DD`. Se ausente, o sistema usará a data selecionada.
                 
-                **Para planilha Google:** publique-a na web (Arquivo → Publicar na web) e cole o link abaixo.
+                **Planilha Google:** o link pode ser salvo permanentemente no banco de dados.
                 """)
                 
+                # Exibir o link salvo atualmente
+                link_salvo = obter_link_planilha()
+                if link_salvo:
+                    st.info(f"🔗 **Link atual:** {link_salvo}")
+                else:
+                    st.warning("Nenhum link de planilha salvo. Use o botão abaixo para definir um.")
+                
+                col_links, col_botoes = st.columns([3, 1])
+                with col_links:
+                    with st.form("form_gerenciar_link", clear_on_submit=True):
+                        novo_link = st.text_input("Novo link (ou cole o link para salvar)", 
+                                                 placeholder="https://docs.google.com/spreadsheets/d/...",
+                                                 value=link_salvo if link_salvo else "")
+                        c_btn1, c_btn2 = st.columns(2)
+                        with c_btn1:
+                            if st.form_submit_button("💾 Salvar Link"):
+                                if novo_link:
+                                    if salvar_link_planilha(novo_link):
+                                        st.success("Link salvo com sucesso!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Erro ao salvar link.")
+                                else:
+                                    st.warning("Cole um link válido.")
+                        with c_btn2:
+                            if st.form_submit_button("🗑️ Excluir Link"):
+                                if excluir_link_planilha():
+                                    st.success("Link removido!")
+                                    st.rerun()
+                                else:
+                                    st.error("Erro ao excluir link.")
+                
+                st.markdown("---")
+                st.subheader("Carregar dados da planilha")
                 with st.form("form_upload_entrada", clear_on_submit=True):
                     data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", 
                                              value=obter_hora_atual().date(), 
                                              key="data_base_entrada")
                     
-                    # Opção 1: Upload de arquivo CSV
+                    # Opção 1: Upload de arquivo CSV (mantido)
                     arquivo_csv = st.file_uploader("Opção 1: Escolha um arquivo CSV", type=["csv"], key="csv_entrada")
                     
                     st.markdown("---")
                     st.markdown("**OU**")
                     
-                    # Opção 2: Link da planilha Google
-                    link_planilha = st.text_input("Opção 2: Insira o link da planilha Google (pública)", 
-                                                 placeholder="https://docs.google.com/spreadsheets/d/...")
+                    # Opção 2: Usar link salvo
+                    usar_link_salvo = st.checkbox("Usar link salvo (se existir)", value=bool(link_salvo), disabled=not link_salvo)
                     
-                    if st.form_submit_button("🚀 CARREGAR DADOS DA PLANILHA"):
+                    # Opção 3: fornecer um link temporário (não salva)
+                    link_temporario = st.text_input("Opção 3: Ou insira um link temporário (não será salvo)", 
+                                                    placeholder="https://docs.google.com/spreadsheets/d/...")
+                    
+                    if st.form_submit_button("🚀 CARREGAR DADOS"):
                         df_processar = None
                         fonte = ""
                         
@@ -1405,11 +1492,14 @@ with tabs[indice_aba]:
                                 df_processar['DATA'] = pd.to_datetime(df_processar['DATA'], errors='coerce').dt.date
                             df_processar = df_processar[df_processar['DATA'] == data_base]
                             fonte = "CSV"
-                        elif link_planilha:
-                            df_processar = ler_planilha_google(link_planilha, data_base)
-                            fonte = "Planilha Google"
+                        elif usar_link_salvo and link_salvo:
+                            df_processar = ler_planilha_google(link_salvo, data_base)
+                            fonte = "Planilha Google (salva)"
+                        elif link_temporario:
+                            df_processar = ler_planilha_google(link_temporario, data_base)
+                            fonte = "Planilha Google (temporária)"
                         else:
-                            st.warning("Por favor, forneça um arquivo CSV ou um link de planilha Google.")
+                            st.warning("Por favor, forneça um CSV, use o link salvo ou insira um link temporário.")
                             st.stop()
                         
                         if df_processar is not None:
