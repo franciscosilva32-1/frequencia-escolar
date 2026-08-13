@@ -1408,7 +1408,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 # ================================================================
-# ABA "📊 GESTÃO FREQUÊNCIA" – REFORMULADA
+# ABA "📊 GESTÃO FREQUÊNCIA" – REFORMULADA COM CONTADORES
 # ================================================================
 with tabs[indice_aba]:
     st.subheader("📊 Relatório Diário")
@@ -1469,6 +1469,25 @@ with tabs[indice_aba]:
         try:
             df_relatorio = pd.read_sql_query(query, conn, params=params)
             df_relatorio.rename(columns={'status_exibicao': 'Status'}, inplace=True)
+            
+            # ====== CONTADORES ======
+            total = len(df_relatorio)
+            presentes = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA'])
+            com_atraso = len(df_relatorio[df_relatorio['Status'] == 'PRESENCA COM ATRASO'])
+            falta_justificada = len(df_relatorio[df_relatorio['Status'] == 'FALTA JUSTIFICADA'])
+            ausentes = len(df_relatorio[df_relatorio['Status'] == 'NÃO REGISTRADO (AUSENTE)'])
+            falta_sem_justificativa = len(df_relatorio[df_relatorio['Status'] == 'FALTA'])
+            
+            # Exibe os contadores em cards
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            col1.metric("Total", total)
+            col2.metric("✅ Presentes", presentes)
+            col3.metric("⏰ Com Atraso", com_atraso)
+            col4.metric("📝 Falta Justificada", falta_justificada)
+            col5.metric("❌ Ausentes", ausentes)
+            col6.metric("🚫 Falta s/ Justif.", falta_sem_justificativa)
+            
+            st.markdown("---")
             st.dataframe(df_relatorio, use_container_width=True, hide_index=True)
         except Exception as e:
             st.info(f"Sem dados para exibir no momento. {e}")
@@ -1479,7 +1498,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 # ------------------------------------------------------------
-# AS DEMAIS ABAS PERMANECEM IGUAIS
+# AS DEMAIS ABAS PERMANECEM IGUAIS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
 # ------------------------------------------------------------
 with tabs[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
