@@ -1293,14 +1293,31 @@ if total_alunos > 0:
 else:
     media_geral_freq = "0%"
 
-with st.spinner("Sincronizando dados..."):
-    dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
+abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico", "💬 Satisfação Pública"]
+if eh_admin:
+    abas_do_sistema.append("⚙️ Manutenção do Sistema")
+
+aba_atual = st.radio(
+    "Módulo do sistema",
+    abas_do_sistema,
+    horizontal=True,
+    key="navegacao_principal",
+    label_visibility="collapsed"
+)
+
+dff = pd.DataFrame()
+if aba_atual == "📑 Desempenho Acadêmico":
+    with st.spinner("Sincronizando dados acadêmicos..."):
+        dff = obter_dados_acad_filtrados(ano_f, pf, af, tf)
 
 if not dff.empty:
     media_geral_acad = f"{dff['acerto'].mean() * 10:.1f}" 
 else:
     media_geral_acad = "--"
-sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
+if aba_atual == "💬 Satisfação Pública":
+    sat_est_str, sat_pais_str, sat_eq_str = calcular_satisfacao_global_cached(ano_f, tf)
+else:
+    sat_est_str, sat_pais_str, sat_eq_str = "--", "--", "--"
 
 st.markdown(f'''
 <div class="metrics-container">
@@ -1317,10 +1334,6 @@ st.markdown(f'''
 </div>
 ''', unsafe_allow_html=True)
 
-abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico", "💬 Satisfação Pública"]
-if eh_admin: 
-    abas_do_sistema.append("⚙️ Manutenção do Sistema")
-tabs = st.tabs(abas_do_sistema)
 indice_aba = 0
 
 # =====================================================================
@@ -1363,7 +1376,7 @@ def popup_entrada_rapida(data_hoje, hora_limite):
     st.info(f"📦 Estudantes aguardando sincronização: **{len(st.session_state.fila_offline)}**")
 # =====================================================================
 
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.markdown("#### ⚙️ Configuração do Turno e Dia Letivo")
     c_cfg1, c_cfg2 = st.columns(2)
     with c_cfg1:
@@ -1687,7 +1700,7 @@ indice_aba += 1
 # ================================================================
 # ABA "📊 GESTÃO FREQUÊNCIA" – COM CONTADORES
 # ================================================================
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.subheader("📊 Relatório Diário")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1774,7 +1787,7 @@ indice_aba += 1
 # ------------------------------------------------------------
 # DEMAIS ABAS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
 # ------------------------------------------------------------
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     
@@ -1794,7 +1807,7 @@ with tabs[indice_aba]:
                 liberar_conn(conn)
 indice_aba += 1
 
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.subheader("📈 Histórico Individual")
     
     lista_historico = [""]
@@ -1815,7 +1828,7 @@ with tabs[indice_aba]:
                 liberar_conn(conn)
 indice_aba += 1
 
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.title("📊 Desempenho Acadêmico")
     st.info("💡 **Atenção:** Os dados exibidos nesta aba obedecem aos Filtros Globais selecionados no topo da tela (Ano, Período, Área e Turma).")
     
@@ -2087,7 +2100,7 @@ with tabs[indice_aba]:
             st.dataframe(df_faltas_1a, use_container_width=True, hide_index=True)
 indice_aba += 1
 
-with tabs[indice_aba]:
+if aba_atual == abas_do_sistema[indice_aba]:
     st.title("💬 Análise de Satisfação da Comunidade")
     st.info(f"💡 **Dica:** Os dados exibidos obedecem ao Ano Global selecionado no topo ({ano_f}) e à Turma (para Estudantes).")
     
@@ -2137,7 +2150,7 @@ with tabs[indice_aba]:
 indice_aba += 1
 
 if eh_admin:
-    with tabs[indice_aba]:
+    if aba_atual == abas_do_sistema[indice_aba]:
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
         with st.form("form_falta_1a", clear_on_submit=True):
             c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
