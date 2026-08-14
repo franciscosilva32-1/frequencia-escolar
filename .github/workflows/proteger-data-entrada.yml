@@ -1,0 +1,73 @@
+name: Proteger data da importação diária
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/proteger-data-entrada.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aplicar proteção da data atual
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+
+          # 1) Registrar a quantidade total antes do filtro e a quantidade descartada.
+          old = "        content = response.text\n\n        # Tenta ler com separador vírgula, depois ponto e vírgula"
+          new = "        content = response.text\n\n        total_linhas_fonte = 0\n\n        # Tenta ler com separador vírgula, depois ponto e vírgula"
+          if old not in s:
+              raise SystemExit('Marcador da leitura CSV não encontrado.')
+          s = s.replace(old, new, 1)
+
+          old = "        # Normaliza as colunas (remove acentos, espaços, maiúsculas)\n        df = normalizar_colunas(df)"
+          new = "        # Normaliza as colunas (remove acentos, espaços, maiúsculas)\n        df = normalizar_colunas(df)\n        total_linhas_fonte = len(df)"
+          if old not in s:
+              raise SystemExit('Marcador da normalização não encontrado.')
+          s = s.replace(old, new, 1)
+
+          old = "            df = df.dropna(subset=['DATA'])\n            df = df[df['DATA'] == data_base]"
+          new = "            df = df.dropna(subset=['DATA'])\n            registros_data_atual = int((df['DATA'] == data_base).sum())\n            registros_outras_datas = int(len(df) - registros_data_atual)\n            df = df[df['DATA'] == data_base]"
+          if old not in s:
+              raise SystemExit('Filtro de data não encontrado.')
+          s = s.replace(old, new, 1)
+
+          old = "        diagnostic += f\"Registros após filtro: {len(df)}\""
+          new = "        if 'registros_data_atual' not in locals():\n            registros_data_atual = len(df)\n            registros_outras_datas = max(total_linhas_fonte - registros_data_atual, 0)\n        diagnostic += (\n            f\"Data protegida: {data_base.strftime('%d/%m/%Y')}\\n\"\n            f\"Linhas encontradas na planilha: {total_linhas_fonte}\\n\"\n            f\"Registros da data atual: {registros_data_atual}\\n\"\n            f\"Registros de outras datas ignorados: {registros_outras_datas}\"\n        )"
+          if old not in s:
+              raise SystemExit('Diagnóstico final não encontrado.')
+          s = s.replace(old, new, 1)
+
+          # 2) A interface diária deixa de oferecer data histórica para o carregamento da Google Planilha.
+          old = '''                with st.form("form_upload_entrada", clear_on_submit=True):\n                    data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", \n                                             value=obter_hora_atual().date(), \n                                             key="data_base_entrada")\n\n                    # Opção 1: Upload de arquivo CSV (mantido)'''
+          new = '''                with st.form("form_upload_entrada", clear_on_submit=True):\n                    data_base = obter_hora_atual().date()\n                    st.info(f"📅 **Data protegida do processamento: {data_base.strftime('%d/%m/%Y')}**\\n\\nO carregamento diário da Google Planilha utiliza sempre a data atual do sistema. Registros de dias anteriores permanecem na planilha, mas são ignorados.")\n\n                    # Opção 1: Upload de arquivo CSV (mantido)'''
+          if old not in s:
+              raise SystemExit('Campo de data da importação não encontrado.')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('Proteção da data atual aplicada com sucesso.')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar e remover workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Protege importacao diaria pela data atual" || true
+          git rm .github/workflows/proteger-data-entrada.yml
+          git commit -m "Remove workflow temporario de protecao de data" || true
+          git push
