@@ -1,0 +1,68 @@
+name: Corrigir códigos numéricos da planilha
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-codigos-numericos.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Aplicar correção no APP.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+
+          antigo1 = "pd.read_csv(StringIO(content), sep=',', encoding='utf-8')"
+          novo1 = "pd.read_csv(StringIO(content), sep=',', encoding='utf-8', dtype=str, keep_default_na=False)"
+
+          antigo2 = "pd.read_csv(StringIO(content), sep=';', encoding='utf-8')"
+          novo2 = "pd.read_csv(StringIO(content), sep=';', encoding='utf-8', dtype=str, keep_default_na=False)"
+
+          if antigo1 not in s:
+              raise SystemExit('Leitura CSV com separador vírgula não encontrada.')
+          if antigo2 not in s:
+              raise SystemExit('Leitura CSV com separador ponto e vírgula não encontrada.')
+
+          s = s.replace(antigo1, novo1, 1)
+          s = s.replace(antigo2, novo2, 1)
+
+          antigo3 = "df['CODIGO'] = df['CODIGO'].astype(str).str.strip().str.upper()"
+          novo3 = '''df['CODIGO'] = (
+              df['CODIGO']
+              .astype(str)
+              .str.strip()
+              .str.upper()
+              .str.replace(r'^(\\d+)[\\.,]0+$', r'\\1', regex=True)
+          )'''
+
+          if antigo3 not in s:
+              raise SystemExit('Normalização final da coluna CODIGO não encontrada.')
+
+          s = s.replace(antigo3, novo3, 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('Correção aplicada com sucesso.')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar correção
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Preserva códigos da planilha como texto" || true
+          git push
