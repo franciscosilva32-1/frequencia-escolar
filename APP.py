@@ -638,11 +638,12 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA E MAIS ROBUSTA)
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (AJUSTADA PARA AS COLUNAS EXATAS)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
     """
     Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
+    Reconhece as colunas: 'CÓDIGO', 'ESTUDANTE' (ignorada), 'HORA DE ENTRADA' e 'DATA'.
     Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
     """
     try:
@@ -662,6 +663,7 @@ def ler_planilha_google(url, data_base):
         else:
             csv_url = url
 
+        # Baixa o CSV
         response = requests.get(csv_url, timeout=30)
         response.raise_for_status()
 
@@ -677,51 +679,41 @@ def ler_planilha_google(url, data_base):
         # Normaliza as colunas (remove acentos, espaços, maiúsculas)
         df = normalizar_colunas(df)
 
-        # Dicionário para mapear sinônimos de colunas
-        colunas_mapeadas = {}
+        # Mapeamento específico baseado nas colunas esperadas
+        colunas_esperadas = {
+            'CODIGO': ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'COD_ALUNO', 'CODALUNO'],
+            'ESTUDANTE': ['ESTUDANTE', 'NOME', 'ALUNO', 'NOME_ALUNO', 'NOME DO ALUNO'],
+            'HORA': ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO'],
+            'DATA': ['DATA', 'DIA', 'DT', 'DAT']
+        }
+
+        colunas_encontradas = {}
         colunas_disponiveis = df.columns.tolist()
 
-        # ========== DIAGNÓSTICO: EXIBIR COLUNAS LIDAS ==========
+        for nome, sinonimios in colunas_esperadas.items():
+            for col in colunas_disponiveis:
+                for sin in sinonimios:
+                    if sin in col:
+                        colunas_encontradas[nome] = col
+                        break
+                if nome in colunas_encontradas:
+                    break
+
+        # Expansor de diagnóstico para mostrar o que foi encontrado
         with st.expander("🔍 Diagnóstico: colunas lidas da planilha"):
-            st.write("Colunas encontradas após normalização:")
+            st.write("Colunas originais (após normalização):")
             st.code(", ".join(colunas_disponiveis))
-
-        # Lista de possíveis nomes para a coluna de código
-        possiveis_codigo = ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'ID', 'IDENTIFICADOR', 'COD_ALUNO', 'CODALUNO', 'CODIGO_ALUNO']
-        for col in colunas_disponiveis:
-            for sin in possiveis_codigo:
-                if sin in col:
-                    colunas_mapeadas['CODIGO'] = col
-                    break
-            if 'CODIGO' in colunas_mapeadas:
-                break
-
-        # Lista de possíveis nomes para a coluna de hora
-        possiveis_hora = ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO', 'HORARIO_ENTRADA']
-        for col in colunas_disponiveis:
-            for sin in possiveis_hora:
-                if sin in col:
-                    colunas_mapeadas['HORA'] = col
-                    break
-            if 'HORA' in colunas_mapeadas:
-                break
-
-        # Lista de possíveis nomes para a coluna de data (opcional)
-        possiveis_data = ['DATA', 'DIA', 'DT', 'DAT']
-        for col in colunas_disponiveis:
-            for sin in possiveis_data:
-                if sin in col:
-                    colunas_mapeadas['DATA'] = col
-                    break
-            if 'DATA' in colunas_mapeadas:
-                break
+            st.write("Mapeamento identificado:")
+            st.json(colunas_encontradas)
+            st.write("Primeiras 5 linhas:")
+            st.dataframe(df.head(5))
 
         # Verifica se encontrou as colunas obrigatórias
         erros = []
-        if 'CODIGO' not in colunas_mapeadas:
-            erros.append("CÓDIGO (nenhuma das colunas contém: " + ", ".join(possiveis_codigo))
-        if 'HORA' not in colunas_mapeadas:
-            erros.append("HORA DE ENTRADA (nenhuma das colunas contém: " + ", ".join(possiveis_hora))
+        if 'CODIGO' not in colunas_encontradas:
+            erros.append("CÓDIGO (nenhuma coluna contém: " + ", ".join(colunas_esperadas['CODIGO']) + ")")
+        if 'HORA' not in colunas_encontradas:
+            erros.append("HORA DE ENTRADA (nenhuma coluna contém: " + ", ".join(colunas_esperadas['HORA']) + ")")
 
         if erros:
             st.error("⚠️ Não foi possível identificar as seguintes colunas na planilha:")
@@ -732,13 +724,13 @@ def ler_planilha_google(url, data_base):
 
         # Renomeia para padronizar
         df.rename(columns={
-            colunas_mapeadas['CODIGO']: 'CODIGO',
-            colunas_mapeadas['HORA']: 'HORA'
+            colunas_encontradas['CODIGO']: 'CODIGO',
+            colunas_encontradas['HORA']: 'HORA'
         }, inplace=True)
 
         # Processa a coluna de data (se existir)
-        if 'DATA' in colunas_mapeadas:
-            df.rename(columns={colunas_mapeadas['DATA']: 'DATA'}, inplace=True)
+        if 'DATA' in colunas_encontradas:
+            df.rename(columns={colunas_encontradas['DATA']: 'DATA'}, inplace=True)
             # Tenta converter no formato DD/MM/YYYY
             try:
                 df['DATA'] = pd.to_datetime(df['DATA'], format='%d/%m/%Y', errors='coerce').dt.date
@@ -760,6 +752,10 @@ def ler_planilha_google(url, data_base):
         # Remove linhas com código vazio ou nulo
         df = df[df['CODIGO'].notna()]
         df['CODIGO'] = df['CODIGO'].astype(str).str.strip().str.upper()
+
+        # Se houver coluna ESTUDANTE, pode ser mantida ou descartada (não usamos, mas mantemos para diagnóstico)
+        if 'ESTUDANTE' in colunas_encontradas:
+            df.rename(columns={colunas_encontradas['ESTUDANTE']: 'ESTUDANTE'}, inplace=True)
 
         return df
 
@@ -1484,20 +1480,21 @@ with tabs[indice_aba]:
             with st.expander("📤 Carregar Entradas em Lote (CSV ou Planilha Google)"):
                 st.info("""
                 **Formato esperado (separador ; ou ,):**
-                - Coluna **CÓDIGO** (obrigatória) – pode ser `CODIGO`, `COD`, `MATRICULA`, etc.
-                - Coluna **HORA DE ENTRADA** (obrigatória) – pode ser `HORA DE ENTRADA`, `HORA`, `HORARIO`, etc.
+                - Coluna **CÓDIGO** (obrigatória)
+                - Coluna **ESTUDANTE** (opcional, será ignorada)
+                - Coluna **HORA DE ENTRADA** (obrigatória) – formato `HH:MM:SS` ou `HH:MM`
                 - Coluna **DATA** (opcional) – formato `DD/MM/YYYY` (ex: 14/08/2026). Se ausente, o sistema usará a data selecionada.
-                
+
                 **Planilha Google:** o link pode ser salvo permanentemente no banco de dados.
                 """)
-                
+
                 # Exibir o link salvo atualmente
                 link_salvo = obter_link_planilha()
                 if link_salvo:
                     st.info(f"🔗 **Link atual:** {link_salvo}")
                 else:
                     st.warning("Nenhum link de planilha salvo. Use o botão abaixo para definir um.")
-                
+
                 col_links, col_botoes = st.columns([3, 1])
                 with col_links:
                     with st.form("form_gerenciar_link", clear_on_submit=True):
@@ -1522,31 +1519,31 @@ with tabs[indice_aba]:
                                     st.rerun()
                                 else:
                                     st.error("Erro ao excluir link.")
-                
+
                 st.markdown("---")
                 st.subheader("Carregar dados da planilha")
                 with st.form("form_upload_entrada", clear_on_submit=True):
                     data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", 
                                              value=obter_hora_atual().date(), 
                                              key="data_base_entrada")
-                    
+
                     # Opção 1: Upload de arquivo CSV (mantido)
                     arquivo_csv = st.file_uploader("Opção 1: Escolha um arquivo CSV", type=["csv"], key="csv_entrada")
-                    
+
                     st.markdown("---")
                     st.markdown("**OU**")
-                    
+
                     # Opção 2: Usar link salvo
                     usar_link_salvo = st.checkbox("Usar link salvo (se existir)", value=bool(link_salvo), disabled=not link_salvo)
-                    
+
                     # Opção 3: fornecer um link temporário (não salva)
                     link_temporario = st.text_input("Opção 3: Ou insira um link temporário (não será salvo)", 
                                                     placeholder="https://docs.google.com/spreadsheets/d/...")
-                    
+
                     if st.form_submit_button("🚀 CARREGAR DADOS"):
                         df_processar = None
                         fonte = ""
-                        
+
                         if arquivo_csv:
                             conteudo = arquivo_csv.read()
                             try:
@@ -1570,7 +1567,7 @@ with tabs[indice_aba]:
                         else:
                             st.warning("Por favor, forneça um CSV, use o link salvo ou insira um link temporário.")
                             st.stop()
-                        
+
                         if df_processar is not None:
                             with st.spinner(f"Processando registros da {fonte}..."):
                                 hora_limite = st.session_state.get('h_lim_e_atual', datetime.strptime("07:30", "%H:%M").time())
@@ -2200,4 +2197,166 @@ if eh_admin:
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd()
                 if conn:
-                    try
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                        conn.commit()
+                        _carregar_alunos_cache.clear()
+                        st.success("Atualizado com sucesso!")
+                    except Exception as e: 
+                        conn.rollback()
+                        st.error(f"Erro ao salvar: {e}")
+                    finally: 
+                        liberar_conn(conn)
+        
+        with col2:
+            st.write("Adição Manual de Aluno")
+            m_cod = st.text_input("Matrícula")
+            m_nom = st.text_input("Nome Completo")
+            
+            if not df_alunos.empty:
+                lista_turmas = sorted(df_alunos['turma'].unique()) 
+            else:
+                lista_turmas = []
+                
+            m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
+            
+            if m_tur_sel == "+ Criar Nova Turma": 
+                m_tur = st.text_input("Digite o nome da nova turma")
+            else: 
+                m_tur = m_tur_sel
+
+            if st.button("CADASTRAR ALUNO"):
+                if m_cod and m_nom and m_tur and m_tur != "Selecione...":
+                    conn = conectar_bd()
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
+                            conn.commit()
+                            _carregar_alunos_cache.clear()
+                            st.success("Cadastrado com sucesso!")
+                        except Exception as e:
+                            conn.rollback()
+                            if "UniqueViolation" in str(type(e).__name__): 
+                                st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
+                            else: 
+                                st.error(f"Erro inesperado: {e}")
+                        finally: 
+                            liberar_conn(conn)
+                else: 
+                    st.warning("Preencha todos os campos antes de cadastrar.")
+
+        st.divider()
+
+        st.markdown("#### 🗑️ Excluir Registro de Aluno")
+        st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
+        
+        c_del1, c_del2 = st.columns([3, 1])
+        with c_del1: 
+            lista_excluir = [""]
+            if not df_alunos.empty:
+                lista_excluir += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
+            aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", lista_excluir, key="sel_del_aluno")
+            
+        with c_del2: 
+            st.write("")
+            st.write("")
+            btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
+
+        if btn_excluir and aluno_excluir:
+            cod_del = aluno_excluir.split(" - ")[0]
+            conn = conectar_bd()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
+                    conn.commit()
+                    _carregar_alunos_cache.clear() 
+                    st.success(f"O registro {cod_del} foi completamente excluído!")
+                    time.sleep(2)
+                    st.rerun()
+                except Exception as e: 
+                    conn.rollback()
+                    st.error(f"Erro ao tentar excluir aluno: {e}")
+                finally: 
+                    liberar_conn(conn)
+
+        st.divider()
+        up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
+        
+        if st.button("PROCESSAR LISTA") and up_al:
+            if importar_csv_alunos(up_al): 
+                st.success("Base de Alunos Sincronizada!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
+        c_up0, c_up1, c_up2, c_up3 = st.columns(4)
+        with c_up0: 
+            ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
+        with c_up1: 
+            p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
+        with c_up2: 
+            a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
+        with c_up3: 
+            lista_turmas_up = ["Todas"]
+            if not df_alunos.empty:
+                lista_turmas_up = sorted(df_alunos['turma'].unique())
+            t_up = st.selectbox("Turma:", lista_turmas_up, key="tup")
+        
+        arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
+        if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
+            with st.spinner("Processando e injetando dados em lote..."):
+                sucesso, msg = importar_csv_desempenho(arquivo_avs, ano_up, p_up, a_up, t_up)
+                if sucesso: 
+                    st.success(msg)
+                    st.rerun()
+                else: 
+                    st.error(msg)
+            
+        st.markdown("---")
+        st.subheader("🗑️ Limpeza Seletiva de Banco")
+        
+        conn_limpeza = conectar_bd()
+        try: 
+            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
+        except: 
+            blocos_df = pd.DataFrame()
+        finally: 
+            liberar_conn(conn_limpeza)
+        
+        if not blocos_df.empty:
+            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
+            bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
+            
+            if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
+                ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
+                conn_del = conectar_bd()
+                if conn_del:
+                    try:
+                        cur = conn_del.cursor()
+                        cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
+                        conn_del.commit()
+                        st.success("Bloco removido do servidor!")
+                        st.rerun()
+                    finally: 
+                        liberar_conn(conn_del)
+        else: 
+            st.info("O banco de dados de desempenho está vazio.")
+
+        st.markdown("---")
+        if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
+            conn_sat = conectar_bd()
+            if conn_sat:
+                try:
+                    cur = conn_sat.cursor()
+                    cur.execute("DELETE FROM satisfacao_v1")
+                    conn_sat.commit()
+                    carregar_satisfacao_por_ano.clear()
+                    st.success("Respostas apagadas.")
+                    st.rerun()
+                finally: 
+                    liberar_conn(conn_sat)
