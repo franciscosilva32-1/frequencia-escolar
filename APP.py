@@ -273,7 +273,7 @@ def inicializar_tabelas():
     finally: 
         liberar_conn(conn)
 
-inicializar_tabelas()
+# inicializar_tabelas() será executada somente após autenticação.
 
 # ------------------------------------------------------------
 # 5. CSS
@@ -396,6 +396,42 @@ def contar_presencas_data(data_str, turma="Todas"):
         return count
     except: 
         return 0
+
+@st.cache_data(ttl=60)
+def carregar_resumo_dashboard(data_str, turma="Todas"):
+    """Retorna total de alunos ativos e presenças da data em uma única consulta."""
+    conn = None
+    try:
+        conn = conectar_bd()
+        if not conn:
+            return 0, 0
+        cur = conn.cursor()
+        if turma == "Todas":
+            cur.execute("""
+                SELECT
+                    COUNT(DISTINCT a.codigo) AS total_alunos,
+                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
+                FROM alunos_v2 a
+                LEFT JOIN registros_v2 r
+                  ON r.codigo_aluno = a.codigo AND r.data = %s
+                WHERE a.status = 'ATIVO'
+            """, (data_str,))
+        else:
+            cur.execute("""
+                SELECT
+                    COUNT(DISTINCT a.codigo) AS total_alunos,
+                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
+                FROM alunos_v2 a
+                LEFT JOIN registros_v2 r
+                  ON r.codigo_aluno = a.codigo AND r.data = %s
+                WHERE a.status = 'ATIVO' AND a.turma = %s
+            """, (data_str, turma))
+        row = cur.fetchone() or (0, 0)
+        return int(row[0] or 0), int(row[1] or 0)
+    except Exception:
+        return 0, 0
+    finally:
+        liberar_conn(conn)
 
 @st.cache_data(ttl=60)
 def carregar_faltas(data_str):
@@ -1249,6 +1285,9 @@ except Exception:
     cookies.save()
     st.rerun()
 
+# Inicializa/valida o schema apenas para usuários autenticados.
+inicializar_tabelas()
+
 df_alunos = carregar_alunos()
 
 c_out1, c_out2 = st.columns([10, 1])
@@ -1282,14 +1321,9 @@ tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + lista_turmas_filtro, key="
 hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
 data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
 
-if tf == "Todas":
-    df_alunos_filtrado = df_alunos 
-else:
-    df_alunos_filtrado = df_alunos[df_alunos['turma'] == tf]
-total_alunos = len(df_alunos_filtrado)
-pres_data = contar_presencas_data(data_selecionada_str, tf)
+total_alunos, pres_data = carregar_resumo_dashboard(data_selecionada_str, tf)
 if total_alunos > 0:
-    media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%" 
+    media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%"
 else:
     media_geral_freq = "0%"
 
