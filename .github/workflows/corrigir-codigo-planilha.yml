@@ -1,0 +1,99 @@
+name: Corrigir coluna CÓDIGO da planilha
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/corrigir-codigo-planilha.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Corrigir normalização dos nomes das colunas
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+
+          inicio = s.index('# ------------------------------------------------------------\n# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS')
+          fim = s.index('# ------------------------------------------------------------\n# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE', inicio)
+
+          nova = '''# ------------------------------------------------------------
+# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS
+# ------------------------------------------------------------
+def normalizar_colunas(df):
+    """Normaliza nomes de colunas e corrige variações de codificação."""
+    import unicodedata
+    import re
+
+    aliases_malformados = {
+        'CA\\x93DIGO': 'CODIGO',
+        'CA\x93DIGO': 'CODIGO',
+        'CÃ“DIGO': 'CODIGO',
+        'CÃ“DIGO': 'CODIGO',
+        'CÂDIGO': 'CODIGO',
+        'CDIGO': 'CODIGO',
+        'C0DIGO': 'CODIGO',
+    }
+
+    new_cols = []
+    for col in df.columns:
+        bruto = str(col).replace('\\ufeff', '').strip().upper()
+        if bruto in aliases_malformados:
+            new_cols.append(aliases_malformados[bruto])
+            continue
+
+        col_norm = ''.join(
+            c for c in unicodedata.normalize('NFD', bruto)
+            if unicodedata.category(c) != 'Mn'
+        )
+        col_norm = col_norm.strip().upper()
+
+        # Corrige diretamente caracteres de controle que podem surgir na
+        # conversão/decodificação do CSV exportado pelo Google Sheets.
+        col_norm = col_norm.replace('\\x93', 'O').replace('\\x92', '')
+        col_norm = col_norm.replace('CÃ“O', 'CO').replace('CÂO', 'CO')
+        col_norm = re.sub(r'\\s+', ' ', col_norm).strip()
+
+        # Normalizações canônicas dos campos utilizados pelo sistema.
+        if col_norm in {'CÓDIGO', 'CODIGO', 'CDIGO', 'CA93DIGO'}:
+            col_norm = 'CODIGO'
+        elif col_norm in {'ESTUDANTE', 'ALUNO', 'NOME', 'NOME DO ALUNO'}:
+            col_norm = 'ESTUDANTE' if col_norm != 'NOME' else 'NOME'
+        elif 'HORA DE ENTRADA' in col_norm:
+            col_norm = 'HORA DE ENTRADA'
+        elif col_norm in {'DATA', 'DIA', 'DT', 'DAT'}:
+            col_norm = 'DATA'
+
+        new_cols.append(col_norm)
+
+    df.columns = new_cols
+    return df
+
+'''
+
+          s = s[:inicio] + nova + s[fim:]
+          p.write_text(s, encoding='utf-8')
+          print('Normalização atualizada.')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar e remover workflow temporário
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Corrige reconhecimento da coluna CÓDIGO" 
+          git rm .github/workflows/corrigir-codigo-planilha.yml
+          git commit -m "Remove workflow temporário de correção" 
+          git push
