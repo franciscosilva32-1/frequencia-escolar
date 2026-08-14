@@ -1,0 +1,54 @@
+name: Corrigir expanders aninhados
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/corrigir-expander.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Corrigir APP.py sem alterar demais funcionalidades
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+
+          old1 = '''                        if diagnostic:\n                            with st.expander("🔍 Diagnóstico da leitura da planilha"):\n                                st.text(diagnostic)\n'''
+          new1 = '''                        if diagnostic:\n                            st.markdown("### 🔍 Diagnóstico da leitura da planilha")\n                            st.code(diagnostic)\n'''
+
+          old2 = '''                                if erros:\n                                    with st.expander("⚠️ Detalhes dos erros"):\n                                        for e in erros:\n                                            st.error(e)\n'''
+          new2 = '''                                if erros:\n                                    st.markdown("### ⚠️ Detalhes dos erros")\n                                    for e in erros:\n                                        st.error(e)\n'''
+
+          if old1 not in s:
+              raise SystemExit('Bloco do diagnóstico não encontrado; nenhuma alteração aplicada.')
+          if old2 not in s:
+              raise SystemExit('Bloco dos detalhes dos erros não encontrado; nenhuma alteração aplicada.')
+
+          s = s.replace(old1, new1, 1)
+          s = s.replace(old2, new2, 1)
+          p.write_text(s, encoding='utf-8')
+          print('Correção aplicada.')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Remover workflow temporário e publicar
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Remove expanders aninhados da importação"
+          git rm .github/workflows/corrigir-expander.yml
+          git commit -m "Remove workflow temporário de correção"
+          git push
