@@ -672,9 +672,9 @@ def ler_planilha_google(url, data_base):
 
         # Tenta ler com separador vírgula, depois ponto e vírgula
         try:
-            df = pd.read_csv(StringIO(content), sep=',', encoding='utf-8')
+            df = pd.read_csv(StringIO(content), sep=',', encoding='utf-8', dtype=str, keep_default_na=False)
         except:
-            df = pd.read_csv(StringIO(content), sep=';', encoding='utf-8')
+            df = pd.read_csv(StringIO(content), sep=';', encoding='utf-8', dtype=str, keep_default_na=False)
 
         # Normaliza as colunas (remove acentos, espaços, maiúsculas)
         df = normalizar_colunas(df)
@@ -743,7 +743,13 @@ def ler_planilha_google(url, data_base):
 
         # Remove linhas com código vazio ou nulo
         df = df[df['CODIGO'].notna()]
-        df['CODIGO'] = df['CODIGO'].astype(str).str.strip().str.upper()
+        df['CODIGO'] = (
+    df['CODIGO']
+    .astype(str)
+    .str.strip()
+    .str.upper()
+    .str.replace(r'^(\d+)[\.,]0+$', r'\1', regex=True)
+)
 
         # Se houver coluna ESTUDANTE, mantém para diagnóstico
         if 'ESTUDANTE' in colunas_encontradas:
