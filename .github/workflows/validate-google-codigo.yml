@@ -1,13 +1,13 @@
-name: Validar correção Google Sheets
+name: Corrigir coluna CÓDIGO na main
 
 on:
-  pull_request:
-    types: [opened, synchronize]
+  push:
     branches: [main]
+    paths:
+      - '.github/workflows/validate-google-codigo.yml'
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   patch:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Corrigir normalização da coluna de código
+      - name: Aplicar correção
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -42,7 +42,6 @@ def normalizar_colunas(df):
         if bruto.startswith('CA') and bruto.endswith('DIGO') and len(bruto) == 7:
             bruto = 'CODIGO'
 
-        # Variantes conhecidas de mojibake.
         bruto = bruto.replace('CÃ“DIGO', 'CODIGO')
         bruto = bruto.replace('CÂDIGO', 'CODIGO')
         bruto = bruto.replace('CDIGO', 'CODIGO')
@@ -76,12 +75,12 @@ def normalizar_colunas(df):
       - name: Validar sintaxe
         run: python -m py_compile APP.py
 
-      - name: Commitar correção na branch da PR
+      - name: Commitar correção e remover workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add APP.py
           git commit -m "Corrige reconhecimento da coluna CÓDIGO" || true
-          git push origin HEAD:${{ github.head_ref }}
-
-# trigger synchronization
+          git rm .github/workflows/validate-google-codigo.yml
+          git commit -m "Remove workflow temporário de correção" || true
+          git push
