@@ -706,6 +706,8 @@ def ler_planilha_google(url, data_base):
         from io import StringIO
         content = response.text
 
+        total_linhas_fonte = 0
+
         # Tenta ler com separador vírgula, depois ponto e vírgula
         try:
             df = pd.read_csv(StringIO(content), sep=',', encoding='utf-8', dtype=str, keep_default_na=False)
@@ -714,6 +716,7 @@ def ler_planilha_google(url, data_base):
 
         # Normaliza as colunas (remove acentos, espaços, maiúsculas)
         df = normalizar_colunas(df)
+        total_linhas_fonte = len(df)
 
         # Mapeamento específico baseado nas colunas esperadas
         colunas_esperadas = {
@@ -766,6 +769,8 @@ def ler_planilha_google(url, data_base):
                 # Fallback para formato automático
                 df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
             df = df.dropna(subset=['DATA'])
+            registros_data_atual = int((df['DATA'] == data_base).sum())
+            registros_outras_datas = int(len(df) - registros_data_atual)
             df = df[df['DATA'] == data_base]
         else:
             # Se não tem coluna DATA, assume que todos são da data base
@@ -791,7 +796,15 @@ def ler_planilha_google(url, data_base):
         if 'ESTUDANTE' in colunas_encontradas:
             df.rename(columns={colunas_encontradas['ESTUDANTE']: 'ESTUDANTE'}, inplace=True)
 
-        diagnostic += f"Registros após filtro: {len(df)}"
+        if 'registros_data_atual' not in locals():
+            registros_data_atual = len(df)
+            registros_outras_datas = max(total_linhas_fonte - registros_data_atual, 0)
+        diagnostic += (
+            f"Data protegida: {data_base.strftime('%d/%m/%Y')}\n"
+            f"Linhas encontradas na planilha: {total_linhas_fonte}\n"
+            f"Registros da data atual: {registros_data_atual}\n"
+            f"Registros de outras datas ignorados: {registros_outras_datas}"
+        )
         return df, diagnostic
 
     except requests.exceptions.RequestException as e:
@@ -1567,9 +1580,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                 st.markdown("---")
                 st.subheader("Carregar dados da planilha")
                 with st.form("form_upload_entrada", clear_on_submit=True):
-                    data_base = st.date_input("Data para processamento (apenas registros desta data serão lidos)", 
-                                             value=obter_hora_atual().date(), 
-                                             key="data_base_entrada")
+                    data_base = obter_hora_atual().date()
+                    st.info(f"📅 **Data protegida do processamento: {data_base.strftime('%d/%m/%Y')}**\n\nO carregamento diário da Google Planilha utiliza sempre a data atual do sistema. Registros de dias anteriores permanecem na planilha, mas são ignorados.")
 
                     # Opção 1: Upload de arquivo CSV (mantido)
                     arquivo_csv = st.file_uploader("Opção 1: Escolha um arquivo CSV", type=["csv"], key="csv_entrada")
