@@ -219,7 +219,6 @@ def inicializar_tabelas():
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
-        # NOVA TABELA: configuracoes
         cur.execute("""
             CREATE TABLE IF NOT EXISTS configuracoes (
                 chave TEXT PRIMARY KEY,
@@ -639,7 +638,7 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA - MAIS ROBUSTA)
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA E MAIS ROBUSTA)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
     """
@@ -647,112 +646,128 @@ def ler_planilha_google(url, data_base):
     Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
     """
     try:
-        # Se for um link de publicação (formato /d/e/.../pub), usa ele diretamente
+        # Converte a URL para o formato de download CSV
         if '/pub?' in url or '/pubhtml' in url:
             csv_url = url
         elif 'docs.google.com/spreadsheets' in url:
             import re
-            # Tenta extrair o ID da planilha (formato /d/ID/)
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
             if match:
                 sheet_id = match.group(1)
-                # Extrai o gid se presente
                 gid_match = re.search(r'gid=([0-9]+)', url)
                 gid_param = f"&gid={gid_match.group(1)}" if gid_match else ""
                 csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
             else:
-                # Se não conseguir extrair, tenta usar a URL como está
                 csv_url = url
         else:
             csv_url = url
-        
+
         response = requests.get(csv_url, timeout=30)
         response.raise_for_status()
-        
+
         from io import StringIO
         content = response.text
-        
+
+        # Tenta ler com separador vírgula, depois ponto e vírgula
         try:
-            df = pd.read_csv(StringIO(content), sep=',')
+            df = pd.read_csv(StringIO(content), sep=',', encoding='utf-8')
         except:
-            df = pd.read_csv(StringIO(content), sep=';')
-        
-        # Normaliza colunas
+            df = pd.read_csv(StringIO(content), sep=';', encoding='utf-8')
+
+        # Normaliza as colunas (remove acentos, espaços, maiúsculas)
         df = normalizar_colunas(df)
-        
-        # Mapeamento mais flexível
+
+        # Dicionário para mapear sinônimos de colunas
         colunas_mapeadas = {}
         colunas_disponiveis = df.columns.tolist()
-        
-        # Procurar coluna de código: contém 'CODIGO' ou 'COD' ou 'MATRICULA'
+
+        # ========== DIAGNÓSTICO: EXIBIR COLUNAS LIDAS ==========
+        with st.expander("🔍 Diagnóstico: colunas lidas da planilha"):
+            st.write("Colunas encontradas após normalização:")
+            st.code(", ".join(colunas_disponiveis))
+
+        # Lista de possíveis nomes para a coluna de código
+        possiveis_codigo = ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'ID', 'IDENTIFICADOR', 'COD_ALUNO', 'CODALUNO', 'CODIGO_ALUNO']
         for col in colunas_disponiveis:
-            if 'CODIGO' in col or 'COD' in col or 'MATRICULA' in col:
-                colunas_mapeadas['CODIGO'] = col
+            for sin in possiveis_codigo:
+                if sin in col:
+                    colunas_mapeadas['CODIGO'] = col
+                    break
+            if 'CODIGO' in colunas_mapeadas:
                 break
-        
-        # Procurar coluna de hora: contém 'HORA' e (opcionalmente) 'ENTRADA'
+
+        # Lista de possíveis nomes para a coluna de hora
+        possiveis_hora = ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO', 'HORARIO_ENTRADA']
         for col in colunas_disponiveis:
-            if 'HORA' in col and 'ENTRADA' in col:
-                colunas_mapeadas['HORA'] = col
-                break
-        if 'HORA' not in colunas_mapeadas:
-            # Se não achou com ENTRADA, tenta apenas HORA
-            for col in colunas_disponiveis:
-                if 'HORA' in col:
+            for sin in possiveis_hora:
+                if sin in col:
                     colunas_mapeadas['HORA'] = col
                     break
-        
-        # Procurar coluna de data (opcional)
-        for col in colunas_disponiveis:
-            if 'DATA' in col:
-                colunas_mapeadas['DATA'] = col
+            if 'HORA' in colunas_mapeadas:
                 break
-        
+
+        # Lista de possíveis nomes para a coluna de data (opcional)
+        possiveis_data = ['DATA', 'DIA', 'DT', 'DAT']
+        for col in colunas_disponiveis:
+            for sin in possiveis_data:
+                if sin in col:
+                    colunas_mapeadas['DATA'] = col
+                    break
+            if 'DATA' in colunas_mapeadas:
+                break
+
         # Verifica se encontrou as colunas obrigatórias
+        erros = []
         if 'CODIGO' not in colunas_mapeadas:
-            st.error("Não foi possível identificar a coluna de CÓDIGO. Colunas encontradas: " + ", ".join(colunas_disponiveis))
-            return None
+            erros.append("CÓDIGO (nenhuma das colunas contém: " + ", ".join(possiveis_codigo))
         if 'HORA' not in colunas_mapeadas:
-            st.error("Não foi possível identificar a coluna de HORA DE ENTRADA. Colunas encontradas: " + ", ".join(colunas_disponiveis))
+            erros.append("HORA DE ENTRADA (nenhuma das colunas contém: " + ", ".join(possiveis_hora))
+
+        if erros:
+            st.error("⚠️ Não foi possível identificar as seguintes colunas na planilha:")
+            for e in erros:
+                st.error(f"  - {e}")
+            st.info("Colunas disponíveis: " + ", ".join(colunas_disponiveis))
             return None
-        
+
         # Renomeia para padronizar
         df.rename(columns={
             colunas_mapeadas['CODIGO']: 'CODIGO',
             colunas_mapeadas['HORA']: 'HORA'
         }, inplace=True)
-        
-        # Se tiver coluna DATA, renomeia e filtra
+
+        # Processa a coluna de data (se existir)
         if 'DATA' in colunas_mapeadas:
             df.rename(columns={colunas_mapeadas['DATA']: 'DATA'}, inplace=True)
-            # Tenta converter a data com formato DD/MM/YYYY (ex: 14/08/2026)
+            # Tenta converter no formato DD/MM/YYYY
             try:
                 df['DATA'] = pd.to_datetime(df['DATA'], format='%d/%m/%Y', errors='coerce').dt.date
             except:
-                # Se falhar, tenta formato automático
+                # Fallback para formato automático
                 df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
-            # Remove linhas com data inválida
             df = df.dropna(subset=['DATA'])
-            # Filtra pela data base
             df = df[df['DATA'] == data_base]
         else:
-            # Se não tiver DATA, assume que todos os registros são da data base
+            # Se não tem coluna DATA, assume que todos são da data base
             df['DATA'] = data_base
-        
-        # Converte HORA para time
+
+        # Converte a hora
+        # Tenta primeiro com formato HH:MM:SS, depois HH:MM
         df['HORA'] = pd.to_datetime(df['HORA'], format='%H:%M:%S', errors='coerce').dt.time
-        # Se falhar com HH:MM:SS, tenta HH:MM
         df['HORA'] = df['HORA'].fillna(pd.to_datetime(df['HORA'], format='%H:%M', errors='coerce').dt.time)
-        
-        # Remove linhas com hora inválida
         df = df.dropna(subset=['HORA'])
-        
-        # Remove linhas com código vazio
+
+        # Remove linhas com código vazio ou nulo
         df = df[df['CODIGO'].notna()]
-        
+        df['CODIGO'] = df['CODIGO'].astype(str).str.strip().str.upper()
+
         return df
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao baixar a planilha: {e}")
+        return None
     except Exception as e:
-        st.error(f"Erro ao ler a planilha: {e}")
+        st.error(f"Erro ao processar a planilha: {e}")
         return None
 
 # ------------------------------------------------------------
@@ -799,7 +814,7 @@ def processar_entrada_df(df, data_base, hora_limite):
     for idx, row in df.iterrows():
         codigo = str(row['CODIGO']).strip().upper()
         data = row['DATA']
-        hora = row['HORA']  # já é objeto time
+        hora = row['HORA']
 
         if codigo not in alunos:
             erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
@@ -1469,8 +1484,8 @@ with tabs[indice_aba]:
             with st.expander("📤 Carregar Entradas em Lote (CSV ou Planilha Google)"):
                 st.info("""
                 **Formato esperado (separador ; ou ,):**
-                - Coluna **CÓDIGO** (obrigatória) – pode ser `CODIGO`, `COD`, `MATRICULA`
-                - Coluna **HORA DE ENTRADA** (obrigatória) – pode ser `HORA DE ENTRADA` ou `HORA`
+                - Coluna **CÓDIGO** (obrigatória) – pode ser `CODIGO`, `COD`, `MATRICULA`, etc.
+                - Coluna **HORA DE ENTRADA** (obrigatória) – pode ser `HORA DE ENTRADA`, `HORA`, `HORARIO`, etc.
                 - Coluna **DATA** (opcional) – formato `DD/MM/YYYY` (ex: 14/08/2026). Se ausente, o sistema usará a data selecionada.
                 
                 **Planilha Google:** o link pode ser salvo permanentemente no banco de dados.
@@ -2185,19 +2200,4 @@ if eh_admin:
             if st.button("SALVAR E-MAIL") and al_email and novo_e:
                 conn = conectar_bd()
                 if conn:
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
-                        conn.commit()
-                        _carregar_alunos_cache.clear()
-                        st.success("Atualizado com sucesso!")
-                    except Exception as e: 
-                        conn.rollback()
-                        st.error(f"Erro ao salvar: {e}")
-                    finally: 
-                        liberar_conn(conn)
-        
-        with col2:
-            st.write("Adição Manual de Aluno")
-            m_cod = st.text_input("Matrícula")
-            m_nom = st.text_input("Nome Completo
+                    try
