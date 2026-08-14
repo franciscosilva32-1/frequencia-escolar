@@ -1,0 +1,111 @@
+name: Aplicar melhoria visual em branch
+
+on:
+  push:
+    branches: [visual-melhoria]
+    paths:
+      - '.github/workflows/aplicar-estetica-branch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inserir CSS visual
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+          css = r'''
+
+    /* ===== MELHORIA VISUAL: BOTÕES E NAVEGAÇÃO ===== */
+    .stButton > button,
+    [data-testid="stFormSubmitButton"] > button {
+        min-height: 48px !important;
+        border-radius: 12px !important;
+        border: 2px solid #cbd5e1 !important;
+        font-weight: 900 !important;
+        letter-spacing: .2px !important;
+        box-shadow: 0 2px 7px rgba(15,23,42,.06) !important;
+        transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease !important;
+    }
+    .stButton > button:hover,
+    [data-testid="stFormSubmitButton"] > button:hover {
+        transform: translateY(-1px) !important;
+        border-color: #ff7b00 !important;
+        box-shadow: 0 6px 16px rgba(15,23,42,.12) !important;
+    }
+    .stButton > button:active,
+    [data-testid="stFormSubmitButton"] > button:active {
+        transform: translateY(0) scale(.985) !important;
+        box-shadow: 0 2px 7px rgba(15,23,42,.08) !important;
+    }
+
+    [data-testid="stRadio"] div[role="radiogroup"] {
+        gap: 8px !important;
+    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label {
+        border: 2px solid #d7e0e9 !important;
+        border-radius: 14px !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        box-shadow: 0 2px 8px rgba(15,23,42,.05) !important;
+        background: linear-gradient(180deg,#ffffff 0%,#f8fafc 100%) !important;
+        transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease !important;
+    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+        transform: translateY(-1px) !important;
+        border-color: #ff7b00 !important;
+        box-shadow: 0 5px 14px rgba(15,23,42,.08) !important;
+    }
+
+    [data-baseweb="select"] > div {
+        border-radius: 12px !important;
+        box-shadow: 0 2px 8px rgba(15,23,42,.04) !important;
+        transition: border-color .12s ease, box-shadow .12s ease !important;
+    }
+    [data-baseweb="select"] > div:hover {
+        border-color: #ff7b00 !important;
+        box-shadow: 0 4px 12px rgba(15,23,42,.07) !important;
+    }
+
+    div[data-testid="stExpander"] {
+        border-radius: 14px !important;
+        border: 1px solid #dbe3ec !important;
+        box-shadow: 0 2px 8px rgba(15,23,42,.04) !important;
+        overflow: hidden !important;
+    }
+    div[data-testid="stExpander"] summary {
+        padding: 11px 14px !important;
+    }
+
+    [data-testid="stDataFrame"] {
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        border: 1px solid #dbe3ec !important;
+    }
+    /* ===== FIM DA MELHORIA VISUAL ===== */
+'''
+          marker = '</style>'
+          if marker not in s:
+              raise SystemExit('Bloco CSS não encontrado.')
+          if 'MELHORIA VISUAL: BOTÕES E NAVEGAÇÃO' in s:
+              raise SystemExit('CSS já aplicado.')
+          idx = s.rfind(marker)
+          s = s[:idx] + css + '\n' + s[idx:]
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+      - name: Remover workflow e placeholder
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git rm .github/workflows/aplicar-estetica-branch.yml README_VISUAL_PLACEHOLDER.md
+          git commit -m "Aplica melhoria visual segura" || exit 1
+          git push
