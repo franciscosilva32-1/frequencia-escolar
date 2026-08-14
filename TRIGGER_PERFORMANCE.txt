@@ -1,0 +1,1 @@
+Trigger temporário para acionar a otimização de conexão.
