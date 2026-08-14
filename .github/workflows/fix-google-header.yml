@@ -19,7 +19,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
           p = Path('APP.py')
           s = p.read_text(encoding='utf-8')
@@ -40,7 +39,7 @@ def normalizar_colunas(df):
 
         # Google Sheets/CSV pode entregar CÓDIGO com um caractere de
         # controle no lugar de Ó. Ex.: CA + chr(0x93) + DIGO.
-        if (bruto.startswith('CA') and bruto.endswith('DIGO') and len(bruto) == 7):
+        if bruto.startswith('CA') and bruto.endswith('DIGO') and len(bruto) == 7:
             bruto = 'CODIGO'
 
         # Outras formas comuns de mojibake.
@@ -84,7 +83,7 @@ def normalizar_colunas(df):
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add APP.py
-          git commit -m "Corrige reconhecimento da coluna CÓDIGO" 
+          git commit -m "Corrige reconhecimento da coluna CÓDIGO" || true
           git rm .github/workflows/fix-google-header.yml
-          git commit -m "Remove workflow temporário de correção" 
+          git commit -m "Remove workflow temporário de correção" || true
           git push
