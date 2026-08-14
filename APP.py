@@ -639,17 +639,29 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (usa link salvo ou fornecido)
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
+    """
+    Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
+    Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
+    """
     try:
-        if 'docs.google.com/spreadsheets' in url:
+        # Se for um link de publicação (formato /d/e/.../pub), usa ele diretamente
+        if '/pub?' in url or '/pubhtml' in url:
+            csv_url = url
+        elif 'docs.google.com/spreadsheets' in url:
             import re
+            # Tenta extrair o ID da planilha (formato /d/ID/)
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
             if match:
                 sheet_id = match.group(1)
-                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                # Extrai o gid se presente
+                gid_match = re.search(r'gid=([0-9]+)', url)
+                gid_param = f"&gid={gid_match.group(1)}" if gid_match else ""
+                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
             else:
+                # Se não conseguir extrair, tenta usar a URL como está
                 csv_url = url
         else:
             csv_url = url
