@@ -1,0 +1,90 @@
+name: Fix Google Sheets header
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-google-header.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Corrigir normalização da coluna CÓDIGO
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+          inicio = s.index('# ------------------------------------------------------------\n# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS')
+          fim = s.index('# ------------------------------------------------------------\n# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE', inicio)
+
+          nova = '''# ------------------------------------------------------------
+# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS
+# ------------------------------------------------------------
+def normalizar_colunas(df):
+    """Normaliza nomes de colunas e corrige variações de codificação."""
+    import unicodedata
+    import re
+
+    new_cols = []
+    for col in df.columns:
+        bruto = str(col).replace(chr(0xFEFF), '').strip().upper()
+
+        # Google Sheets/CSV pode entregar CÓDIGO com um caractere de
+        # controle no lugar de Ó. Ex.: CA + chr(0x93) + DIGO.
+        if (bruto.startswith('CA') and bruto.endswith('DIGO') and len(bruto) == 7):
+            bruto = 'CODIGO'
+
+        # Outras formas comuns de mojibake.
+        bruto = bruto.replace('CÃ“DIGO', 'CODIGO')
+        bruto = bruto.replace('CÃ“DIGO', 'CODIGO')
+        bruto = bruto.replace('CÂDIGO', 'CODIGO')
+
+        col_norm = ''.join(
+            c for c in unicodedata.normalize('NFD', bruto)
+            if unicodedata.category(c) != 'Mn'
+        )
+        col_norm = col_norm.strip().upper()
+        col_norm = re.sub(r'\\s+', ' ', col_norm).strip()
+
+        if col_norm in {'CODIGO', 'CDIGO', 'C0DIGO'}:
+            col_norm = 'CODIGO'
+        elif col_norm in {'ESTUDANTE', 'ALUNO'}:
+            col_norm = 'ESTUDANTE'
+        elif 'HORA DE ENTRADA' in col_norm:
+            col_norm = 'HORA DE ENTRADA'
+        elif col_norm in {'DATA', 'DIA', 'DT', 'DAT'}:
+            col_norm = 'DATA'
+
+        new_cols.append(col_norm)
+
+    df.columns = new_cols
+    return df
+
+'''
+
+          s = s[:inicio] + nova + s[fim:]
+          p.write_text(s, encoding='utf-8')
+          print('Normalização corrigida.')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar alteração e remover workflow temporário
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Corrige reconhecimento da coluna CÓDIGO" 
+          git rm .github/workflows/fix-google-header.yml
+          git commit -m "Remove workflow temporário de correção" 
+          git push
