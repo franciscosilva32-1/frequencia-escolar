@@ -639,7 +639,7 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA)
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (CORRIGIDA - MAIS ROBUSTA)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
     """
@@ -677,34 +677,79 @@ def ler_planilha_google(url, data_base):
         except:
             df = pd.read_csv(StringIO(content), sep=';')
         
+        # Normaliza colunas
         df = normalizar_colunas(df)
         
+        # Mapeamento mais flexível
         colunas_mapeadas = {}
-        for col in df.columns:
-            if 'CODIGO' in col:
-                colunas_mapeadas['CODIGO'] = col
-            elif 'HORA' in col and 'ENTRADA' in col:
-                colunas_mapeadas['HORA'] = col
-            elif 'DATA' in col:
-                colunas_mapeadas['DATA'] = col
+        colunas_disponiveis = df.columns.tolist()
         
-        if 'CODIGO' not in colunas_mapeadas or 'HORA' not in colunas_mapeadas:
-            st.error("A planilha deve conter as colunas 'CÓDIGO' e 'HORA DE ENTRADA'.")
+        # Procurar coluna de código: contém 'CODIGO' ou 'COD' ou 'MATRICULA'
+        for col in colunas_disponiveis:
+            if 'CODIGO' in col or 'COD' in col or 'MATRICULA' in col:
+                colunas_mapeadas['CODIGO'] = col
+                break
+        
+        # Procurar coluna de hora: contém 'HORA' e (opcionalmente) 'ENTRADA'
+        for col in colunas_disponiveis:
+            if 'HORA' in col and 'ENTRADA' in col:
+                colunas_mapeadas['HORA'] = col
+                break
+        if 'HORA' not in colunas_mapeadas:
+            # Se não achou com ENTRADA, tenta apenas HORA
+            for col in colunas_disponiveis:
+                if 'HORA' in col:
+                    colunas_mapeadas['HORA'] = col
+                    break
+        
+        # Procurar coluna de data (opcional)
+        for col in colunas_disponiveis:
+            if 'DATA' in col:
+                colunas_mapeadas['DATA'] = col
+                break
+        
+        # Verifica se encontrou as colunas obrigatórias
+        if 'CODIGO' not in colunas_mapeadas:
+            st.error("Não foi possível identificar a coluna de CÓDIGO. Colunas encontradas: " + ", ".join(colunas_disponiveis))
+            return None
+        if 'HORA' not in colunas_mapeadas:
+            st.error("Não foi possível identificar a coluna de HORA DE ENTRADA. Colunas encontradas: " + ", ".join(colunas_disponiveis))
             return None
         
+        # Renomeia para padronizar
         df.rename(columns={
             colunas_mapeadas['CODIGO']: 'CODIGO',
             colunas_mapeadas['HORA']: 'HORA'
         }, inplace=True)
         
+        # Se tiver coluna DATA, renomeia e filtra
         if 'DATA' in colunas_mapeadas:
             df.rename(columns={colunas_mapeadas['DATA']: 'DATA'}, inplace=True)
-            df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
+            # Tenta converter a data com formato DD/MM/YYYY (ex: 14/08/2026)
+            try:
+                df['DATA'] = pd.to_datetime(df['DATA'], format='%d/%m/%Y', errors='coerce').dt.date
+            except:
+                # Se falhar, tenta formato automático
+                df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
+            # Remove linhas com data inválida
+            df = df.dropna(subset=['DATA'])
+            # Filtra pela data base
             df = df[df['DATA'] == data_base]
         else:
+            # Se não tiver DATA, assume que todos os registros são da data base
             df['DATA'] = data_base
         
-        df = df.dropna(subset=['CODIGO', 'HORA'])
+        # Converte HORA para time
+        df['HORA'] = pd.to_datetime(df['HORA'], format='%H:%M:%S', errors='coerce').dt.time
+        # Se falhar com HH:MM:SS, tenta HH:MM
+        df['HORA'] = df['HORA'].fillna(pd.to_datetime(df['HORA'], format='%H:%M', errors='coerce').dt.time)
+        
+        # Remove linhas com hora inválida
+        df = df.dropna(subset=['HORA'])
+        
+        # Remove linhas com código vazio
+        df = df[df['CODIGO'].notna()]
+        
         return df
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
@@ -754,10 +799,7 @@ def processar_entrada_df(df, data_base, hora_limite):
     for idx, row in df.iterrows():
         codigo = str(row['CODIGO']).strip().upper()
         data = row['DATA']
-        hora = pd.to_datetime(row['HORA'], format='%H:%M', errors='coerce').time()
-        if pd.isna(hora):
-            erros.append(f"Linha {idx+1}: Hora inválida '{row['HORA']}'.")
-            continue
+        hora = row['HORA']  # já é objeto time
 
         if codigo not in alunos:
             erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
@@ -1427,9 +1469,9 @@ with tabs[indice_aba]:
             with st.expander("📤 Carregar Entradas em Lote (CSV ou Planilha Google)"):
                 st.info("""
                 **Formato esperado (separador ; ou ,):**
-                - Coluna **CÓDIGO** (obrigatória)
-                - Coluna **HORA DE ENTRADA** (obrigatória) – formato `HH:MM` ou `HH:MM:SS`
-                - Coluna **DATA** (opcional) – formato `YYYY-MM-DD`. Se ausente, o sistema usará a data selecionada.
+                - Coluna **CÓDIGO** (obrigatória) – pode ser `CODIGO`, `COD`, `MATRICULA`
+                - Coluna **HORA DE ENTRADA** (obrigatória) – pode ser `HORA DE ENTRADA` ou `HORA`
+                - Coluna **DATA** (opcional) – formato `DD/MM/YYYY` (ex: 14/08/2026). Se ausente, o sistema usará a data selecionada.
                 
                 **Planilha Google:** o link pode ser salvo permanentemente no banco de dados.
                 """)
@@ -2158,151 +2200,4 @@ if eh_admin:
         with col2:
             st.write("Adição Manual de Aluno")
             m_cod = st.text_input("Matrícula")
-            m_nom = st.text_input("Nome Completo")
-            
-            if not df_alunos.empty:
-                lista_turmas = sorted(df_alunos['turma'].unique()) 
-            else:
-                lista_turmas = []
-                
-            m_tur_sel = st.selectbox("Selecione a Turma", ["Selecione..."] + lista_turmas + ["+ Criar Nova Turma"])
-            
-            if m_tur_sel == "+ Criar Nova Turma": 
-                m_tur = st.text_input("Digite o nome da nova turma")
-            else: 
-                m_tur = m_tur_sel
-
-            if st.button("CADASTRAR ALUNO"):
-                if m_cod and m_nom and m_tur and m_tur != "Selecione...":
-                    conn = conectar_bd()
-                    if conn:
-                        try:
-                            cur = conn.cursor()
-                            cur.execute("INSERT INTO alunos_v2 (codigo, nome, turma) VALUES (%s, %s, %s)", (m_cod.upper(), m_nom.upper(), m_tur.upper()))
-                            conn.commit()
-                            _carregar_alunos_cache.clear()
-                            st.success("Cadastrado com sucesso!")
-                        except Exception as e:
-                            conn.rollback()
-                            if "UniqueViolation" in str(type(e).__name__): 
-                                st.error("⚠️ Atenção: Já existe um aluno cadastrado no sistema com esta mesma Matrícula!")
-                            else: 
-                                st.error(f"Erro inesperado: {e}")
-                        finally: 
-                            liberar_conn(conn)
-                else: 
-                    st.warning("Preencha todos os campos antes de cadastrar.")
-
-        st.divider()
-
-        st.markdown("#### 🗑️ Excluir Registro de Aluno")
-        st.warning("⚠️ **ATENÇÃO:** A exclusão apagará o aluno e todo o seu histórico (frequência/notas) para evitar conflitos no banco.")
-        
-        c_del1, c_del2 = st.columns([3, 1])
-        with c_del1: 
-            lista_excluir = [""]
-            if not df_alunos.empty:
-                lista_excluir += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
-            aluno_excluir = st.selectbox("Selecione o Aluno para exclusão definitiva", lista_excluir, key="sel_del_aluno")
-            
-        with c_del2: 
-            st.write("")
-            st.write("")
-            btn_excluir = st.button("🚨 EXCLUIR ALUNO", type="primary", use_container_width=True)
-
-        if btn_excluir and aluno_excluir:
-            cod_del = aluno_excluir.split(" - ")[0]
-            conn = conectar_bd()
-            if conn:
-                try:
-                    cur = conn.cursor()
-                    cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
-                    cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
-                    cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
-                    conn.commit()
-                    _carregar_alunos_cache.clear() 
-                    st.success(f"O registro {cod_del} foi completamente excluído!")
-                    time.sleep(2)
-                    st.rerun()
-                except Exception as e: 
-                    conn.rollback()
-                    st.error(f"Erro ao tentar excluir aluno: {e}")
-                finally: 
-                    liberar_conn(conn)
-
-        st.divider()
-        up_al = st.file_uploader("Importar Lista de Alunos (CSV)", type="csv")
-        
-        if st.button("PROCESSAR LISTA") and up_al:
-            if importar_csv_alunos(up_al): 
-                st.success("Base de Alunos Sincronizada!")
-                st.rerun()
-
-        st.markdown("---")
-        st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
-        c_up0, c_up1, c_up2, c_up3 = st.columns(4)
-        with c_up0: 
-            ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
-        with c_up1: 
-            p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
-        with c_up2: 
-            a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
-        with c_up3: 
-            lista_turmas_up = ["Todas"]
-            if not df_alunos.empty:
-                lista_turmas_up = sorted(df_alunos['turma'].unique())
-            t_up = st.selectbox("Turma:", lista_turmas_up, key="tup")
-        
-        arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
-        if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
-            with st.spinner("Processando e injetando dados em lote..."):
-                sucesso, msg = importar_csv_desempenho(arquivo_avs, ano_up, p_up, a_up, t_up)
-                if sucesso: 
-                    st.success(msg)
-                    st.rerun()
-                else: 
-                    st.error(msg)
-            
-        st.markdown("---")
-        st.subheader("🗑️ Limpeza Seletiva de Banco")
-        
-        conn_limpeza = conectar_bd()
-        try: 
-            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
-        except: 
-            blocos_df = pd.DataFrame()
-        finally: 
-            liberar_conn(conn_limpeza)
-        
-        if not blocos_df.empty:
-            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
-            bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
-            
-            if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
-                ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
-                conn_del = conectar_bd()
-                if conn_del:
-                    try:
-                        cur = conn_del.cursor()
-                        cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
-                        conn_del.commit()
-                        st.success("Bloco removido do servidor!")
-                        st.rerun()
-                    finally: 
-                        liberar_conn(conn_del)
-        else: 
-            st.info("O banco de dados de desempenho está vazio.")
-
-        st.markdown("---")
-        if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
-            conn_sat = conectar_bd()
-            if conn_sat:
-                try:
-                    cur = conn_sat.cursor()
-                    cur.execute("DELETE FROM satisfacao_v1")
-                    conn_sat.commit()
-                    carregar_satisfacao_por_ano.clear()
-                    st.success("Respostas apagadas.")
-                    st.rerun()
-                finally: 
-                    liberar_conn(conn_sat)
+            m_nom = st.text_input("Nome Completo
