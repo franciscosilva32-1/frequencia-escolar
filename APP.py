@@ -638,14 +638,15 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
-# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (AJUSTADA PARA AS COLUNAS EXATAS)
+# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (SEM EXPANDER ANINHADO)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
     """
     Lê uma planilha Google a partir de uma URL pública e filtra apenas registros da data_base.
     Reconhece as colunas: 'CÓDIGO', 'ESTUDANTE' (ignorada), 'HORA DE ENTRADA' e 'DATA'.
-    Retorna um DataFrame com as colunas normalizadas, ou None em caso de erro.
+    Retorna: (DataFrame ou None, diagnostic_string)
     """
+    diagnostic = ""
     try:
         # Converte a URL para o formato de download CSV
         if '/pub?' in url or '/pubhtml' in url:
@@ -663,7 +664,6 @@ def ler_planilha_google(url, data_base):
         else:
             csv_url = url
 
-        # Baixa o CSV
         response = requests.get(csv_url, timeout=30)
         response.raise_for_status()
 
@@ -699,14 +699,9 @@ def ler_planilha_google(url, data_base):
                 if nome in colunas_encontradas:
                     break
 
-        # Expansor de diagnóstico para mostrar o que foi encontrado
-        with st.expander("🔍 Diagnóstico: colunas lidas da planilha"):
-            st.write("Colunas originais (após normalização):")
-            st.code(", ".join(colunas_disponiveis))
-            st.write("Mapeamento identificado:")
-            st.json(colunas_encontradas)
-            st.write("Primeiras 5 linhas:")
-            st.dataframe(df.head(5))
+        # Coleta diagnóstico
+        diagnostic = f"Colunas disponíveis: {', '.join(colunas_disponiveis)}\n"
+        diagnostic += f"Mapeamento: {colunas_encontradas}\n"
 
         # Verifica se encontrou as colunas obrigatórias
         erros = []
@@ -716,11 +711,8 @@ def ler_planilha_google(url, data_base):
             erros.append("HORA DE ENTRADA (nenhuma coluna contém: " + ", ".join(colunas_esperadas['HORA']) + ")")
 
         if erros:
-            st.error("⚠️ Não foi possível identificar as seguintes colunas na planilha:")
-            for e in erros:
-                st.error(f"  - {e}")
-            st.info("Colunas disponíveis: " + ", ".join(colunas_disponiveis))
-            return None
+            diagnostic += "Erros: " + "; ".join(erros)
+            return None, diagnostic
 
         # Renomeia para padronizar
         df.rename(columns={
@@ -753,18 +745,17 @@ def ler_planilha_google(url, data_base):
         df = df[df['CODIGO'].notna()]
         df['CODIGO'] = df['CODIGO'].astype(str).str.strip().str.upper()
 
-        # Se houver coluna ESTUDANTE, pode ser mantida ou descartada (não usamos, mas mantemos para diagnóstico)
+        # Se houver coluna ESTUDANTE, mantém para diagnóstico
         if 'ESTUDANTE' in colunas_encontradas:
             df.rename(columns={colunas_encontradas['ESTUDANTE']: 'ESTUDANTE'}, inplace=True)
 
-        return df
+        diagnostic += f"Registros após filtro: {len(df)}"
+        return df, diagnostic
 
     except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao baixar a planilha: {e}")
-        return None
+        return None, f"Erro ao baixar a planilha: {e}"
     except Exception as e:
-        st.error(f"Erro ao processar a planilha: {e}")
-        return None
+        return None, f"Erro ao processar a planilha: {e}"
 
 # ------------------------------------------------------------
 # 6.4 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
@@ -1543,6 +1534,7 @@ with tabs[indice_aba]:
                     if st.form_submit_button("🚀 CARREGAR DADOS"):
                         df_processar = None
                         fonte = ""
+                        diagnostic = ""
 
                         if arquivo_csv:
                             conteudo = arquivo_csv.read()
@@ -1559,14 +1551,18 @@ with tabs[indice_aba]:
                             df_processar = df_processar[df_processar['DATA'] == data_base]
                             fonte = "CSV"
                         elif usar_link_salvo and link_salvo:
-                            df_processar = ler_planilha_google(link_salvo, data_base)
+                            df_processar, diagnostic = ler_planilha_google(link_salvo, data_base)
                             fonte = "Planilha Google (salva)"
                         elif link_temporario:
-                            df_processar = ler_planilha_google(link_temporario, data_base)
+                            df_processar, diagnostic = ler_planilha_google(link_temporario, data_base)
                             fonte = "Planilha Google (temporária)"
                         else:
                             st.warning("Por favor, forneça um CSV, use o link salvo ou insira um link temporário.")
                             st.stop()
+
+                        if diagnostic:
+                            with st.expander("🔍 Diagnóstico da leitura da planilha"):
+                                st.text(diagnostic)
 
                         if df_processar is not None:
                             with st.spinner(f"Processando registros da {fonte}..."):
@@ -1579,6 +1575,8 @@ with tabs[indice_aba]:
                                             st.error(e)
                                 contar_presencas_data.clear()
                                 carregar_faltas.clear()
+                        else:
+                            st.error("Falha ao carregar dados da planilha. Verifique o diagnóstico acima.")
             # ========== FIM DO BLOCO ==========
 
     with t_sa:
@@ -2293,70 +2291,4 @@ if eh_admin:
                 st.rerun()
 
         st.markdown("---")
-        st.subheader("☁️ Gerenciamento do Banco de Dados AVS")
-        c_up0, c_up1, c_up2, c_up3 = st.columns(4)
-        with c_up0: 
-            ano_up = st.selectbox("Ano de Lançamento:", anos_disponiveis, index=anos_disponiveis.index(ano_atual), key="anoup")
-        with c_up1: 
-            p_up = st.selectbox("Período:", ["1º Período", "2º Período", "3º Período", "4º Período"], key="pup")
-        with c_up2: 
-            a_up = st.selectbox("Área:", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"], key="aup")
-        with c_up3: 
-            lista_turmas_up = ["Todas"]
-            if not df_alunos.empty:
-                lista_turmas_up = sorted(df_alunos['turma'].unique())
-            t_up = st.selectbox("Turma:", lista_turmas_up, key="tup")
-        
-        arquivo_avs = st.file_uploader("Arquivo CSV da Avaliação", type=["csv"], key="csv_avs_up")
-        if st.button("PROCESSAR E SALVAR AGORA", type="primary", key="btn_salvar_avs") and arquivo_avs:
-            with st.spinner("Processando e injetando dados em lote..."):
-                sucesso, msg = importar_csv_desempenho(arquivo_avs, ano_up, p_up, a_up, t_up)
-                if sucesso: 
-                    st.success(msg)
-                    st.rerun()
-                else: 
-                    st.error(msg)
-            
-        st.markdown("---")
-        st.subheader("🗑️ Limpeza Seletiva de Banco")
-        
-        conn_limpeza = conectar_bd()
-        try: 
-            blocos_df = pd.read_sql("SELECT DISTINCT ano, periodo, area, turma FROM avaliacoes_avs", conn_limpeza)
-        except: 
-            blocos_df = pd.DataFrame()
-        finally: 
-            liberar_conn(conn_limpeza)
-        
-        if not blocos_df.empty:
-            lista_blocos = [f"{r['ano']} | {r['periodo']} | {r['area']} | {r['turma']}" for _, r in blocos_df.iterrows()]
-            bloco_del = st.selectbox("Blocos importados (Acadêmico):", lista_blocos, key="bloco_excluir_avs")
-            
-            if st.button("EXCLUIR BLOCO SELECIONADO", key="btn_excluir_avs_db"):
-                ano_del, p_del, a_del, t_del = bloco_del.split(" | ")
-                conn_del = conectar_bd()
-                if conn_del:
-                    try:
-                        cur = conn_del.cursor()
-                        cur.execute("DELETE FROM avaliacoes_avs WHERE ano=%s AND periodo=%s AND area=%s AND turma=%s", (ano_del, p_del, a_del, t_del))
-                        conn_del.commit()
-                        st.success("Bloco removido do servidor!")
-                        st.rerun()
-                    finally: 
-                        liberar_conn(conn_del)
-        else: 
-            st.info("O banco de dados de desempenho está vazio.")
-
-        st.markdown("---")
-        if st.button("🗑️ EXCLUIR TODAS AS RESPOSTAS DE SATISFAÇÃO"):
-            conn_sat = conectar_bd()
-            if conn_sat:
-                try:
-                    cur = conn_sat.cursor()
-                    cur.execute("DELETE FROM satisfacao_v1")
-                    conn_sat.commit()
-                    carregar_satisfacao_por_ano.clear()
-                    st.success("Respostas apagadas.")
-                    st.rerun()
-                finally: 
-                    liberar_conn(conn_sat)
+       
