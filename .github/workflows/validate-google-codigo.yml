@@ -83,3 +83,5 @@ def normalizar_colunas(df):
           git add APP.py
           git commit -m "Corrige reconhecimento da coluna CÓDIGO" || true
           git push origin HEAD:${{ github.head_ref }}
+
+# trigger synchronization
