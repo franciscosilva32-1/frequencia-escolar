@@ -1,0 +1,1 @@
+Trigger temporário para validar a correção do cabeçalho da Google Planilha.
