@@ -1561,8 +1561,8 @@ with tabs[indice_aba]:
                             st.stop()
 
                         if diagnostic:
-                            with st.expander("🔍 Diagnóstico da leitura da planilha"):
-                                st.text(diagnostic)
+                            st.markdown("### 🔍 Diagnóstico da leitura da planilha")
+                            st.code(diagnostic)
 
                         if df_processar is not None:
                             with st.spinner(f"Processando registros da {fonte}..."):
@@ -1570,9 +1570,9 @@ with tabs[indice_aba]:
                                 total, salvos, emails, erros = processar_entrada_df(df_processar, data_base, hora_limite)
                                 st.success(f"✅ Processamento concluído: {salvos} registros salvos, {emails} e-mails disparados (de {total} linhas lidas).")
                                 if erros:
-                                    with st.expander("⚠️ Detalhes dos erros"):
-                                        for e in erros:
-                                            st.error(e)
+                                    st.markdown("### ⚠️ Detalhes dos erros")
+                                    for e in erros:
+                                        st.error(e)
                                 contar_presencas_data.clear()
                                 carregar_faltas.clear()
                         else:
