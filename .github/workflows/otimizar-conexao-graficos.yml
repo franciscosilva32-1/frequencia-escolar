@@ -1,0 +1,128 @@
+name: Otimizar conexão e gráficos
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/otimizar-conexao-graficos.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aplicar otimizações
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+          original = s
+
+          # 1. Reduz latência de conexão: o SELECT 1 era uma ida extra ao Supabase.
+          old = '''    for tentativa in range(1, 4):
+        conn = None
+        try:
+            conn = pool_obj.getconn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            return conn
+        except Exception as e:
+            erro_exato = str(e)
+            if tentativa == 3:
+                st.error(f"🚨 FALHA NA CONEXÃO APÓS 3 TENTATIVAS. ERRO EXATO: {erro_exato}")
+                st.stop()
+            else:
+                st.warning(f"⚠️ Tentativa {tentativa}/3 falhou: {erro_exato}. Tentando novamente...")
+                time.sleep(2)
+            
+            if conn:
+                try:
+                    pool_obj.putconn(conn, close=True)
+                except:
+                    pass
+    return None'''
+          new = '''    for tentativa in range(1, 3):
+        conn = None
+        try:
+            conn = pool_obj.getconn()
+            # A conexão é validada pela própria consulta que a requisitou.
+            return conn
+        except Exception as e:
+            erro_exato = str(e)
+            if tentativa == 2:
+                st.error(f"🚨 FALHA NA CONEXÃO APÓS 2 TENTATIVAS. ERRO EXATO: {erro_exato}")
+                st.stop()
+            time.sleep(0.5)
+            if conn:
+                try:
+                    pool_obj.putconn(conn, close=True)
+                except Exception:
+                    pass
+    return None'''
+          if old not in s:
+              raise SystemExit('Bloco conectar_bd não encontrado; nenhuma alteração publicada.')
+          s = s.replace(old, new, 1)
+
+          # 2. Pool passa a abrir conexões sob demanda, evitando trabalho de startup.
+          old = '        return pool.ThreadedConnectionPool(1, 10, url, connect_timeout=10)'
+          new = '        return pool.ThreadedConnectionPool(0, 10, url, connect_timeout=10)'
+          if old not in s:
+              raise SystemExit('Configuração do pool não encontrada; nenhuma alteração publicada.')
+          s = s.replace(old, new, 1)
+
+          # 3. As subabas acadêmicas deixam de executar todas simultaneamente.
+          old = '''    stabs = st.tabs(sub_da)
+    
+    alertas_estudante, area_stats = obter_estatisticas_areas_cached(ano_f, pf, af, tf)
+    
+    with stabs[0]:'''
+          new = '''    sub_atual = st.radio(
+        "Seção acadêmica",
+        sub_da,
+        horizontal=True,
+        key="sub_navegacao_academica",
+        label_visibility="collapsed"
+    )
+
+    alertas_estudante = None
+    area_stats = None
+    if sub_atual in ("🏆 Destaques", "📋 Questões Críticas"):
+        alertas_estudante, area_stats = obter_estatisticas_areas_cached(ano_f, pf, af, tf)
+    
+    if sub_atual == "🏆 Destaques":'''
+          if old not in s:
+              raise SystemExit('Bloco das subabas acadêmicas não encontrado; nenhuma alteração publicada.')
+          s = s.replace(old, new, 1)
+
+          for i, titulo in enumerate(["🧑‍🎓 Estudantes", "🚫 Faltosos na Prova", "📈 Gráficos", "📋 Questões Críticas", "📝 Faltou 1ª Chamada"], start=1):
+              old = f'    with stabs[{i}]:'
+              new = f'    if sub_atual == "{titulo}":'
+              if old not in s:
+                  raise SystemExit(f'Subaba acadêmica {i} não encontrada; nenhuma alteração publicada.')
+              s = s.replace(old, new, 1)
+
+          if s == original:
+              raise SystemExit('Nenhuma alteração foi produzida.')
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar e remover workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Acelera conexões e processamento acadêmico" || true
+          git rm .github/workflows/otimizar-conexao-graficos.yml
+          git commit -m "Remove workflow temporário de performance" || true
+          git push
