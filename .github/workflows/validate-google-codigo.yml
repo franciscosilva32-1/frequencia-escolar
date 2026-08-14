@@ -1,0 +1,86 @@
+name: Corrigir coluna CÓDIGO na main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/validate-google-codigo.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aplicar correção
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('APP.py')
+          s = p.read_text(encoding='utf-8')
+          inicio = s.index('# ------------------------------------------------------------\n# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS')
+          fim = s.index('# ------------------------------------------------------------\n# 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE', inicio)
+
+          nova = '''# ------------------------------------------------------------
+# 6.2 FUNÇÃO PARA NORMALIZAR COLUNAS
+# ------------------------------------------------------------
+def normalizar_colunas(df):
+    """Normaliza nomes de colunas, inclusive variantes de codificação."""
+    import unicodedata
+    import re
+
+    new_cols = []
+    for col in df.columns:
+        bruto = str(col).replace(chr(0xFEFF), '').strip().upper()
+
+        # Na exportação CSV do Google Sheets, CÓDIGO pode chegar
+        # como CA + caractere de controle + DIGO. Reconhece a assinatura.
+        if bruto.startswith('CA') and bruto.endswith('DIGO') and len(bruto) == 7:
+            bruto = 'CODIGO'
+
+        bruto = bruto.replace('CÃ“DIGO', 'CODIGO')
+        bruto = bruto.replace('CÂDIGO', 'CODIGO')
+        bruto = bruto.replace('CDIGO', 'CODIGO')
+
+        col_norm = ''.join(
+            c for c in unicodedata.normalize('NFD', bruto)
+            if unicodedata.category(c) != 'Mn'
+        )
+        col_norm = re.sub(r'\\s+', ' ', col_norm).strip().upper()
+
+        if col_norm in {'CODIGO', 'C0DIGO'}:
+            col_norm = 'CODIGO'
+        elif col_norm in {'ESTUDANTE', 'ALUNO'}:
+            col_norm = 'ESTUDANTE'
+        elif 'HORA DE ENTRADA' in col_norm:
+            col_norm = 'HORA DE ENTRADA'
+        elif col_norm in {'DATA', 'DIA', 'DT', 'DAT'}:
+            col_norm = 'DATA'
+
+        new_cols.append(col_norm)
+
+    df.columns = new_cols
+    return df
+
+'''
+
+          s = s[:inicio] + nova + s[fim:]
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Commitar correção e remover workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py
+          git commit -m "Corrige reconhecimento da coluna CÓDIGO" || true
+          git rm .github/workflows/validate-google-codigo.yml
+          git commit -m "Remove workflow temporário de correção" || true
+          git push
