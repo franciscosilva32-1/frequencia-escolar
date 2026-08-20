@@ -21,10 +21,18 @@ st.markdown("""
     font-size: 1.18rem !important;
 }
 
+/* O título interno antigo é mantido no código por segurança, mas sua apresentação
+   passa a usar a nomenclatura amigável solicitada. */
 [data-testid="stAppViewContainer"] h1 {
-    font-size: 2.45rem !important;
+    font-size: 0 !important;
     font-weight: 900 !important;
     letter-spacing: -0.5px;
+    line-height: 1.2 !important;
+}
+[data-testid="stAppViewContainer"] h1::after {
+    content: "📊 Painel de Avaliação" !important;
+    font-size: 2.45rem !important;
+    font-weight: 900 !important;
 }
 
 [data-testid="stAppViewContainer"] h2 {
