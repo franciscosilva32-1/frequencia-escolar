@@ -1,0 +1,186 @@
+name: Aplicar melhoria dos cards de presença
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  aplicar:
+    if: "!contains(github.event.head_commit.message, 'cards de presença - aplicado')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Alterar APP.py
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('APP.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_func = '''@st.cache_data(ttl=60)
+def carregar_resumo_dashboard(data_str, turma="Todas"):
+    """Retorna total de alunos ativos e presenças da data em uma única consulta."""
+    conn = None
+    try:
+        conn = conectar_bd()
+        if not conn:
+            return 0, 0
+        cur = conn.cursor()
+        if turma == "Todas":
+            cur.execute("""
+                SELECT
+                    COUNT(DISTINCT a.codigo) AS total_alunos,
+                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
+                FROM alunos_v2 a
+                LEFT JOIN registros_v2 r
+                  ON r.codigo_aluno = a.codigo AND r.data = %s
+                WHERE a.status = 'ATIVO'
+            """, (data_str,))
+        else:
+            cur.execute("""
+                SELECT
+                    COUNT(DISTINCT a.codigo) AS total_alunos,
+                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
+                FROM alunos_v2 a
+                LEFT JOIN registros_v2 r
+                  ON r.codigo_aluno = a.codigo AND r.data = %s
+                WHERE a.status = 'ATIVO' AND a.turma = %s
+            """, (data_str, turma))
+        row = cur.fetchone() or (0, 0)
+        return int(row[0] or 0), int(row[1] or 0)
+    except Exception:
+        return 0, 0
+    finally:
+        liberar_conn(conn)
+'''
+
+          new_func = '''@st.cache_data(ttl=30)
+def carregar_resumo_dashboard(data_str, turma="Todas"):
+    """Retorna total ativo, pico de presentes e estudantes ainda presentes."""
+    conn = None
+    try:
+        conn = conectar_bd()
+        if not conn:
+            return 0, 0, 0
+        cur = conn.cursor()
+
+        if turma == "Todas":
+            cur.execute("SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO'", ())
+            total_alunos = int(cur.fetchone()[0] or 0)
+            cur.execute("""
+                SELECT r.hora_entrada, r.hora_saida
+                FROM registros_v2 r
+                JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+                WHERE r.data = %s
+                  AND r.tipo_registro = 'PRESENCA'
+                  AND a.status = 'ATIVO'
+            """, (data_str,))
+        else:
+            cur.execute("SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO' AND turma = %s", (turma,))
+            total_alunos = int(cur.fetchone()[0] or 0)
+            cur.execute("""
+                SELECT r.hora_entrada, r.hora_saida
+                FROM registros_v2 r
+                JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+                WHERE r.data = %s
+                  AND r.tipo_registro = 'PRESENCA'
+                  AND a.status = 'ATIVO'
+                  AND a.turma = %s
+            """, (data_str, turma))
+
+        eventos = []
+        presentes_agora = 0
+        for hora_entrada, hora_saida in cur.fetchall():
+            if hora_entrada is None:
+                continue
+            eventos.append((hora_entrada, 1))
+            if hora_saida is not None:
+                eventos.append((hora_saida, -1))
+                presentes_agora -= 1
+            presentes_agora += 1
+
+        # Em empate de horário, entradas são processadas antes das saídas,
+        # evitando subestimar o pico.
+        eventos.sort(key=lambda x: (x[0], -x[1]))
+        ocupacao = 0
+        pico_presentes = 0
+        for _, delta in eventos:
+            ocupacao += delta
+            pico_presentes = max(pico_presentes, ocupacao)
+
+        return total_alunos, pico_presentes, max(presentes_agora, 0)
+    except Exception:
+        return 0, 0, 0
+    finally:
+        liberar_conn(conn)
+'''
+
+          if old_func not in text:
+              raise SystemExit('Função carregar_resumo_dashboard não encontrada; nenhuma alteração foi feita.')
+          text = text.replace(old_func, new_func, 1)
+
+          old_call = 'total_alunos, pres_data = carregar_resumo_dashboard(data_selecionada_str, tf)'
+          new_call = 'total_alunos, pico_presentes, presentes_agora = carregar_resumo_dashboard(data_selecionada_str, tf)'
+          if old_call not in text:
+              raise SystemExit('Chamada do resumo do dashboard não encontrada.')
+          text = text.replace(old_call, new_call, 1)
+
+          text = text.replace('media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%"', 'media_geral_freq = f"{(pico_presentes / total_alunos) * 100:.1f}%"', 1)
+
+          old_cards = '''<div class="metrics-container">
+    <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
+    <div class="metric-card m-presente"><span class="m-val">{pres_data}</span><span class="m-lab">Presentes (Dia)</span></div>
+    <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_data}</span><span class="m-lab">Faltas (Dia)</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência (Dia)</span></div>
+</div>'''
+
+          new_cards = '''<div class="metrics-container metrics-frequency">
+    <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
+    <div class="metric-card m-presente"><span class="m-val">{pico_presentes}</span><span class="m-lab">Pico de Presentes</span></div>
+    <div class="metric-card m-presentes-agora"><span class="m-val">{presentes_agora}</span><span class="m-lab">Ainda Presentes</span></div>
+    <div class="metric-card m-falta"><span class="m-val">{total_alunos-pico_presentes}</span><span class="m-lab">Faltas (Dia)</span></div>
+    <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência (Dia)</span></div>
+</div>'''
+          if old_cards not in text:
+              raise SystemExit('Bloco dos cards não encontrado.')
+          text = text.replace(old_cards, new_cards, 1)
+
+          old_css = '.metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }'
+          new_css = '''.metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
+    .metrics-frequency { grid-template-columns: repeat(5, 1fr); }
+    .m-presentes-agora::before { background: #06b6d4; }'''
+          if old_css not in text:
+              raise SystemExit('CSS dos cards não encontrado.')
+          text = text.replace(old_css, new_css, 1)
+
+          old_media = '@media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }'
+          new_media = '@media (max-width: 1400px) { .metrics-frequency { grid-template-columns: repeat(3, 1fr); } }\n    @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }'
+          if old_media not in text:
+              raise SystemExit('Media query dos cards não encontrada.')
+          text = text.replace(old_media, new_media, 1)
+
+          # Limpa o cache do dashboard imediatamente após registrar uma saída.
+          old_clear = 'contar_presencas_data.clear()\n            carregar_faltas.clear()'
+          new_clear = 'contar_presencas_data.clear()\n            carregar_resumo_dashboard.clear()\n            carregar_faltas.clear()'
+          if old_clear in text:
+              text = text.replace(old_clear, new_clear, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Verificar sintaxe
+        run: python -m py_compile APP.py
+
+      - name: Publicar alteração e remover workflow temporário
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP.py .github/workflows/aplicar_melhoria_presentes.yml
+          git commit -m "Melhora cards de presença - aplicado" || exit 0
+          git push
