@@ -1,7 +1,8 @@
 name: Aplicar menu lateral
 
-# Dispara a aplicação da melhoria no APP.py após qualquer push na main.
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches:
       - main
@@ -11,27 +12,39 @@ permissions:
 
 jobs:
   aplicar:
-    if: "!contains(github.event.head_commit.message, 'menu lateral - aplicado')"
     runs-on: ubuntu-latest
     steps:
       - name: Baixar código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Reorganizar navegação e painel
+      - name: Selecionar branch do código
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.event.pull_request.head.ref }}"
+            git checkout -B "${{ github.event.pull_request.head.ref }}" "origin/${{ github.event.pull_request.head.ref }}"
+          fi
+
+      - name: Aplicar reorganização da navegação
         shell: python
         run: |
           from pathlib import Path
 
-          path = Path('APP.py')
-          text = path.read_text(encoding='utf-8')
+          path = Path("APP.py")
+          text = path.read_text(encoding="utf-8")
 
-          old_config = 'st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")'
-          new_config = 'st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="expanded")'
-          if old_config not in text:
-              raise SystemExit('Configuração de sidebar não encontrada.')
-          text = text.replace(old_config, new_config, 1)
+          if 'menu-header">☰ MENU' in text:
+              print("Menu lateral já está aplicado.")
+          else:
+              old_config = 'st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")'
+              new_config = 'st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="expanded")'
+              if old_config not in text:
+                  raise SystemExit("Configuração de sidebar não encontrada.")
+              text = text.replace(old_config, new_config, 1)
 
-          old_nav = '''abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico", "💬 Satisfação Pública"]
+              old_nav = '''abas_do_sistema = ["📝 Registro", "📊 Gestão Frequência", "🚨 Alertas", "📈 Histórico", "📑 Desempenho Acadêmico", "💬 Satisfação Pública"]
 if eh_admin:
     abas_do_sistema.append("⚙️ Manutenção do Sistema")
 
@@ -43,7 +56,7 @@ aba_atual = st.radio(
     label_visibility="collapsed"
 )'''
 
-          new_nav = '''abas_do_sistema = [
+              new_nav = '''abas_do_sistema = [
     "🏠 Visão Geral",
     "📝 Registro",
     "📊 Gestão Frequência",
@@ -72,18 +85,18 @@ if eh_admin:
     except Exception:
         pass'''
 
-          if old_nav not in text:
-              raise SystemExit('Bloco de navegação principal não encontrado.')
-          text = text.replace(old_nav, new_nav, 1)
+              if old_nav not in text:
+                  raise SystemExit("Bloco de navegação principal não encontrado.")
+              text = text.replace(old_nav, new_nav, 1)
 
-          old_index = 'indice_aba = 0'
-          new_index = '# 0 = Visão Geral; os módulos existentes começam no índice 1.\nindice_aba = 1'
-          if old_index not in text:
-              raise SystemExit('Índice inicial de navegação não encontrado.')
-          text = text.replace(old_index, new_index, 1)
+              old_index = "indice_aba = 0"
+              new_index = "# 0 = Visão Geral; os módulos existentes começam no índice 1.\nindice_aba = 1"
+              if old_index not in text:
+                  raise SystemExit("Índice inicial de navegação não encontrado.")
+              text = text.replace(old_index, new_index, 1)
 
-          css_anchor = '    .top7-details { font-size: 1.8rem !important; color: #64748b; font-weight: 800; background: #e2e8f0; display: inline-block; padding: 0.5rem 1.5rem; border-radius: 30px;}\n'
-          css_insert = '''
+              css_anchor = '    .top7-details { font-size: 1.8rem !important; color: #64748b; font-weight: 800; background: #e2e8f0; display: inline-block; padding: 0.5rem 1.5rem; border-radius: 30px;}\n'
+              css_insert = '''
     /* MENU LATERAL */
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #f8fafc 0%, #eef4fa 100%) !important;
@@ -141,19 +154,29 @@ if eh_admin:
     }
     section[data-testid="stSidebarNav"] { display: none !important; }
 '''
-          if css_anchor not in text:
-              raise SystemExit('Ponto de inserção do CSS não encontrado.')
-          text = text.replace(css_anchor, css_anchor + css_insert, 1)
+              if css_anchor not in text:
+                  raise SystemExit("Ponto de inserção do CSS não encontrado.")
+              text = text.replace(css_anchor, css_anchor + css_insert, 1)
 
-          path.write_text(text, encoding='utf-8')
+              path.write_text(text, encoding="utf-8")
 
-      - name: Verificar sintaxe
+      - name: Validar sintaxe
         run: python -m py_compile APP.py
 
-      - name: Publicar e remover workflow temporário
+      - name: Publicar alteração e remover workflow temporário
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add APP.py .github/workflows/aplicar_menu_lateral.yml
-          git commit -m "Melhora menu lateral - aplicado"
-          git push
+          if git diff --quiet APP.py; then
+            git rm -f .github/workflows/aplicar_menu_lateral_pr.yml || true
+            git add -u .github/workflows/aplicar_menu_lateral_pr.yml
+            git commit -m "Melhora menu lateral - aplicado"
+          else
+            git rm -f .github/workflows/aplicar_menu_lateral_pr.yml || true
+            git add APP.py
+            git commit -m "Melhora menu lateral - aplicado"
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          else
+            git push origin HEAD:main
+          fi
