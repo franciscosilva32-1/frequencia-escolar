@@ -290,14 +290,16 @@ st.markdown("""
     [data-testid="stRadio"] div[role="radiogroup"] > label:hover { border-color: var(--accent) !important; transform: translateY(-2px); }
     .main-title { font-family: 'Inter', sans-serif; font-weight: 900; font-size: clamp(3.5rem, 8vw, 4.8rem); color: var(--primary); text-align: center; margin:0; text-transform: uppercase; letter-spacing: -2px;}
     .sub-title { font-family: 'Inter', sans-serif; font-size: 1.6rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 700;}
-    .metrics-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
-    @media (max-width: 1200px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }
+    .metrics-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
+    @media (max-width: 1400px) { .metrics-container { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 1000px) { .metrics-container { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 800px) { .metrics-container { grid-template-columns: 1fr; } }
     .metric-card { background: white; padding: 2.5rem 1.5rem; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.06); text-align: center; position: relative; overflow: hidden; border: 2px solid #e2e8f0; transition: transform 0.2s ease;}
     .metric-card:hover { transform: translateY(-5px); }
     .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 10px; }
-    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } .m-acad::before { background: #8b5cf6; } .m-satest::before { background: #10b981; } .m-satpais::before { background: #f59e0b; } .m-sateq::before { background: #3b82f6; }
+    .m-total::before { background: #0ea5e9; } .m-presente::before { background: var(--success); } .m-liberado::before { background: #8b5cf6; } .m-falta::before { background: var(--danger); } .m-atraso::before { background: #f59e0b; } .m-acad::before { background: #8b5cf6; } .m-satest::before { background: #10b981; } .m-satpais::before { background: #f59e0b; } .m-sateq::before { background: #3b82f6; }
     .m-val { font-size: 4rem; font-weight: 900; color: #0f172a; display: block; line-height: 1.1; letter-spacing: -2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.05); }
+    .m-current { display: block; margin-top: 0.5rem; font-size: 1.25rem; font-weight: 900; color: #0f766e; letter-spacing: 0.5px; }
     .m-lab { font-size: 1.2rem; font-weight: 900; color: #475569; text-transform: uppercase; letter-spacing: 1px; margin-top: 1rem; display: block; }
     .stTabs [data-baseweb="tab-list"] { gap: 10px; padding-bottom: 0px; flex-wrap: wrap; }
     .stTabs [data-baseweb="tab"] { background-color: #f1f5f9 !important; border: 3px solid #cbd5e1 !important; border-bottom: none !important; border-radius: 18px 18px 0 0 !important; padding: 15px 25px !important; font-size: 1.5rem !important; font-weight: 900 !important; color: #64748b !important; transition: all 0.3s ease !important; }
@@ -397,39 +399,65 @@ def contar_presencas_data(data_str, turma="Todas"):
     except: 
         return 0
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def carregar_resumo_dashboard(data_str, turma="Todas"):
-    """Retorna total de alunos ativos e presenças da data em uma única consulta."""
+    """Retorna total ativo, entradas registradas, liberados antes do horário e presentes atuais."""
     conn = None
     try:
         conn = conectar_bd()
         if not conn:
-            return 0, 0
+            return 0, 0, 0, 0
+
         cur = conn.cursor()
+
+        # Horário padrão da saída escolar. Quando o usuário configura outro
+        # horário na aba de registro, ele fica disponível na sessão.
+        h_limite_saida = st.session_state.get(
+            "h_lim_s_atual",
+            datetime.strptime("17:00", "%H:%M").time()
+        )
+
         if turma == "Todas":
+            cur.execute("SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO'")
+            total_alunos = int(cur.fetchone()[0] or 0)
+
             cur.execute("""
-                SELECT
-                    COUNT(DISTINCT a.codigo) AS total_alunos,
-                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
-                FROM alunos_v2 a
-                LEFT JOIN registros_v2 r
-                  ON r.codigo_aluno = a.codigo AND r.data = %s
-                WHERE a.status = 'ATIVO'
+                SELECT r.codigo_aluno, r.hora_saida
+                FROM registros_v2 r
+                JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+                WHERE r.data = %s
+                  AND r.tipo_registro = 'PRESENCA'
+                  AND a.status = 'ATIVO'
             """, (data_str,))
         else:
+            cur.execute(
+                "SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO' AND turma = %s",
+                (turma,)
+            )
+            total_alunos = int(cur.fetchone()[0] or 0)
+
             cur.execute("""
-                SELECT
-                    COUNT(DISTINCT a.codigo) AS total_alunos,
-                    COUNT(DISTINCT CASE WHEN r.tipo_registro='PRESENCA' THEN r.codigo_aluno END) AS presentes
-                FROM alunos_v2 a
-                LEFT JOIN registros_v2 r
-                  ON r.codigo_aluno = a.codigo AND r.data = %s
-                WHERE a.status = 'ATIVO' AND a.turma = %s
+                SELECT r.codigo_aluno, r.hora_saida
+                FROM registros_v2 r
+                JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+                WHERE r.data = %s
+                  AND r.tipo_registro = 'PRESENCA'
+                  AND a.status = 'ATIVO'
+                  AND a.turma = %s
             """, (data_str, turma))
-        row = cur.fetchone() or (0, 0)
-        return int(row[0] or 0), int(row[1] or 0)
+
+        registros = cur.fetchall()
+
+        entradas = len({row[0] for row in registros})
+        liberados_antes = sum(
+            1 for _, hora_saida in registros
+            if hora_saida is not None and hora_saida < h_limite_saida
+        )
+        presentes_atuais = max(entradas - liberados_antes, 0)
+
+        return total_alunos, entradas, presentes_atuais, liberados_antes
     except Exception:
-        return 0, 0
+        return 0, 0, 0, 0
     finally:
         liberar_conn(conn)
 
@@ -945,6 +973,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
                 disparar_email_background(res[1], res[0], evento_email, h_saida, data)
             conn.commit()
             contar_presencas_data.clear()
+            carregar_resumo_dashboard.clear()
             carregar_faltas.clear()
             return res[0]
         return False
@@ -1334,7 +1363,7 @@ tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + lista_turmas_filtro, key="
 hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
 data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
 
-total_alunos, pres_data = carregar_resumo_dashboard(data_selecionada_str, tf)
+total_alunos, pres_data, pres_atual, liberados_antes = carregar_resumo_dashboard(data_selecionada_str, tf)
 if total_alunos > 0:
     media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%"
 else:
@@ -1369,7 +1398,12 @@ else:
 st.markdown(f'''
 <div class="metrics-container">
     <div class="metric-card m-total"><span class="m-val">{total_alunos}</span><span class="m-lab">Total Alunos</span></div>
-    <div class="metric-card m-presente"><span class="m-val">{pres_data}</span><span class="m-lab">Presentes (Dia)</span></div>
+    <div class="metric-card m-presente">
+        <span class="m-val">{pres_data}</span>
+        <span class="m-current">AGORA: {pres_atual}</span>
+        <span class="m-lab">Presentes (Dia)</span>
+    </div>
+    <div class="metric-card m-liberado"><span class="m-val">{liberados_antes}</span><span class="m-lab">Liberados Antes do Horário</span></div>
     <div class="metric-card m-falta"><span class="m-val">{total_alunos-pres_data}</span><span class="m-lab">Faltas (Dia)</span></div>
     <div class="metric-card m-atraso"><span class="m-val">{media_geral_freq}</span><span class="m-lab">Frequência (Dia)</span></div>
 </div>
@@ -1431,6 +1465,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
         st.session_state.h_lim_e_atual = h_lim_e
     with c_cfg2:
         h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
+        st.session_state.h_lim_s_atual = h_lim_s
     
     with st.form("form_controle_dias"):
         st.markdown("📅 **Ativação do Calendário:**")
