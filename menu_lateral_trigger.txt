@@ -1,0 +1,1 @@
+Acionar aplicação segura do menu lateral.
