@@ -1,5 +1,6 @@
 name: Aplicar menu lateral
 
+# Dispara a aplicação da melhoria no APP.py após qualquer push na main.
 on:
   push:
     branches:
