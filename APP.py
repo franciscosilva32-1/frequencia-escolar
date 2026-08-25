@@ -22,6 +22,7 @@ import tempfile
 import numpy as np
 import zipfile
 import requests
+from urllib.parse import quote
 
 try:
     from fpdf import FPDF
@@ -211,14 +212,6 @@ def enviar_email_smtp(server, email_destino, nome_aluno, evento, horario, data):
 def enviar_emails_em_lote(email_lista):
     """
     Envia mensagens de forma sequencial usando uma única conexão SMTP.
-
-    Cada item deve ser:
-        (nome, email, horario, data, evento)
-
-    Para preservar compatibilidade com chamadas antigas, também aceita
-    "PRESENTE" e "ATRASO" como quinto elemento e os converte para
-    "ENTRADA" e "ENTRADA COM ATRASO".
-
     Retorna (enviados, falhas, indisponivel).
     """
     enviados = []
@@ -255,7 +248,7 @@ def enviar_emails_em_lote(email_lista):
             SENHA_APP_ESCOLA
         )
 
-        for nome, email, horario, data, evento in email_lista:
+        for nome, email, horario, data, status in email_lista:
             email_limpo = str(email).strip()
 
             if not email_limpo:
@@ -264,12 +257,11 @@ def enviar_emails_em_lote(email_lista):
                 )
                 continue
 
-            # Normaliza apenas chamadas antigas. Para saídas, o evento
-            # "SAÍDA ANTECIPADA" ou "SAÍDA REGULAR" é preservado exatamente.
-            if evento == "PRESENTE":
-                evento = "ENTRADA"
-            elif evento == "ATRASO":
-                evento = "ENTRADA COM ATRASO"
+            evento = (
+                "ENTRADA"
+                if status == "PRESENTE"
+                else "ENTRADA COM ATRASO"
+            )
 
             try:
                 enviar_email_smtp(
@@ -368,7 +360,7 @@ def disparar_email_background(
                 email_destino,
                 horario,
                 data,
-                evento
+                "ATRASO" if "ATRASO" in evento else "PRESENTE"
             )
         ]
     )
@@ -404,7 +396,7 @@ def inicializar_tabelas():
         return
     try:
         cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT, telefone_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
@@ -417,7 +409,12 @@ def inicializar_tabelas():
                 atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.commit() 
+        conn.commit()
+        try:
+            cur.execute("ALTER TABLE alunos_v2 ADD COLUMN telefone_responsavel TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
         try: 
             cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN area TEXT DEFAULT 'GERAL'")
             conn.commit()
@@ -636,6 +633,45 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
+# 6.0 FUNÇÕES DE COMUNICAÇÃO VIA WHATSAPP
+# ------------------------------------------------------------
+def normalizar_telefone_whatsapp(valor):
+    if valor is None or pd.isna(valor):
+        return ""
+    texto = str(valor).strip()
+    if not texto:
+        return ""
+    digitos = re.sub(r"\D", "", texto)
+    if digitos.startswith("00"):
+        digitos = digitos[2:]
+    if digitos.startswith("55") and len(digitos) in (12, 13):
+        return digitos
+    if len(digitos) in (10, 11):
+        return "55" + digitos
+    return digitos
+
+
+def gerar_link_whatsapp(telefone, mensagem):
+    numero = normalizar_telefone_whatsapp(telefone)
+    if not numero or len(numero) < 12 or len(numero) > 13:
+        return None
+    return f"https://web.whatsapp.com/send?phone={numero}&text={quote(mensagem)}"
+
+
+def mensagem_falta_whatsapp(nome_aluno, data):
+    try:
+        data_f = datetime.strptime(str(data), "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        data_f = str(data)
+    return (
+        f"Olá, família!\n\n"
+        f"Informamos que o estudante {nome_aluno} não registrou presença "
+        f"na escola no dia {data_f}.\n\n"
+        f"Caso a falta já esteja justificada, desconsidere esta mensagem.\n\n"
+        f"Atenciosamente,\nEquipe Jansen Veloso."
+    )
+
+# ------------------------------------------------------------
 # 6. LÓGICA DE NEGÓCIO E CACHES
 # ------------------------------------------------------------
 def _fetch_dia_letivo_db(data_atual):
@@ -671,7 +707,7 @@ def _fetch_alunos_db():
     if not conn: 
         raise ConnectionError("Sem conexão com o banco de dados")
     try:
-        return pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
+        return pd.read_sql("SELECT codigo, nome, turma, status, email_responsavel, telefone_responsavel FROM alunos_v2 ORDER BY turma, nome", conn)
     finally:
         liberar_conn(conn)
 
@@ -687,7 +723,7 @@ def carregar_alunos():
     except Exception:
         if 'ultimo_df_alunos_ok' in st.session_state:
             return st.session_state['ultimo_df_alunos_ok']
-        return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel'])
+        return pd.DataFrame(columns=['codigo','nome','turma','status','email_responsavel','telefone_responsavel'])
 
 @st.cache_data(ttl=60)
 def contar_presencas_data(data_str, turma="Todas"):
@@ -1341,18 +1377,13 @@ def processar_entrada_df(df, data_base, hora_limite):
 
         nome, email = alunos[codigo]
         if email:
-            evento_entrada = (
-                "ENTRADA"
-                if status == "PRESENTE"
-                else "ENTRADA COM ATRASO"
-            )
             emails_para_disparar.append(
                 (
                     nome,
                     email,
                     hora_real_str,
                     data.strftime("%Y-%m-%d"),
-                    evento_entrada
+                    status
                 )
             )
 
@@ -1457,22 +1488,13 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
             return False
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
-            if res[1]:
+            if res[1]: 
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 if h_s_obj < h_limite_saida:
                     evento_email = "SAÍDA ANTECIPADA"
                 else:
                     evento_email = "SAÍDA REGULAR"
-
-                # Passa explicitamente o evento de saída para que a
-                # mensagem não seja confundida com uma entrada.
-                disparar_email_background(
-                    res[1],
-                    res[0],
-                    evento_email,
-                    h_saida,
-                    data
-                )
+                disparar_email_background(res[1], res[0], evento_email, h_saida, data)
             conn.commit()
             contar_presencas_data.clear()
             carregar_resumo_dashboard.clear()
@@ -1875,6 +1897,7 @@ abas_do_sistema = [
     "🏠 Visão Geral",
     "📝 Registro",
     "📊 Gestão Frequência",
+    "📱 Comunicação de Falta",
     "🚨 Alertas",
     "📈 Histórico",
     "📑 Desempenho Acadêmico",
@@ -2242,25 +2265,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
                 
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-                mot = st.selectbox(
-                    "Motivo da Liberação Antecipada",
-                    [
-                        "Febre",
-                        "Dor de cabeça",
-                        "Gripe",
-                        "Tontura",
-                        "Dor de cólica",
-                        "Dor de barriga",
-                        "Sinusite/Rinite",
-                        "Alergia",
-                        "Vômito",
-                        "Solicitação do responsável",
-                        "Consulta Médica",
-                        "Liberação da Direção",
-                        "Término do Turno",
-                        "Outros"
-                    ]
-                )
+                mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
                 
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
@@ -2845,7 +2850,7 @@ if eh_admin:
         st.code(link_completo, language="text")
         st.markdown("---")
 
-        st.subheader("📧 Gerir E-mails e Alunos")
+        st.subheader("📧📱 Gerir E-mails, WhatsApp e Alunos")
 
         total_alunos_cadastrados = int(len(df_alunos)) if not df_alunos.empty else 0
 
@@ -2857,11 +2862,23 @@ if eh_admin:
                 .str.strip()
             )
             total_emails_cadastrados = int((emails_validos != "").sum())
+            telefones_validos = (
+                df_alunos["telefone_responsavel"]
+                .fillna("")
+                .astype(str)
+                .apply(normalizar_telefone_whatsapp)
+            )
+            total_telefones_cadastrados = int((telefones_validos != "").sum())
         else:
             total_emails_cadastrados = 0
+            total_telefones_cadastrados = 0
 
         total_sem_email = max(
             total_alunos_cadastrados - total_emails_cadastrados,
+            0
+        )
+        total_sem_telefone = max(
+            total_alunos_cadastrados - total_telefones_cadastrados,
             0
         )
 
@@ -2869,6 +2886,11 @@ if eh_admin:
         c_email1.metric("👥 Total de alunos", total_alunos_cadastrados)
         c_email2.metric("✉️ E-mails cadastrados", total_emails_cadastrados)
         c_email3.metric("⚠️ Sem e-mail", total_sem_email)
+
+        c_tel1, c_tel2, c_tel3 = st.columns(3)
+        c_tel1.metric("📱 WhatsApp cadastrados", total_telefones_cadastrados)
+        c_tel2.metric("⚠️ Sem WhatsApp", total_sem_telefone)
+        c_tel3.metric("📨 Contatos completos", int(min(total_emails_cadastrados, total_telefones_cadastrados)))
 
         st.markdown("---")
 
@@ -2890,6 +2912,7 @@ if eh_admin:
 
             codigo_email_selecionado = ""
             email_atual_responsavel = ""
+            telefone_atual_responsavel = ""
 
             if al_email:
                 codigo_email_selecionado = al_email.split(" - ")[0].strip()
@@ -2901,14 +2924,15 @@ if eh_admin:
                     ]
 
                     if not linha_aluno_email.empty:
-                        valor_email = linha_aluno_email.iloc[0].get(
-                            "email_responsavel",
-                            ""
-                        )
+                        valor_email = linha_aluno_email.iloc[0].get("email_responsavel", "")
+                        valor_telefone = linha_aluno_email.iloc[0].get("telefone_responsavel", "")
                         if pd.notna(valor_email):
                             email_atual_responsavel = str(valor_email).strip()
+                        if pd.notna(valor_telefone):
+                            telefone_atual_responsavel = str(valor_telefone).strip()
                 except Exception:
                     email_atual_responsavel = ""
+                    telefone_atual_responsavel = ""
 
             novo_e = st.text_input(
                 "E-mail do Responsável",
@@ -2916,37 +2940,47 @@ if eh_admin:
                 key=f"campo_email_{codigo_email_selecionado or 'vazio'}"
             )
 
+            novo_tel = st.text_input(
+                "📱 WhatsApp / Celular do Responsável",
+                value=telefone_atual_responsavel,
+                placeholder="(98) 99999-9999",
+                key=f"campo_telefone_{codigo_email_selecionado or 'vazio'}"
+            )
+
             if email_atual_responsavel:
-                st.caption(
-                    "📌 E-mail atualmente cadastrado. Você pode editá-lo antes de salvar."
-                )
+                st.caption("📌 E-mail atualmente cadastrado. Você pode editá-lo antes de salvar.")
             elif al_email:
-                st.caption(
-                    "⚠️ Este aluno ainda não possui e-mail cadastrado."
-                )
+                st.caption("⚠️ Este aluno ainda não possui e-mail cadastrado.")
+
+            if telefone_atual_responsavel:
+                st.caption("📌 WhatsApp atualmente cadastrado. Você pode editá-lo antes de salvar.")
+            elif al_email:
+                st.caption("⚠️ Este aluno ainda não possui WhatsApp/celular cadastrado.")
 
             if st.button(
-                "SALVAR E-MAIL",
-                key="salvar_email_responsavel"
-            ) and al_email and novo_e.strip():
+                "SALVAR CONTATOS",
+                key="salvar_contatos_responsavel"
+            ) and al_email:
                 conn = conectar_bd()
                 if conn:
                     try:
                         cur = conn.cursor()
+                        telefone_normalizado = normalizar_telefone_whatsapp(novo_tel)
                         cur.execute(
-                            "UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s",
+                            "UPDATE alunos_v2 SET email_responsavel=%s, telefone_responsavel=%s WHERE codigo=%s",
                             (
                                 novo_e.strip().lower(),
+                                telefone_normalizado or None,
                                 codigo_email_selecionado
                             )
                         )
                         conn.commit()
                         _carregar_alunos_cache.clear()
-                        st.success("E-mail atualizado com sucesso!")
+                        st.success("E-mail e WhatsApp atualizados com sucesso!")
                         st.rerun()
                     except Exception as e:
                         conn.rollback()
-                        st.error(f"Erro ao salvar: {e}")
+                        st.error(f"Erro ao salvar os contatos: {e}")
                     finally:
                         liberar_conn(conn)
         
