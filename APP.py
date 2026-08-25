@@ -818,6 +818,91 @@ def normalizar_colunas(df):
     return df
 
 # ------------------------------------------------------------
+# 6.3A FUNÇÃO ROBUSTA PARA PRESERVAR A HORA REAL DA FONTE
+# ------------------------------------------------------------
+def normalizar_hora_entrada(valor):
+    """
+    Converte a hora ORIGINAL da planilha/CSV para datetime.time,
+    preservando a hora real registrada na fonte.
+
+    Aceita:
+      - datetime.time
+      - datetime.datetime
+      - strings HH:MM:SS / HH:MM
+      - strings com data + hora
+      - valores numéricos de fração do dia usados por planilhas
+
+    Nunca usa a hora atual do servidor como fallback.
+    Se não for possível interpretar o valor, retorna None.
+    """
+    if valor is None or pd.isna(valor):
+        return None
+
+    if isinstance(valor, datetime):
+        return valor.time().replace(microsecond=0)
+
+    # pandas Timestamp / datetime-like
+    if hasattr(valor, "to_pydatetime"):
+        try:
+            return valor.to_pydatetime().time().replace(microsecond=0)
+        except Exception:
+            pass
+
+    # datetime.time
+    try:
+        from datetime import time as dt_time
+        if isinstance(valor, dt_time):
+            return valor.replace(microsecond=0)
+    except Exception:
+        pass
+
+    # Valores numéricos: planilhas podem representar hora como fração do dia.
+    if isinstance(valor, (int, float, np.integer, np.floating)):
+        try:
+            numero = float(valor)
+            if 0 <= numero < 1:
+                total_segundos = round(numero * 24 * 60 * 60)
+                total_segundos %= 24 * 60 * 60
+                horas = total_segundos // 3600
+                minutos = (total_segundos % 3600) // 60
+                segundos = total_segundos % 60
+                return dt_time(horas, minutos, segundos)
+        except Exception:
+            pass
+
+    texto = str(valor).strip()
+    if not texto:
+        return None
+
+    # Remove espaços e normaliza separadores comuns.
+    texto = texto.replace("T", " ").strip()
+
+    formatos = (
+        "%H:%M:%S",
+        "%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+    )
+
+    for formato in formatos:
+        try:
+            return datetime.strptime(texto, formato).time().replace(microsecond=0)
+        except ValueError:
+            continue
+
+    # Último fallback: parsing controlado pelo pandas, mas sem jamais usar NOW().
+    try:
+        parsed = pd.to_datetime(texto, errors="coerce")
+        if not pd.isna(parsed):
+            return parsed.to_pydatetime().time().replace(microsecond=0)
+    except Exception:
+        pass
+
+    return None
+
+# ------------------------------------------------------------
 # 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (SEM EXPANDER ANINHADO)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
@@ -920,10 +1005,9 @@ def ler_planilha_google(url, data_base):
             # Se não tem coluna DATA, assume que todos são da data base
             df['DATA'] = data_base
 
-        # Converte a hora
-        # Tenta primeiro com formato HH:MM:SS, depois HH:MM
-        df['HORA'] = pd.to_datetime(df['HORA'], format='%H:%M:%S', errors='coerce').dt.time
-        df['HORA'] = df['HORA'].fillna(pd.to_datetime(df['HORA'], format='%H:%M', errors='coerce').dt.time)
+        # Preserva explicitamente a HORA ORIGINAL da planilha.
+        # IMPORTANTE: nunca substituir por obter_hora_atual() ou pela hora do upload.
+        df['HORA'] = df['HORA'].apply(normalizar_hora_entrada)
         df = df.dropna(subset=['HORA'])
 
         # Remove linhas com código vazio ou nulo
@@ -960,34 +1044,70 @@ def ler_planilha_google(url, data_base):
 # 6.4 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
 # ------------------------------------------------------------
 def processar_entrada_df(df, data_base, hora_limite):
+    """
+    Processa os registros mantendo SEMPRE a hora real informada pela fonte.
+
+    A hora de entrada gravada no banco vem exclusivamente da coluna HORA
+    da planilha/CSV. A hora do upload do arquivo ou a hora atual do servidor
+    jamais é utilizada para preencher hora_entrada.
+    """
     if df.empty:
         return 0, 0, 0, ["Nenhum registro encontrado para a data selecionada."]
 
+    if 'HORA' not in df.columns:
+        return 0, 0, 0, ["A coluna HORA DE ENTRADA não foi encontrada nos dados."]
+
+    # Reinterpreta a coluna uma segunda vez de forma controlada. Isso evita
+    # que diferenças entre CSV e Google Sheets alterem a hora real.
+    df = df.copy()
+    df['HORA'] = df['HORA'].apply(normalizar_hora_entrada)
+
+    linhas_invalidas_hora = df['HORA'].isna()
+    erros = []
+    if linhas_invalidas_hora.any():
+        for idx in df.index[linhas_invalidas_hora]:
+            erros.append(
+                f"Linha {idx+1}: horário de entrada inválido ou ausente; registro ignorado."
+            )
+        df = df.loc[~linhas_invalidas_hora].copy()
+
+    if df.empty:
+        return 0, 0, 0, erros or ["Nenhum registro com horário de entrada válido foi encontrado."]
+
     conn = conectar_bd()
     if not conn:
-        return 0, 0, 0, ["Erro de conexão com o banco de dados."]
+        return 0, 0, 0, erros + ["Erro de conexão com o banco de dados."]
+
     try:
         cur = conn.cursor()
-        cur.execute("SELECT codigo, nome, email_responsavel FROM alunos_v2 WHERE status = 'ATIVO'")
+        cur.execute(
+            "SELECT codigo, nome, email_responsavel FROM alunos_v2 WHERE status = 'ATIVO'"
+        )
         alunos = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
     finally:
         liberar_conn(conn)
 
     if not alunos:
-        return 0, 0, 0, ["Nenhum aluno ativo encontrado."]
+        return 0, 0, 0, erros + ["Nenhum aluno ativo encontrado."]
 
     datas_unicas = df['DATA'].unique()
     registros_existentes = set()
+
     if len(datas_unicas) > 0:
         conn2 = conectar_bd()
         if conn2:
             try:
                 cur2 = conn2.cursor()
                 placeholders = ','.join(['%s'] * len(datas_unicas))
-                cur2.execute(f"""
-                    SELECT codigo_aluno, data FROM registros_v2
-                    WHERE data IN ({placeholders}) AND tipo_registro = 'PRESENCA'
-                """, list(datas_unicas))
+                cur2.execute(
+                    f"""
+                    SELECT codigo_aluno, data
+                    FROM registros_v2
+                    WHERE data IN ({placeholders})
+                      AND tipo_registro = 'PRESENCA'
+                    """,
+                    list(datas_unicas)
+                )
                 for row in cur2.fetchall():
                     registros_existentes.add((row[0], row[1]))
             finally:
@@ -995,27 +1115,50 @@ def processar_entrada_df(df, data_base, hora_limite):
 
     registros_para_inserir = []
     emails_para_disparar = []
-    erros = []
 
     for idx, row in df.iterrows():
         codigo = str(row['CODIGO']).strip().upper()
         data = row['DATA']
-        hora = row['HORA']
+        hora_real = row['HORA']
 
         if codigo not in alunos:
-            erros.append(f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo.")
+            erros.append(
+                f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo."
+            )
             continue
 
         if (codigo, data) in registros_existentes:
-            erros.append(f"Linha {idx+1}: Aluno {codigo} já possui registro de entrada nessa data.")
+            erros.append(
+                f"Linha {idx+1}: Aluno {codigo} já possui registro de entrada nessa data."
+            )
             continue
 
-        status = 'PRESENTE' if hora <= hora_limite else 'ATRASO'
-        registros_para_inserir.append((codigo, data, hora.strftime("%H:%M:%S"), status, 'PRESENCA'))
+        # A classificação é baseada na HORA REAL DA PLANILHA.
+        status = 'PRESENTE' if hora_real <= hora_limite else 'ATRASO'
+
+        # A mesma HORA REAL é a que será gravada em hora_entrada.
+        hora_real_str = hora_real.strftime("%H:%M:%S")
+        registros_para_inserir.append(
+            (
+                codigo,
+                data,
+                hora_real_str,
+                status,
+                'PRESENCA'
+            )
+        )
 
         nome, email = alunos[codigo]
         if email:
-            emails_para_disparar.append((nome, email, hora.strftime("%H:%M:%S"), data.strftime("%Y-%m-%d"), status))
+            emails_para_disparar.append(
+                (
+                    nome,
+                    email,
+                    hora_real_str,
+                    data.strftime("%Y-%m-%d"),
+                    status
+                )
+            )
 
     salvos = 0
     if registros_para_inserir:
@@ -1023,21 +1166,51 @@ def processar_entrada_df(df, data_base, hora_limite):
         if conn3:
             try:
                 cur3 = conn3.cursor()
-                execute_values(cur3,
-                    "INSERT INTO registros_v2 (codigo_aluno, data, hora_entrada, status_entrada, tipo_registro) VALUES %s ON CONFLICT DO NOTHING",
+                execute_values(
+                    cur3,
+                    """
+                    INSERT INTO registros_v2 (
+                        codigo_aluno,
+                        data,
+                        hora_entrada,
+                        status_entrada,
+                        tipo_registro
+                    )
+                    VALUES %s
+                    ON CONFLICT DO NOTHING
+                    """,
                     registros_para_inserir
                 )
                 salvos = cur3.rowcount
                 conn3.commit()
             except Exception as e:
-                erros.append(f"Erro na inserção em lote: {e}")
+                erros.append(
+                    f"Erro na inserção em lote: {e}"
+                )
+                try:
+                    conn3.rollback()
+                except Exception:
+                    pass
             finally:
                 liberar_conn(conn3)
 
     emails_disparados = 0
     for nome, email, hora_str, data_str, status in emails_para_disparar:
-        evento = "ENTRADA" if status == 'PRESENTE' else "ENTRADA COM ATRASO"
-        threading.Thread(target=disparar_email_background, args=(email, nome, evento, hora_str, data_str)).start()
+        evento = (
+            "ENTRADA"
+            if status == 'PRESENTE'
+            else "ENTRADA COM ATRASO"
+        )
+        threading.Thread(
+            target=disparar_email_background,
+            args=(
+                email,
+                nome,
+                evento,
+                hora_str,
+                data_str
+            )
+        ).start()
         emails_disparados += 1
 
     return len(df), salvos, emails_disparados, erros
@@ -1802,6 +1975,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                 conteudo_str = conteudo.decode('latin-1')
                             df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=';')
                             df_processar = normalizar_colunas(df_processar)
+                            if 'HORA' in df_processar.columns:
+                                df_processar['HORA'] = df_processar['HORA'].apply(normalizar_hora_entrada)
                             if 'DATA' not in df_processar.columns:
                                 df_processar['DATA'] = data_base
                             else:
