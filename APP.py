@@ -2434,6 +2434,133 @@ if aba_atual == abas_do_sistema[indice_aba]:
         st.error("Sem conexão com o banco de dados.")
 indice_aba += 1
 
+
+# ================================================================
+# COMUNICAÇÃO DE FALTA — WHATSAPP WEB
+# ================================================================
+if aba_atual == abas_do_sistema[indice_aba]:
+    st.title("📱 Comunicação de Falta")
+    st.info(
+        f"Os estudantes listados abaixo não possuem registro de presença "
+        f"na data selecionada ({data_f_global.strftime('%d/%m/%Y')}). "
+        "O botão abre o WhatsApp Web com a mensagem já preparada."
+    )
+
+    data_comunicacao = data_f_global.strftime("%Y-%m-%d")
+    turma_comunicacao = tf
+
+    conn_com = conectar_bd()
+    df_faltosos_com = pd.DataFrame()
+
+    if conn_com:
+        try:
+            params_com = [data_comunicacao]
+            query_com = """
+                SELECT
+                    a.codigo,
+                    a.nome,
+                    a.turma,
+                    a.telefone_responsavel,
+                    r.motivo_saida
+                FROM alunos_v2 a
+                LEFT JOIN registros_v2 r
+                    ON a.codigo = r.codigo_aluno
+                    AND r.data = %s
+                    AND r.tipo_registro = 'FALTA'
+                WHERE a.status = 'ATIVO'
+                  AND a.codigo NOT IN (
+                      SELECT codigo_aluno
+                      FROM registros_v2
+                      WHERE data = %s
+                        AND tipo_registro = 'PRESENCA'
+                  )
+            """
+            params_com.append(data_comunicacao)
+
+            if turma_comunicacao != "Todas":
+                query_com += " AND a.turma = %s"
+                params_com.append(turma_comunicacao)
+
+            query_com += " ORDER BY a.turma, a.nome"
+
+            df_faltosos_com = pd.read_sql_query(
+                query_com,
+                conn_com,
+                params=params_com
+            )
+        except Exception as e:
+            st.error(f"Não foi possível carregar os estudantes faltosos: {e}")
+        finally:
+            liberar_conn(conn_com)
+
+    if df_faltosos_com.empty:
+        st.success("✅ Nenhum estudante faltoso encontrado para os filtros selecionados.")
+    else:
+        total_faltosos_com = len(df_faltosos_com)
+        total_com_whatsapp = int(
+            df_faltosos_com["telefone_responsavel"]
+            .fillna("")
+            .astype(str)
+            .apply(normalizar_telefone_whatsapp)
+            .ne("")
+            .sum()
+        )
+        total_sem_whatsapp = total_faltosos_com - total_com_whatsapp
+
+        c_com1, c_com2, c_com3 = st.columns(3)
+        c_com1.metric("❌ Faltosos", total_faltosos_com)
+        c_com2.metric("📱 Com WhatsApp", total_com_whatsapp)
+        c_com3.metric("⚠️ Sem WhatsApp", total_sem_whatsapp)
+
+        st.markdown("---")
+
+        for idx, row in enumerate(df_faltosos_com.to_dict("records"), start=1):
+            nome_f = str(row.get("nome") or "").strip()
+            turma_f = str(row.get("turma") or "").strip()
+            telefone_f = normalizar_telefone_whatsapp(
+                row.get("telefone_responsavel", "")
+            )
+            motivo_f = str(row.get("motivo_saida") or "").strip()
+
+            col_nome, col_status, col_acao = st.columns([4, 2, 2])
+
+            with col_nome:
+                st.markdown(
+                    f"**{idx}. {nome_f}**  \n"
+                    f"Turma: **{turma_f}**"
+                )
+
+            with col_status:
+                if motivo_f:
+                    st.warning(f"Falta registrada: {motivo_f}")
+                else:
+                    st.error("Falta sem justificativa")
+
+            with col_acao:
+                if telefone_f:
+                    mensagem_f = mensagem_falta_whatsapp(
+                        nome_f,
+                        data_comunicacao
+                    )
+                    link_f = gerar_link_whatsapp(
+                        telefone_f,
+                        mensagem_f
+                    )
+                    if link_f:
+                        st.link_button(
+                            "📱 ENVIAR WHATSAPP",
+                            link_f,
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("Número inválido")
+                else:
+                    st.warning("Sem WhatsApp cadastrado")
+
+            st.markdown("---")
+
+indice_aba += 1
+
 # ------------------------------------------------------------
 # DEMAIS ABAS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
 # ------------------------------------------------------------
