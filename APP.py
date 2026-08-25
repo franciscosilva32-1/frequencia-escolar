@@ -211,6 +211,14 @@ def enviar_email_smtp(server, email_destino, nome_aluno, evento, horario, data):
 def enviar_emails_em_lote(email_lista):
     """
     Envia mensagens de forma sequencial usando uma única conexão SMTP.
+
+    Cada item deve ser:
+        (nome, email, horario, data, evento)
+
+    Para preservar compatibilidade com chamadas antigas, também aceita
+    "PRESENTE" e "ATRASO" como quinto elemento e os converte para
+    "ENTRADA" e "ENTRADA COM ATRASO".
+
     Retorna (enviados, falhas, indisponivel).
     """
     enviados = []
@@ -247,7 +255,7 @@ def enviar_emails_em_lote(email_lista):
             SENHA_APP_ESCOLA
         )
 
-        for nome, email, horario, data, status in email_lista:
+        for nome, email, horario, data, evento in email_lista:
             email_limpo = str(email).strip()
 
             if not email_limpo:
@@ -256,11 +264,12 @@ def enviar_emails_em_lote(email_lista):
                 )
                 continue
 
-            evento = (
-                "ENTRADA"
-                if status == "PRESENTE"
-                else "ENTRADA COM ATRASO"
-            )
+            # Normaliza apenas chamadas antigas. Para saídas, o evento
+            # "SAÍDA ANTECIPADA" ou "SAÍDA REGULAR" é preservado exatamente.
+            if evento == "PRESENTE":
+                evento = "ENTRADA"
+            elif evento == "ATRASO":
+                evento = "ENTRADA COM ATRASO"
 
             try:
                 enviar_email_smtp(
@@ -359,7 +368,7 @@ def disparar_email_background(
                 email_destino,
                 horario,
                 data,
-                "ATRASO" if "ATRASO" in evento else "PRESENTE"
+                evento
             )
         ]
     )
@@ -1332,13 +1341,18 @@ def processar_entrada_df(df, data_base, hora_limite):
 
         nome, email = alunos[codigo]
         if email:
+            evento_entrada = (
+                "ENTRADA"
+                if status == "PRESENTE"
+                else "ENTRADA COM ATRASO"
+            )
             emails_para_disparar.append(
                 (
                     nome,
                     email,
                     hora_real_str,
                     data.strftime("%Y-%m-%d"),
-                    status
+                    evento_entrada
                 )
             )
 
@@ -1443,13 +1457,22 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
             return False
         cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
         if cur.rowcount > 0:
-            if res[1]: 
+            if res[1]:
                 h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
                 if h_s_obj < h_limite_saida:
                     evento_email = "SAÍDA ANTECIPADA"
                 else:
                     evento_email = "SAÍDA REGULAR"
-                disparar_email_background(res[1], res[0], evento_email, h_saida, data)
+
+                # Passa explicitamente o evento de saída para que a
+                # mensagem não seja confundida com uma entrada.
+                disparar_email_background(
+                    res[1],
+                    res[0],
+                    evento_email,
+                    h_saida,
+                    data
+                )
             conn.commit()
             contar_presencas_data.clear()
             carregar_resumo_dashboard.clear()
@@ -2219,7 +2242,25 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
                 
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-                mot = st.selectbox("Motivo", ["Mal-estar", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
+                mot = st.selectbox(
+                    "Motivo da Liberação Antecipada",
+                    [
+                        "Febre",
+                        "Dor de cabeça",
+                        "Gripe",
+                        "Tontura",
+                        "Dor de cólica",
+                        "Dor de barriga",
+                        "Sinusite/Rinite",
+                        "Alergia",
+                        "Vômito",
+                        "Solicitação do responsável",
+                        "Consulta Médica",
+                        "Liberação da Direção",
+                        "Término do Turno",
+                        "Outros"
+                    ]
+                )
                 
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
