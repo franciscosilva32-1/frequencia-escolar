@@ -154,39 +154,221 @@ DICIONARIO_PERGUNTAS_SATISFACAO = {
     "Servidor": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Condições de Trabalho", "Clima Organizacional"]
 }
 
-def disparar_email_background(email_destino, nome_aluno, evento, horario, data):
-    try: 
-        data_f = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except: 
-        data_f = data
+def preparar_mensagem_email(nome_aluno, evento, horario, data):
+    try:
+        data_f = datetime.strptime(str(data), "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        data_f = str(data)
+
     if evento.startswith("ENTRADA"):
-        assunto = f"🏫 Aviso de Entrada - Jansen Veloso"
-        if "ATRASO" in evento: 
-            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO na escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
-        else: 
-            texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou ENTRADA na escola hoje ({data_f}) às {horario} (Dentro do horário regular).\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        assunto = "🏫 Aviso de Entrada - Jansen Veloso"
+        if "ATRASO" in evento:
+            texto = (
+                f"Olá, família!\n\n"
+                f"Informamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO "
+                f"na escola hoje ({data_f}) às {horario}.\n\n"
+                f"Atenciosamente,\nEquipe Jansen Veloso."
+            )
+        else:
+            texto = (
+                f"Olá, família!\n\n"
+                f"Informamos que o estudante {nome_aluno} registrou ENTRADA "
+                f"na escola hoje ({data_f}) às {horario} "
+                f"(Dentro do horário regular).\n\n"
+                f"Atenciosamente,\nEquipe Jansen Veloso."
+            )
     elif evento == "SAÍDA REGULAR":
-        assunto = f"🏫 Aviso de Saída - Jansen Veloso"
-        texto = f"Olá, família!\n\nInformamos que o estudante {nome_aluno} registrou SAÍDA REGULAR da escola hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        assunto = "🏫 Aviso de Saída - Jansen Veloso"
+        texto = (
+            f"Olá, família!\n\n"
+            f"Informamos que o estudante {nome_aluno} registrou SAÍDA REGULAR "
+            f"da escola hoje ({data_f}) às {horario}.\n\n"
+            f"Atenciosamente,\nEquipe Jansen Veloso."
+        )
     else:
-        assunto = f"🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
-        texto = f"⚠️ ATENÇÃO!\n\nInformamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA hoje ({data_f}) às {horario}.\n\nAtenciosamente,\nEquipe Jansen Veloso."
+        assunto = "🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
+        texto = (
+            f"⚠️ ATENÇÃO!\n\n"
+            f"Informamos que o estudante {nome_aluno} registrou uma SAÍDA ANTECIPADA "
+            f"hoje ({data_f}) às {horario}.\n\n"
+            f"Atenciosamente,\nEquipe Jansen Veloso."
+        )
+    return assunto, texto
+
+
+def enviar_email_smtp(server, email_destino, nome_aluno, evento, horario, data):
+    assunto, texto = preparar_mensagem_email(
+        nome_aluno, evento, horario, data
+    )
     msg = MIMEMultipart()
-    msg['From'] = EMAIL_ESCOLA
-    msg['To'] = email_destino
-    msg['Subject'] = assunto
-    msg.attach(MIMEText(texto, 'plain'))
-    def enviar():
-        if ATIVAR_EMAILS and EMAIL_ESCOLA and SENHA_APP_ESCOLA:
+    msg["From"] = EMAIL_ESCOLA
+    msg["To"] = email_destino
+    msg["Subject"] = assunto
+    msg.attach(MIMEText(texto, "plain"))
+    server.send_message(msg)
+
+
+def enviar_emails_em_lote(email_lista):
+    """
+    Envia mensagens de forma sequencial usando uma única conexão SMTP.
+    Retorna (enviados, falhas, indisponivel).
+    """
+    enviados = []
+    falhas = []
+
+    if not email_lista:
+        return enviados, falhas, False
+
+    if not ATIVAR_EMAILS:
+        return enviados, [
+            (item[0], item[1], "Envio de e-mails está desativado.")
+            for item in email_lista
+        ], True
+
+    if not EMAIL_ESCOLA or not SENHA_APP_ESCOLA:
+        return enviados, [
+            (item[0], item[1], "EMAIL_ESCOLA ou SENHA_APP_ESCOLA não configurados.")
+            for item in email_lista
+        ], True
+
+    server = None
+
+    try:
+        server = smtplib.SMTP(
+            "smtp.gmail.com",
+            587,
+            timeout=30
+        )
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(
+            EMAIL_ESCOLA,
+            SENHA_APP_ESCOLA
+        )
+
+        for nome, email, horario, data, status in email_lista:
+            email_limpo = str(email).strip()
+
+            if not email_limpo:
+                falhas.append(
+                    (nome, email_limpo, "E-mail vazio.")
+                )
+                continue
+
+            evento = (
+                "ENTRADA"
+                if status == "PRESENTE"
+                else "ENTRADA COM ATRASO"
+            )
+
             try:
-                server = smtplib.SMTP('smtp.gmail.com', 587)
-                server.starttls()
-                server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
-                server.send_message(msg)
+                enviar_email_smtp(
+                    server,
+                    email_limpo,
+                    nome,
+                    evento,
+                    horario,
+                    data
+                )
+                enviados.append(
+                    (nome, email_limpo)
+                )
+
+            except smtplib.SMTPRecipientsRefused as e:
+                falhas.append(
+                    (
+                        nome,
+                        email_limpo,
+                        f"Destinatário recusado pelo servidor: {e}"
+                    )
+                )
+
+            except smtplib.SMTPException as e:
+                falhas.append(
+                    (
+                        nome,
+                        email_limpo,
+                        f"Erro SMTP: {e}"
+                    )
+                )
+
+            except Exception as e:
+                falhas.append(
+                    (
+                        nome,
+                        email_limpo,
+                        f"Erro inesperado: {e}"
+                    )
+                )
+
+    except smtplib.SMTPAuthenticationError as e:
+        motivo = (
+            "Falha de autenticação no Gmail. "
+            "Verifique EMAIL_ESCOLA e SENHA_APP_ESCOLA. "
+            f"Detalhe: {e}"
+        )
+        falhas = [
+            (nome, email, motivo)
+            for nome, email, *_ in email_lista
+        ]
+
+    except smtplib.SMTPException as e:
+        motivo = (
+            f"Não foi possível estabelecer o envio SMTP: {e}"
+        )
+        falhas = [
+            (nome, email, motivo)
+            for nome, email, *_ in email_lista
+        ]
+
+    except Exception as e:
+        motivo = (
+            f"Falha ao iniciar o serviço de e-mail: {e}"
+        )
+        falhas = [
+            (nome, email, motivo)
+            for nome, email, *_ in email_lista
+        ]
+
+    finally:
+        if server is not None:
+            try:
                 server.quit()
-            except: 
+            except Exception:
                 pass
-    threading.Thread(target=enviar).start()
+
+    return enviados, falhas, False
+
+
+def disparar_email_background(
+    email_destino,
+    nome_aluno,
+    evento,
+    horario,
+    data
+):
+    """
+    Mantida para preservar o disparo individual de notificações
+    de saída. O envio é síncrono nesta chamada e retorna seu resultado.
+    """
+    enviados, falhas, indisponivel = enviar_emails_em_lote(
+        [
+            (
+                nome_aluno,
+                email_destino,
+                horario,
+                data,
+                "ATRASO" if "ATRASO" in evento else "PRESENTE"
+            )
+        ]
+    )
+    return (
+        len(enviados) == 1,
+        falhas[0][2] if falhas else None,
+        indisponivel
+    )
+
 
 @st.cache_resource 
 def carregar_logo_base64():
@@ -1194,24 +1376,32 @@ def processar_entrada_df(df, data_base, hora_limite):
             finally:
                 liberar_conn(conn3)
 
-    emails_disparados = 0
-    for nome, email, hora_str, data_str, status in emails_para_disparar:
-        evento = (
-            "ENTRADA"
-            if status == 'PRESENTE'
-            else "ENTRADA COM ATRASO"
+    emails_enviados = []
+    falhas_email = []
+    smtp_indisponivel = False
+
+    if emails_para_disparar:
+        (
+            emails_enviados,
+            falhas_email,
+            smtp_indisponivel
+        ) = enviar_emails_em_lote(
+            emails_para_disparar
         )
-        threading.Thread(
-            target=disparar_email_background,
-            args=(
-                email,
-                nome,
-                evento,
-                hora_str,
-                data_str
-            )
-        ).start()
-        emails_disparados += 1
+
+    emails_disparados = len(emails_enviados)
+
+    if smtp_indisponivel:
+        erros.append(
+            "O serviço de e-mail não está configurado ou "
+            "não foi possível iniciar o envio."
+        )
+
+    for nome_falha, email_falha, motivo_falha in falhas_email:
+        erros.append(
+            f"E-mail NÃO enviado para {nome_falha} <{email_falha}>: "
+            f"{motivo_falha}"
+        )
 
     return len(df), salvos, emails_disparados, erros
 
@@ -2615,29 +2805,108 @@ if eh_admin:
         st.markdown("---")
 
         st.subheader("📧 Gerir E-mails e Alunos")
+
+        total_alunos_cadastrados = int(len(df_alunos)) if not df_alunos.empty else 0
+
+        if not df_alunos.empty:
+            emails_validos = (
+                df_alunos["email_responsavel"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+            total_emails_cadastrados = int((emails_validos != "").sum())
+        else:
+            total_emails_cadastrados = 0
+
+        total_sem_email = max(
+            total_alunos_cadastrados - total_emails_cadastrados,
+            0
+        )
+
+        c_email1, c_email2, c_email3 = st.columns(3)
+        c_email1.metric("👥 Total de alunos", total_alunos_cadastrados)
+        c_email2.metric("✉️ E-mails cadastrados", total_emails_cadastrados)
+        c_email3.metric("⚠️ Sem e-mail", total_sem_email)
+
+        st.markdown("---")
+
         col1, col2 = st.columns(2)
         
         with col1:
             lista_emails_aluno = [""]
             if not df_alunos.empty:
-                lista_emails_aluno += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
-                
-            al_email = st.selectbox("Selecione o Aluno", lista_emails_aluno)
-            novo_e = st.text_input("Novo E-mail do Responsável")
-            
-            if st.button("SALVAR E-MAIL") and al_email and novo_e:
+                lista_emails_aluno += [
+                    f"{r['codigo']} - {r['nome']} ({r['turma']})"
+                    for _, r in df_alunos.iterrows()
+                ]
+
+            al_email = st.selectbox(
+                "Selecione o Aluno",
+                lista_emails_aluno,
+                key="selecionar_aluno_email"
+            )
+
+            codigo_email_selecionado = ""
+            email_atual_responsavel = ""
+
+            if al_email:
+                codigo_email_selecionado = al_email.split(" - ")[0].strip()
+
+                try:
+                    linha_aluno_email = df_alunos[
+                        df_alunos["codigo"].astype(str).str.upper()
+                        == codigo_email_selecionado.upper()
+                    ]
+
+                    if not linha_aluno_email.empty:
+                        valor_email = linha_aluno_email.iloc[0].get(
+                            "email_responsavel",
+                            ""
+                        )
+                        if pd.notna(valor_email):
+                            email_atual_responsavel = str(valor_email).strip()
+                except Exception:
+                    email_atual_responsavel = ""
+
+            novo_e = st.text_input(
+                "E-mail do Responsável",
+                value=email_atual_responsavel,
+                key=f"campo_email_{codigo_email_selecionado or 'vazio'}"
+            )
+
+            if email_atual_responsavel:
+                st.caption(
+                    "📌 E-mail atualmente cadastrado. Você pode editá-lo antes de salvar."
+                )
+            elif al_email:
+                st.caption(
+                    "⚠️ Este aluno ainda não possui e-mail cadastrado."
+                )
+
+            if st.button(
+                "SALVAR E-MAIL",
+                key="salvar_email_responsavel"
+            ) and al_email and novo_e.strip():
                 conn = conectar_bd()
                 if conn:
                     try:
                         cur = conn.cursor()
-                        cur.execute("UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s", (novo_e.lower(), al_email.split(" - ")[0]))
+                        cur.execute(
+                            "UPDATE alunos_v2 SET email_responsavel=%s WHERE codigo=%s",
+                            (
+                                novo_e.strip().lower(),
+                                codigo_email_selecionado
+                            )
+                        )
                         conn.commit()
                         _carregar_alunos_cache.clear()
-                        st.success("Atualizado com sucesso!")
-                    except Exception as e: 
+                        st.success("E-mail atualizado com sucesso!")
+                        st.rerun()
+                    except Exception as e:
                         conn.rollback()
                         st.error(f"Erro ao salvar: {e}")
-                    finally: 
+                    finally:
                         liberar_conn(conn)
         
         with col2:
