@@ -2158,7 +2158,6 @@ indice_aba = 1
 # =====================================================================
 # POP-UP DE ENTRADA RÁPIDA
 # =====================================================================
-@st.dialog("🚀 MODO DE ENTRADA RÁPIDA (100% OFFLINE)", width="large")
 def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
     """
     Registra a entrada imediatamente no Supabase/BD.
@@ -2677,9 +2676,9 @@ if aba_atual == abas_do_sistema[indice_aba]:
         query += " AND a.turma = %s"
         params.append(t_f_gestao)
 
-    if s_f == "Presentes":
+    if s_f == "PRESENTES":
         query += " AND r.tipo_registro = 'PRESENCA'"
-    elif s_f == "Ausentes":
+    elif s_f == "AUSENTES":
         query += " AND (r.tipo_registro = 'FALTA' OR r.tipo_registro IS NULL)"
     elif s_f == "COM ATRASO":
         query += " AND r.tipo_registro = 'PRESENCA' AND r.status_entrada = 'ATRASO'"
