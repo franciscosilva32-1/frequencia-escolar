@@ -207,6 +207,20 @@ def preparar_mensagem_email(nome_aluno, evento, horario, data):
 
 
 def enviar_email_smtp(server, email_destino, nome_aluno, evento, horario, data):
+    """
+    Monta e envia uma mensagem individual.
+
+    Importante: smtplib.send_message() retorna um dicionário com os
+    destinatários que foram recusados pelo servidor SMTP. Um retorno
+    não vazio NÃO é considerado envio bem-sucedido.
+
+    Retorna:
+        {}  -> servidor aceitou o destinatário;
+        dict -> destinatários recusados pelo servidor.
+
+    O evento recebido é preservado integralmente. Assim, uma saída
+    antecipada nunca pode ser convertida acidentalmente em entrada.
+    """
     assunto, texto = preparar_mensagem_email(
         nome_aluno, evento, horario, data
     )
@@ -214,14 +228,39 @@ def enviar_email_smtp(server, email_destino, nome_aluno, evento, horario, data):
     msg["From"] = EMAIL_ESCOLA
     msg["To"] = email_destino
     msg["Subject"] = assunto
-    msg.attach(MIMEText(texto, "plain"))
-    server.send_message(msg)
+    msg.attach(MIMEText(texto, "plain", "utf-8"))
+
+    recusados = server.send_message(msg)
+    return recusados or {}
+
+
+def formatar_recusa_smtp(recusados):
+    """Converte o retorno de send_message em texto legível."""
+    if not recusados:
+        return ""
+
+    partes = []
+    for destinatario, detalhe in recusados.items():
+        try:
+            codigo, mensagem = detalhe
+            partes.append(
+                f"{destinatario}: código {codigo} - {mensagem}"
+            )
+        except Exception:
+            partes.append(f"{destinatario}: {detalhe}")
+
+    return "; ".join(partes)
 
 
 def enviar_emails_em_lote(email_lista):
     """
     Envia mensagens de forma sequencial usando uma única conexão SMTP.
+
     Retorna (enviados, falhas, indisponivel).
+
+    'enviados' contém SOMENTE destinatários que não foram recusados pelo
+    servidor SMTP. Isso evita contabilizar como enviado um e-mail que o
+    servidor rejeitou durante o comando RCPT TO/SMTP.
     """
     enviados = []
     falhas = []
@@ -258,7 +297,7 @@ def enviar_emails_em_lote(email_lista):
         )
 
         for nome, email, horario, data, status in email_lista:
-            email_limpo = str(email).strip()
+            email_limpo = str(email or "").strip()
 
             if not email_limpo:
                 falhas.append(
@@ -267,17 +306,23 @@ def enviar_emails_em_lote(email_lista):
                 continue
 
             status_normalizado = str(status or "").strip().upper()
+
             if status_normalizado == "PRESENTE":
                 evento = "ENTRADA"
             elif status_normalizado == "ATRASO":
                 evento = "ENTRADA COM ATRASO"
             else:
-                raise ValueError(
-                    f"Status de entrada inválido para e-mail: {status_normalizado!r}"
+                falhas.append(
+                    (
+                        nome,
+                        email_limpo,
+                        f"Status de entrada inválido para e-mail: {status_normalizado!r}"
+                    )
                 )
+                continue
 
             try:
-                enviar_email_smtp(
+                recusados = enviar_email_smtp(
                     server,
                     email_limpo,
                     nome,
@@ -285,9 +330,20 @@ def enviar_emails_em_lote(email_lista):
                     horario,
                     data
                 )
-                enviados.append(
-                    (nome, email_limpo)
-                )
+
+                if recusados:
+                    falhas.append(
+                        (
+                            nome,
+                            email_limpo,
+                            "Destinatário recusado pelo servidor SMTP: "
+                            + formatar_recusa_smtp(recusados)
+                        )
+                    )
+                else:
+                    enviados.append(
+                        (nome, email_limpo)
+                    )
 
             except smtplib.SMTPRecipientsRefused as e:
                 falhas.append(
@@ -395,14 +451,23 @@ def disparar_email_background(
             SENHA_APP_ESCOLA,
         )
 
-        enviar_email_smtp(
+        email_limpo = str(email_destino).strip()
+        recusados = enviar_email_smtp(
             server,
-            str(email_destino).strip(),
+            email_limpo,
             nome_aluno,
             evento,
             horario,
             data,
         )
+
+        if recusados:
+            return (
+                False,
+                "Destinatário recusado pelo servidor SMTP: "
+                + formatar_recusa_smtp(recusados),
+                False,
+            )
 
         return True, None, False
 
@@ -1760,6 +1825,9 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
         liberar_conn(conn)
 
     # O banco já foi confirmado. Agora envia o evento correto e imutável.
+    # A mensagem é enviada em segundo plano para não tornar o registro de
+    # saída dependente da latência do SMTP. A função ainda valida recusas
+    # retornadas pelo servidor antes de considerar o envio bem-sucedido.
     if email_responsavel:
         sucesso_email, erro_email, _ = disparar_email_background(
             email_responsavel,
@@ -2579,7 +2647,18 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             with st.spinner(f"Processando registros da {fonte}..."):
                                 hora_limite = st.session_state.get('h_lim_e_atual', datetime.strptime("07:30", "%H:%M").time())
                                 total, salvos, emails, erros = processar_entrada_df(df_processar, data_base, hora_limite)
-                                st.success(f"✅ Processamento concluído: {salvos} registros salvos, {emails} e-mails disparados (de {total} linhas lidas).")
+                                if emails:
+                                    st.success(
+                                        f"✅ Processamento concluído: {salvos} registros salvos; "
+                                        f"{emails} e-mails aceitos pelo servidor SMTP "
+                                        f"(de {total} linhas lidas)."
+                                    )
+                                else:
+                                    st.success(
+                                        f"✅ Processamento concluído: {salvos} registros salvos; "
+                                        f"nenhum e-mail foi aceito pelo servidor SMTP "
+                                        f"(de {total} linhas lidas)."
+                                    )
                                 if erros:
                                     st.markdown("### ⚠️ Detalhes dos erros")
                                     for e in erros:
