@@ -2652,7 +2652,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
             index_turma = lista_turmas_gestao.index(tf)
         t_f_gestao = st.selectbox("Turma (Frequência)", lista_turmas_gestao, index=index_turma, key="filtro_turma_gestao")
     with c3:
-        s_f = st.selectbox("Status", ["TODOS", "PRESENTES", "AUSENTES", "COM ATRASO", "FALTA JUSTIFICADA"], key="filtro_status_gestao")
+        s_f = st.selectbox("Status", ["TODOS", "PRESENTE", "AUSENTE", "COM ATRASO", "FALTA JUSTIFICADA"], key="filtro_status_gestao")
     with c4:
         b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
 
