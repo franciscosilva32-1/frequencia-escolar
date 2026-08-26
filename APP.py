@@ -156,28 +156,34 @@ DICIONARIO_PERGUNTAS_SATISFACAO = {
 }
 
 def preparar_mensagem_email(nome_aluno, evento, horario, data):
+    """Prepara a mensagem usando um evento explícito e validado."""
     try:
         data_f = datetime.strptime(str(data), "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
-        data_f = str(data)
+        try:
+            data_f = pd.to_datetime(data).strftime("%d/%m/%Y")
+        except Exception:
+            data_f = str(data)
 
-    if evento.startswith("ENTRADA"):
+    evento = str(evento or "").strip().upper()
+
+    if evento == "ENTRADA":
         assunto = "🏫 Aviso de Entrada - Jansen Veloso"
-        if "ATRASO" in evento:
-            texto = (
-                f"Olá, família!\n\n"
-                f"Informamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO "
-                f"na escola hoje ({data_f}) às {horario}.\n\n"
-                f"Atenciosamente,\nEquipe Jansen Veloso."
-            )
-        else:
-            texto = (
-                f"Olá, família!\n\n"
-                f"Informamos que o estudante {nome_aluno} registrou ENTRADA "
-                f"na escola hoje ({data_f}) às {horario} "
-                f"(Dentro do horário regular).\n\n"
-                f"Atenciosamente,\nEquipe Jansen Veloso."
-            )
+        texto = (
+            f"Olá, família!\n\n"
+            f"Informamos que o estudante {nome_aluno} registrou ENTRADA "
+            f"na escola hoje ({data_f}) às {horario} "
+            f"(Dentro do horário regular).\n\n"
+            f"Atenciosamente,\nEquipe Jansen Veloso."
+        )
+    elif evento == "ENTRADA COM ATRASO":
+        assunto = "🏫 Aviso de Entrada - Jansen Veloso"
+        texto = (
+            f"Olá, família!\n\n"
+            f"Informamos que o estudante {nome_aluno} registrou ENTRADA COM ATRASO "
+            f"na escola hoje ({data_f}) às {horario}.\n\n"
+            f"Atenciosamente,\nEquipe Jansen Veloso."
+        )
     elif evento == "SAÍDA REGULAR":
         assunto = "🏫 Aviso de Saída - Jansen Veloso"
         texto = (
@@ -186,7 +192,7 @@ def preparar_mensagem_email(nome_aluno, evento, horario, data):
             f"da escola hoje ({data_f}) às {horario}.\n\n"
             f"Atenciosamente,\nEquipe Jansen Veloso."
         )
-    else:
+    elif evento == "SAÍDA ANTECIPADA":
         assunto = "🏫 Aviso de SAÍDA ANTECIPADA - Jansen Veloso"
         texto = (
             f"⚠️ ATENÇÃO!\n\n"
@@ -194,6 +200,9 @@ def preparar_mensagem_email(nome_aluno, evento, horario, data):
             f"hoje ({data_f}) às {horario}.\n\n"
             f"Atenciosamente,\nEquipe Jansen Veloso."
         )
+    else:
+        raise ValueError(f"Evento de e-mail inválido: {evento!r}")
+
     return assunto, texto
 
 
@@ -257,11 +266,15 @@ def enviar_emails_em_lote(email_lista):
                 )
                 continue
 
-            evento = (
-                "ENTRADA"
-                if status == "PRESENTE"
-                else "ENTRADA COM ATRASO"
-            )
+            status_normalizado = str(status or "").strip().upper()
+            if status_normalizado == "PRESENTE":
+                evento = "ENTRADA"
+            elif status_normalizado == "ATRASO":
+                evento = "ENTRADA COM ATRASO"
+            else:
+                raise ValueError(
+                    f"Status de entrada inválido para e-mail: {status_normalizado!r}"
+                )
 
             try:
                 enviar_email_smtp(
@@ -1648,34 +1661,123 @@ def ir_para_fila_offline(cod, data, h_at, status):
     return f"FILA OFFLINE ({cod})"
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
-    conn = conectar_bd()
-    if not conn: 
+    """
+    Registra a saída, confirma a persistência no banco e só então
+    envia o e-mail EXATO correspondente à saída.
+    """
+    codigo = str(cod or "").strip().upper()
+    if not codigo:
         return False
+
+    conn = conectar_bd()
+    if not conn:
+        return False
+
+    nome_aluno = None
+    email_responsavel = None
+    evento_email = None
+    hora_saida_str = None
+
     try:
         cur = conn.cursor()
-        cur.execute("SELECT nome, email_responsavel FROM alunos_v2 WHERE codigo = %s", (cod,))
+
+        cur.execute(
+            """
+            SELECT nome, email_responsavel
+            FROM alunos_v2
+            WHERE UPPER(TRIM(codigo)) = %s
+            LIMIT 1
+            """,
+            (codigo,),
+        )
         res = cur.fetchone()
-        if not res: 
+        if not res:
+            conn.rollback()
             return False
-        cur.execute("UPDATE registros_v2 SET hora_saida=%s, motivo_saida=%s, pais_informados=%s WHERE codigo_aluno=%s AND data=%s AND tipo_registro='PRESENCA'", (h_saida, motivo, pais, cod, data))
-        if cur.rowcount > 0:
-            if res[1]: 
-                h_s_obj = datetime.strptime(h_saida, "%H:%M:%S").time()
-                if h_s_obj < h_limite_saida:
-                    evento_email = "SAÍDA ANTECIPADA"
-                else:
-                    evento_email = "SAÍDA REGULAR"
-                disparar_email_background(res[1], res[0], evento_email, h_saida, data)
-            conn.commit()
-            contar_presencas_data.clear()
-            carregar_resumo_dashboard.clear()
-            carregar_faltas.clear()
-            return res[0]
+
+        nome_aluno, email_responsavel = res
+
+        try:
+            h_s_obj = (
+                h_saida
+                if hasattr(h_saida, "hour")
+                else datetime.strptime(str(h_saida), "%H:%M:%S").time()
+            )
+        except Exception:
+            h_s_obj = datetime.strptime(str(h_saida)[:8], "%H:%M:%S").time()
+
+        hora_saida_str = h_s_obj.strftime("%H:%M:%S")
+        evento_email = (
+            "SAÍDA ANTECIPADA"
+            if h_s_obj < h_limite_saida
+            else "SAÍDA REGULAR"
+        )
+
+        cur.execute(
+            """
+            UPDATE registros_v2
+               SET hora_saida = %s,
+                   motivo_saida = %s,
+                   pais_informados = %s
+             WHERE codigo_aluno = %s
+               AND data = %s
+               AND tipo_registro = 'PRESENCA'
+            RETURNING id, hora_saida
+            """,
+            (hora_saida_str, motivo, pais, codigo, data),
+        )
+        alterado = cur.fetchone()
+        if not alterado:
+            conn.rollback()
+            return False
+
+        conn.commit()
+
+        # Confirmação pós-commit: a saída realmente ficou persistida.
+        cur.execute(
+            """
+            SELECT id, hora_saida
+            FROM registros_v2
+            WHERE codigo_aluno = %s
+              AND data = %s
+              AND tipo_registro = 'PRESENCA'
+            LIMIT 1
+            """,
+            (codigo, data),
+        )
+        confirmado = cur.fetchone()
+        if not confirmado or confirmado[1] is None:
+            return False
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"Erro ao registrar saída: {e}")
         return False
-    except Exception: 
-        return False
-    finally: 
+    finally:
         liberar_conn(conn)
+
+    # O banco já foi confirmado. Agora envia o evento correto e imutável.
+    if email_responsavel:
+        sucesso_email, erro_email, _ = disparar_email_background(
+            email_responsavel,
+            nome_aluno,
+            evento_email,
+            hora_saida_str,
+            data,
+        )
+        if not sucesso_email:
+            print(
+                f"Falha ao enviar {evento_email} para {email_responsavel}: {erro_email}"
+            )
+
+    contar_presencas_data.clear()
+    carregar_resumo_dashboard.clear()
+    carregar_faltas.clear()
+    return nome_aluno
+
 
 def importar_csv_desempenho(file, ano, periodo, area, turma):
     conteudo_bytes = file.read()
@@ -2159,152 +2261,120 @@ indice_aba = 1
 # POP-UP DE ENTRADA RÁPIDA
 # =====================================================================
 def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
-    """
-    Registra a entrada imediatamente no Supabase/BD.
+    """Grava e confirma a entrada do estudante diretamente no PostgreSQL."""
+    codigo = str(codigo or "").strip().upper()
+    if not codigo:
+        return False, "Código do estudante não informado."
 
-    Diferentemente da antiga fila offline, não guarda o registro em
-    st.session_state. A entrada é persistida no momento do registro.
-    """
-    codigo = str(codigo).strip().upper()
+    # Garante tipos consistentes para o PostgreSQL.
+    try:
+        data_db = data if hasattr(data, "year") else datetime.strptime(str(data), "%Y-%m-%d").date()
+    except Exception as e:
+        return False, f"Data inválida: {e}"
 
+    try:
+        hora_db = hora_entrada if hasattr(hora_entrada, "hour") else normalizar_hora_entrada(hora_entrada)
+        limite_db = hora_limite if hasattr(hora_limite, "hour") else normalizar_hora_entrada(hora_limite)
+        if hora_db is None or limite_db is None:
+            return False, "Horário de entrada inválido."
+    except Exception as e:
+        return False, f"Horário inválido: {e}"
+
+    status = "PRESENTE" if hora_db <= limite_db else "ATRASO"
+    hora_str = hora_db.strftime("%H:%M:%S")
     conn = conectar_bd()
     if not conn:
         return False, "Não foi possível conectar ao banco de dados."
 
+    email_responsavel = None
+    nome_aluno = None
     try:
         cur = conn.cursor()
 
         cur.execute(
             """
-            SELECT
-                nome,
-                email_responsavel
+            SELECT nome, email_responsavel
             FROM alunos_v2
-            WHERE codigo = %s
-              AND status = 'ATIVO'
+            WHERE UPPER(TRIM(codigo)) = %s
+              AND UPPER(TRIM(status)) = 'ATIVO'
+            LIMIT 1
             """,
             (codigo,),
         )
-
         aluno = cur.fetchone()
-
         if not aluno:
-            return (
-                False,
-                f"Código {codigo} não encontrado ou aluno inativo.",
-            )
+            conn.rollback()
+            return False, f"Código {codigo} não encontrado ou aluno inativo."
 
         nome_aluno, email_responsavel = aluno
 
-        cur.execute(
-            """
-            SELECT
-                hora_entrada,
-                status_entrada
-            FROM registros_v2
-            WHERE codigo_aluno = %s
-              AND data = %s
-              AND tipo_registro = 'PRESENCA'
-            """,
-            (codigo, data),
-        )
-
-        registro_existente = cur.fetchone()
-
-        if registro_existente:
-            conn.rollback()
-            hora_existente, status_existente = registro_existente
-            hora_existente_str = (
-                hora_existente.strftime("%H:%M:%S")
-                if hora_existente
-                else "--:--:--"
-            )
-            return (
-                False,
-                (
-                    f"{nome_aluno} já possui entrada registrada hoje "
-                    f"às {hora_existente_str} ({status_existente})."
-                ),
-            )
-
-        status = (
-            "PRESENTE"
-            if hora_entrada <= hora_limite
-            else "ATRASO"
-        )
-
-        hora_str = hora_entrada.strftime("%H:%M:%S")
-
+        # Grava a entrada. Se já existir uma presença para a mesma data,
+        # atualiza o registro em vez de simplesmente descartá-lo.
         cur.execute(
             """
             INSERT INTO registros_v2 (
-                codigo_aluno,
-                data,
-                hora_entrada,
-                status_entrada,
-                tipo_registro
+                codigo_aluno, data, hora_entrada, status_entrada, tipo_registro
             )
-            VALUES (
-                %s,
-                %s,
-                %s,
-                %s,
-                'PRESENCA'
-            )
+            VALUES (%s, %s, %s, %s, 'PRESENCA')
+            ON CONFLICT (codigo_aluno, data, tipo_registro)
+            DO UPDATE SET
+                hora_entrada = EXCLUDED.hora_entrada,
+                status_entrada = EXCLUDED.status_entrada
+            RETURNING id
             """,
-            (
-                codigo,
-                data,
-                hora_str,
-                status,
-            ),
+            (codigo, data_db, hora_db, status),
         )
-
+        registro_id = cur.fetchone()[0]
         conn.commit()
+
+        # Confirma no próprio banco que o registro realmente ficou persistido.
+        cur.execute(
+            """
+            SELECT id, status_entrada, hora_entrada
+            FROM registros_v2
+            WHERE id = %s
+              AND codigo_aluno = %s
+              AND data = %s
+              AND tipo_registro = 'PRESENCA'
+            """,
+            (registro_id, codigo, data_db),
+        )
+        confirmado = cur.fetchone()
+
+        if not confirmado:
+            return False, "O banco não confirmou a gravação da entrada."
+
+        _, status_confirmado, hora_confirmada = confirmado
+        hora_confirmada_str = (
+            hora_confirmada.strftime("%H:%M:%S") if hora_confirmada else hora_str
+        )
 
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
-        return (
-            False,
-            f"Erro ao registrar entrada: {e}",
-        )
+        return False, f"Erro ao registrar entrada no banco: {e}"
     finally:
         liberar_conn(conn)
 
-    # Atualiza os indicadores imediatamente.
+    # Limpa somente os caches que dependem da frequência.
     contar_presencas_data.clear()
     carregar_resumo_dashboard.clear()
     carregar_faltas.clear()
 
-    # Mantém o envio de e-mail, mas não bloqueia a confirmação da entrada.
     if email_responsavel:
-        evento = (
-            "ENTRADA"
-            if status == "PRESENTE"
-            else "ENTRADA COM ATRASO"
-        )
-
+        evento = "ENTRADA" if status_confirmado == "PRESENTE" else "ENTRADA COM ATRASO"
         threading.Thread(
             target=disparar_email_background,
-            args=(
-                email_responsavel,
-                nome_aluno,
-                evento,
-                hora_str,
-                data,
-            ),
+            args=(email_responsavel, nome_aluno, evento, hora_confirmada_str, data_db),
             daemon=True,
         ).start()
 
-    return (
-        True,
-        f"{nome_aluno} | {status} | {hora_str}",
-    )
+    return True, f"{nome_aluno} | {status_confirmado} | {hora_confirmada_str}"
 
 
+@st.dialog("🚀 MODO DE ENTRADA RÁPIDA", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
     st.markdown(
         "<p style='text-align:center; color:#64748b;'>"
@@ -2314,61 +2384,45 @@ def popup_entrada_rapida(data_hoje, hora_limite):
         unsafe_allow_html=True,
     )
 
-    gerar_camera(
-        "Entrada",
-        "REGISTRAR",
-        "cam_popup",
-    )
+    gerar_camera("Entrada", "REGISTRAR", "cam_popup")
 
-    with st.form(
-        "f_popup",
-        clear_on_submit=True,
-    ):
+    with st.form("f_popup", clear_on_submit=False):
         cod_en = st.text_input(
             "Código do Estudante",
             placeholder="Bipe o cartão ou digite manualmente...",
+            key="codigo_entrada_popup",
+        )
+        enviar = st.form_submit_button("REGISTRAR", use_container_width=True)
+
+    if enviar:
+        if not cod_en or not cod_en.strip():
+            st.warning("Digite ou bipe um código de estudante.")
+            return
+
+        agora = obter_hora_atual()
+        sucesso, mensagem = registrar_entrada_direta(
+            cod_en.strip(),
+            data_hoje,
+            agora.time().replace(microsecond=0),
+            hora_limite,
         )
 
-        if (
-            st.form_submit_button(
-                "REGISTRAR",
-                use_container_width=True,
+        if sucesso:
+            st.success(f"✅ Entrada registrada: {mensagem}")
+            st.markdown(
+                """
+                <script>
+                    var utterance = new SpeechSynthesisUtterance("BEM-VINDO, ESTUDANTE!");
+                    utterance.lang = 'pt-BR';
+                    utterance.rate = 1.2;
+                    window.speechSynthesis.speak(utterance);
+                </script>
+                """,
+                unsafe_allow_html=True,
             )
-            and cod_en
-        ):
-            agora = obter_hora_atual()
+        else:
+            st.error(f"⚠️ {mensagem}")
 
-            sucesso, mensagem = registrar_entrada_direta(
-                cod_en,
-                data_hoje,
-                agora.time().replace(microsecond=0),
-                hora_limite,
-            )
-
-            if sucesso:
-                st.success(
-                    f"✅ Entrada registrada diretamente: {mensagem}"
-                )
-
-                st.markdown(
-                    """
-                    <script>
-                        var utterance =
-                            new SpeechSynthesisUtterance(
-                                "BEM-VINDO, ESTUDANTE!"
-                            );
-                        utterance.lang = 'pt-BR';
-                        utterance.rate = 1.2;
-                        window.speechSynthesis.speak(utterance);
-                    </script>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                # Pequena atualização para refletir os cards.
-                st.rerun()
-            else:
-                st.error(f"⚠️ {mensagem}")
 
 # =====================================================================
 
@@ -2652,7 +2706,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
             index_turma = lista_turmas_gestao.index(tf)
         t_f_gestao = st.selectbox("Turma (Frequência)", lista_turmas_gestao, index=index_turma, key="filtro_turma_gestao")
     with c3:
-        s_f = st.selectbox("Status", ["TODOS", "PRESENTE", "AUSENTE", "COM ATRASO", "FALTA JUSTIFICADA"], key="filtro_status_gestao")
+        s_f = st.selectbox("Status", ["TODOS", "PRESENTES", "AUSENTES", "COM ATRASO", "FALTA JUSTIFICADA"], key="filtro_status_gestao")
     with c4:
         b_f = st.text_input("Buscar Nome", key="busca_nome_gestao")
 
