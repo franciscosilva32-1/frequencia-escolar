@@ -2265,7 +2265,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
                 
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-                mot = st.selectbox("Motivo", [“Febre”, “Dor de cabeça”, “Gripe”, “Tontura”, “Dor de cólica”, “Dor de barriga”, “Sinusite/Rinite”, “Alergia”, “Vômito”, “Solicitação do responsável”, "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
+                mot = st.selectbox("Motivo", ["Febre", "Dor de cabeça", "Gripe", "Tontura", "Dor de cólica", "Dor de barriga", "Sinusite-Rinite", "Alergia", "Vômito", "Solicitação do responsável", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
                 
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
