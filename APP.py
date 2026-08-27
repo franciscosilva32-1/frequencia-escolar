@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+FUSO_BRASILIA = timezone(timedelta(hours=-3))
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_values
@@ -40,8 +41,6 @@ except ImportError:
 # ------------------------------------------------------------
 st.set_page_config(page_title="Centro Educa Mais Jansen Veloso", page_icon="🏫", layout="wide", initial_sidebar_state="expanded")
 
-if 'fila_offline' not in st.session_state:
-    st.session_state.fila_offline = []
 if 'pesquisa_enviada' not in st.session_state:
     st.session_state.pesquisa_enviada = False
 
@@ -54,8 +53,8 @@ if not cookies.ready():
 # 2. BANCO DE DADOS
 # ------------------------------------------------------------
 DATABASE_URL = st.secrets.get("DATABASE_URL")
-SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "admin123")
-SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin123")
+SENHA_OPERADOR = st.secrets.get("SENHA_OPERADOR", "")
+SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "")
 
 @st.cache_resource(ttl=600)
 def get_connection_pool():
@@ -118,8 +117,8 @@ def liberar_conn(conn):
 # ------------------------------------------------------------
 # 3. FUNÇÕES DE SUPORTE
 # ------------------------------------------------------------
-def obter_hora_atual(): 
-    return datetime.now(timezone.utc) - timedelta(hours=3)
+def obter_hora_atual():
+    return datetime.now(FUSO_BRASILIA)
 
 def data_formatada_ptbr():
     dt = obter_hora_atual()
@@ -792,7 +791,7 @@ st.markdown("""
     .info-panel-title { font-size: 2.45rem !important; font-weight: 900 !important; margin: 0; letter-spacing: -.5px; }
     .info-panel-subtitle { font-size: 1.15rem !important; margin: 7px 0 0 0; opacity: .92; font-weight: 700; }
     .info-filter-card { background: #ffffff; border: 2px solid #dbe4ee; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(15,23,42,.06); margin-bottom: 20px; }
-    .info-section { border-radius: 22px; padding: 20px; background: #ffffff; border: 2px solid #e2e8f0; box-shadow: 0 8px 24px rgba(15,23,42,.06); height: 100%; }
+    .info-section { border-radius: 22px; padding: 18px; background: #ffffff; border: 2px solid #e2e8f0; box-shadow: 0 8px 24px rgba(15,23,42,.06); height: 100%; }
     .info-section-title { font-size: 1.55rem !important; font-weight: 900 !important; margin-bottom: 4px; }
     .info-section-count { font-size: 1rem !important; color: #64748b; font-weight: 800; margin-bottom: 14px; }
     .info-student { padding: 13px 14px; margin: 9px 0; border-radius: 14px; border: 1px solid #e2e8f0; background: linear-gradient(90deg,#f8fafc,#ffffff); }
@@ -898,23 +897,32 @@ def carregar_alunos():
 
 @st.cache_data(ttl=60)
 def contar_presencas_data(data_str, turma="Todas"):
+    conn = None
     try:
         conn = conectar_bd()
-        if not conn: 
+        if not conn:
             return 0
         cur = conn.cursor()
         if turma == "Todas":
-            cur.execute("SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'", (data_str,))
+            cur.execute(
+                "SELECT COUNT(*) FROM registros_v2 WHERE data=%s AND tipo_registro='PRESENCA'",
+                (data_str,),
+            )
         else:
-            cur.execute("SELECT COUNT(r.id) FROM registros_v2 r JOIN alunos_v2 a ON r.codigo_aluno = a.codigo WHERE r.data=%s AND r.tipo_registro='PRESENCA' AND a.turma=%s", (data_str, turma))
-        count = cur.fetchone()[0]
-        liberar_conn(conn)
-        return count
-    except: 
+            cur.execute(
+                "SELECT COUNT(r.id) FROM registros_v2 r "
+                "JOIN alunos_v2 a ON r.codigo_aluno = a.codigo "
+                "WHERE r.data=%s AND r.tipo_registro='PRESENCA' AND a.turma=%s",
+                (data_str, turma),
+            )
+        return int(cur.fetchone()[0] or 0)
+    except Exception:
         return 0
+    finally:
+        liberar_conn(conn)
 
 @st.cache_data(ttl=30)
-def carregar_resumo_dashboard(data_str, turma="Todas"):
+def carregar_resumo_dashboard(data_str, turma="Todas", horario_limite_saida_str="17:00:00"):
     """Retorna total ativo, entradas registradas, liberados antes do horário e presentes atuais."""
     conn = None
     try:
@@ -928,7 +936,7 @@ def carregar_resumo_dashboard(data_str, turma="Todas"):
         # horário na aba de registro, ele fica disponível na sessão.
         h_limite_saida = st.session_state.get(
             "h_lim_s_atual",
-            datetime.strptime("17:00", "%H:%M").time()
+            datetime.strptime(horario_limite_saida_str, "%H:%M:%S").time()
         )
 
         if turma == "Todas":
@@ -977,26 +985,34 @@ def carregar_resumo_dashboard(data_str, turma="Todas"):
 
 @st.cache_data(ttl=60)
 def carregar_faltas(data_str):
+    conn = None
     try:
         conn = conectar_bd()
-        if not conn: 
+        if not conn:
             return pd.DataFrame()
         query = """
-            SELECT a.codigo as codigo_aluno, a.nome, a.turma, r.motivo_saida 
-            FROM alunos_v2 a 
-            LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s AND r.tipo_registro = 'FALTA'
-            WHERE a.status = 'ATIVO' 
-            AND a.codigo NOT IN (
-                SELECT codigo_aluno FROM registros_v2 WHERE data = %s AND tipo_registro = 'PRESENCA'
-            )
+            SELECT a.codigo as codigo_aluno, a.nome, a.turma, r.motivo_saida
+            FROM alunos_v2 a
+            LEFT JOIN registros_v2 r
+                ON a.codigo = r.codigo_aluno
+               AND r.data = %s
+               AND r.tipo_registro = 'FALTA'
+            WHERE a.status = 'ATIVO'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM registros_v2 p
+                  WHERE p.codigo_aluno = a.codigo
+                    AND p.data = %s
+                    AND p.tipo_registro = 'PRESENCA'
+              )
             ORDER BY a.turma, a.nome
         """
-        df = pd.read_sql(query, conn, params=[data_str, data_str])
-        liberar_conn(conn)
-        return df
-    except Exception as e: 
+        return pd.read_sql(query, conn, params=[data_str, data_str])
+    except Exception as e:
         print(f"Erro ao carregar faltas: {e}")
         return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
 
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
@@ -1301,6 +1317,53 @@ def normalizar_hora_entrada(valor):
     return None
 
 # ------------------------------------------------------------
+# 6.3 FUNÇÃO AUXILIAR: MAPEAR COLUNAS DE ENTRADA
+# ------------------------------------------------------------
+def mapear_colunas_entrada(df):
+    """
+    Normaliza e mapeia as colunas usadas pela entrada em lote.
+    Retorna (df_mapeado, colunas_encontradas, erros).
+    """
+    df = normalizar_colunas(df)
+    colunas_esperadas = {
+        'CODIGO': ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'COD_ALUNO', 'CODALUNO'],
+        'ESTUDANTE': ['ESTUDANTE', 'NOME', 'ALUNO', 'NOME_ALUNO', 'NOME DO ALUNO'],
+        'HORA': ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO'],
+        'DATA': ['DATA', 'DIA', 'DT', 'DAT']
+    }
+
+    colunas_disponiveis = df.columns.tolist()
+    colunas_encontradas = {}
+
+    for nome, sinonimos in colunas_esperadas.items():
+        for col in colunas_disponiveis:
+            if any(sin == col or sin in col for sin in sinonimos):
+                colunas_encontradas[nome] = col
+                break
+
+    erros = []
+    if 'CODIGO' not in colunas_encontradas:
+        erros.append("CÓDIGO (nenhuma coluna contém: " + ", ".join(colunas_esperadas['CODIGO']) + ")")
+    if 'HORA' not in colunas_encontradas:
+        erros.append("HORA DE ENTRADA (nenhuma coluna contém: " + ", ".join(colunas_esperadas['HORA']) + ")")
+
+    if erros:
+        return df, colunas_encontradas, erros
+
+    renomear = {
+        colunas_encontradas['CODIGO']: 'CODIGO',
+        colunas_encontradas['HORA']: 'HORA',
+    }
+    if 'DATA' in colunas_encontradas:
+        renomear[colunas_encontradas['DATA']] = 'DATA'
+    if 'ESTUDANTE' in colunas_encontradas:
+        renomear[colunas_encontradas['ESTUDANTE']] = 'ESTUDANTE'
+
+    # Evita problemas quando uma coluna já tem o nome final.
+    df = df.rename(columns=renomear)
+    return df, colunas_encontradas, erros
+
+# ------------------------------------------------------------
 # 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (SEM EXPANDER ANINHADO)
 # ------------------------------------------------------------
 def ler_planilha_google(url, data_base):
@@ -1341,50 +1404,14 @@ def ler_planilha_google(url, data_base):
         except:
             df = pd.read_csv(StringIO(content), sep=';', encoding='utf-8', dtype=str, keep_default_na=False)
 
-        # Normaliza as colunas (remove acentos, espaços, maiúsculas)
-        df = normalizar_colunas(df)
-        total_linhas_fonte = len(df)
+        df, colunas_encontradas, erros_colunas = mapear_colunas_entrada(df)
 
-        # Mapeamento específico baseado nas colunas esperadas
-        colunas_esperadas = {
-            'CODIGO': ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'COD_ALUNO', 'CODALUNO'],
-            'ESTUDANTE': ['ESTUDANTE', 'NOME', 'ALUNO', 'NOME_ALUNO', 'NOME DO ALUNO'],
-            'HORA': ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO'],
-            'DATA': ['DATA', 'DIA', 'DT', 'DAT']
-        }
-
-        colunas_encontradas = {}
-        colunas_disponiveis = df.columns.tolist()
-
-        for nome, sinonimios in colunas_esperadas.items():
-            for col in colunas_disponiveis:
-                for sin in sinonimios:
-                    if sin in col:
-                        colunas_encontradas[nome] = col
-                        break
-                if nome in colunas_encontradas:
-                    break
-
-        # Coleta diagnóstico
-        diagnostic = f"Colunas disponíveis: {', '.join(colunas_disponiveis)}\n"
+        diagnostic = f"Colunas disponíveis: {', '.join(df.columns.tolist())}\n"
         diagnostic += f"Mapeamento: {colunas_encontradas}\n"
 
-        # Verifica se encontrou as colunas obrigatórias
-        erros = []
-        if 'CODIGO' not in colunas_encontradas:
-            erros.append("CÓDIGO (nenhuma coluna contém: " + ", ".join(colunas_esperadas['CODIGO']) + ")")
-        if 'HORA' not in colunas_encontradas:
-            erros.append("HORA DE ENTRADA (nenhuma coluna contém: " + ", ".join(colunas_esperadas['HORA']) + ")")
-
-        if erros:
-            diagnostic += "Erros: " + "; ".join(erros)
+        if erros_colunas:
+            diagnostic += "Erros: " + "; ".join(erros_colunas)
             return None, diagnostic
-
-        # Renomeia para padronizar
-        df.rename(columns={
-            colunas_encontradas['CODIGO']: 'CODIGO',
-            colunas_encontradas['HORA']: 'HORA'
-        }, inplace=True)
 
         # Processa a coluna de data (se existir)
         if 'DATA' in colunas_encontradas:
@@ -1738,27 +1765,57 @@ def processar_entrada_df(df, data_base, hora_limite):
 # 6.5 FUNÇÃO DE IMPORTAÇÃO DE CSV (REUTILIZA A PROCESSADORA)
 # ------------------------------------------------------------
 def importar_csv_entrada(file, data_base, hora_limite):
+    """Importa CSV de entrada usando o mesmo mapeamento robusto da planilha Google."""
     conteudo = file.read()
     try:
-        conteudo_str = conteudo.decode('utf-8-sig')
-    except:
-        conteudo_str = conteudo.decode('latin-1')
-    df = pd.read_csv(io.StringIO(conteudo_str), sep=';')
-    df = normalizar_colunas(df)
-    if 'DATA' not in df.columns:
-        df['DATA'] = data_base
+        conteudo_str = conteudo.decode("utf-8-sig")
+    except Exception:
+        conteudo_str = conteudo.decode("latin-1")
+
+    try:
+        df = pd.read_csv(
+            io.StringIO(conteudo_str),
+            sep=";",
+            dtype=str,
+            keep_default_na=False,
+        )
+        if len(df.columns) == 1:
+            df = pd.read_csv(
+                io.StringIO(conteudo_str),
+                sep=",",
+                dtype=str,
+                keep_default_na=False,
+            )
+    except Exception:
+        df = pd.read_csv(
+            io.StringIO(conteudo_str),
+            sep=",",
+            dtype=str,
+            keep_default_na=False,
+        )
+
+    df, _, erros_colunas = mapear_colunas_entrada(df)
+    if erros_colunas:
+        return (
+            0,
+            0,
+            0,
+            ["Erro nas colunas do CSV: " + "; ".join(erros_colunas)],
+        )
+
+    if "DATA" not in df.columns:
+        df["DATA"] = data_base
     else:
-        df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.date
-        df = df[df['DATA'] == data_base]
+        df["DATA"] = pd.to_datetime(
+            df["DATA"],
+            errors="coerce",
+            dayfirst=True,
+        ).dt.date
+        df = df[df["DATA"] == data_base]
+
+    df["HORA"] = df["HORA"].apply(normalizar_hora_entrada)
     return processar_entrada_df(df, data_base, hora_limite)
 
-# ------------------------------------------------------------
-# 6.6 DEMAIS FUNÇÕES EXISTENTES
-# ------------------------------------------------------------
-def ir_para_fila_offline(cod, data, h_at, status):
-    registro_pendente = {"codigo": cod, "data": data, "hora": h_at, "status": status}
-    st.session_state.fila_offline.append(registro_pendente)
-    return f"FILA OFFLINE ({cod})"
 
 def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
     """
@@ -2194,7 +2251,7 @@ if st.query_params.get("modo") == "pesquisa":
 # ------------------------------------------------------------
 @st.cache_data(ttl=30)
 def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17:00:00"):
-    """Carrega, em uma única conexão, os estudantes ausentes e liberados."""
+    """Carrega, em uma única conexão, ausentes, presentes à tarde e liberados."""
     try:
         hora_limite = datetime.strptime(hora_limite_saida_str, "%H:%M:%S").time()
     except Exception:
@@ -2202,7 +2259,7 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
 
     conn = conectar_bd()
     if not conn:
-        return pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
 
     try:
         params_aus = [data_str, data_str]
@@ -2232,6 +2289,27 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         query_aus += " ORDER BY a.turma, a.nome"
         df_aus = pd.read_sql_query(query_aus, conn, params=params_aus)
 
+        params_tarde = [data_str]
+        query_tarde = """
+            SELECT
+                a.codigo,
+                a.nome,
+                a.turma,
+                r.hora_entrada,
+                r.status_entrada
+            FROM registros_v2 r
+            JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+            WHERE r.data = %s
+              AND r.tipo_registro = 'PRESENCA'
+              AND r.hora_entrada >= TIME '12:00:00'
+              AND a.status = 'ATIVO'
+        """
+        if turma != "Todas":
+            query_tarde += " AND a.turma = %s"
+            params_tarde.append(turma)
+        query_tarde += " ORDER BY a.turma, r.hora_entrada, a.nome"
+        df_tarde = pd.read_sql_query(query_tarde, conn, params=params_tarde)
+
         params_lib = [data_str, hora_limite]
         query_lib = """
             SELECT a.codigo, a.nome, a.turma, r.hora_saida, r.motivo_saida
@@ -2256,90 +2334,229 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         )
         res_cal = cur.fetchone()
         dia_letivo = bool(res_cal[0]) if res_cal else False
-        return df_aus, df_lib, dia_letivo, ""
+        # Um estudante liberado não permanece na lista de presentes à tarde.
+        if not df_tarde.empty and not df_lib.empty:
+            codigos_liberados = set(df_lib["codigo"].astype(str))
+            df_tarde = df_tarde[
+                ~df_tarde["codigo"].astype(str).isin(codigos_liberados)
+            ].copy()
+
+        return df_aus, df_tarde, df_lib, dia_letivo, ""
     except Exception as e:
-        return pd.DataFrame(), pd.DataFrame(), False, str(e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, str(e)
     finally:
         liberar_conn(conn)
 
 
 def renderizar_painel_informativo_publico():
-    """Interface pública, sem senha, para consulta de ausentes e liberados."""
+    """Painel público, sem senha, com três grupos mutuamente exclusivos."""
+    import html as _html
+
     renderizar_logo_central()
     st.markdown(
-        '<div class="info-panel-hero"><div class="info-panel-title">📢 PAINEL INFORMATIVO</div><div class="info-panel-subtitle">Acompanhamento da frequência diária dos estudantes</div></div>',
+        '<div class="info-panel-hero">'
+        '<div class="info-panel-title">📢 PAINEL INFORMATIVO</div>'
+        '<div class="info-panel-subtitle">Acompanhamento da frequência diária dos estudantes</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
+
     st.markdown('<div class="info-filter-card">', unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1.6])
     with c1:
-        data_info = st.date_input("📅 Data", value=obter_hora_atual().date(), key="painel_info_data_publico")
+        data_info = st.date_input(
+            "📅 Data",
+            value=obter_hora_atual().date(),
+            key="painel_info_data_publico",
+        )
     with c2:
         df_publico_alunos = carregar_alunos()
         turmas_publico = []
         if not df_publico_alunos.empty:
-            turmas_publico = sorted(df_publico_alunos["turma"].dropna().astype(str).unique())
-        turma_info = st.selectbox("🏫 Turma", ["Todas"] + turmas_publico, key="painel_info_turma_publico")
+            turmas_publico = sorted(
+                df_publico_alunos["turma"].dropna().astype(str).unique()
+            )
+        turma_info = st.selectbox(
+            "🏫 Turma",
+            ["Todas"] + turmas_publico,
+            key="painel_info_turma_publico",
+        )
     st.markdown('</div>', unsafe_allow_html=True)
 
     data_str = data_info.strftime("%Y-%m-%d")
-    df_aus, df_lib, dia_letivo, erro_info = carregar_dados_painel_informativo(data_str, turma_info, "17:00:00")
+    (
+        df_aus,
+        df_tarde,
+        df_lib,
+        dia_letivo,
+        erro_info,
+    ) = carregar_dados_painel_informativo(
+        data_str,
+        turma_info,
+        "17:00:00",
+    )
+
     if erro_info:
         st.error(f"Não foi possível carregar o painel: {erro_info}")
         return
+
     if not dia_letivo:
-        st.warning(f"📅 {data_info.strftime('%d/%m/%Y')} não está configurado como dia letivo. O painel não apresenta estudantes como ausentes para evitar interpretações incorretas.")
-        st.markdown('<div class="info-public-note">Painel público • consulta apenas informações de frequência</div>', unsafe_allow_html=True)
+        st.warning(
+            f"📅 {data_info.strftime('%d/%m/%Y')} não está configurado como dia letivo. "
+            "O painel não apresenta estudantes como ausentes para evitar interpretações incorretas."
+        )
+        st.markdown(
+            '<div class="info-public-note">Painel público • consulta apenas informações de frequência</div>',
+            unsafe_allow_html=True,
+        )
         return
 
-    total_aus, total_lib = len(df_aus), len(df_lib)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("❌ Estudantes Ausentes", total_aus)
-    c2.metric("🚪 Estudantes Liberados", total_lib)
-    c3.metric("📅 Data Consultada", data_info.strftime("%d/%m/%Y"))
+    total_aus = len(df_aus)
+    total_tarde = len(df_tarde)
+    total_lib = len(df_lib)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("❌ Ausentes", total_aus)
+    c2.metric("🌤️ Presentes à tarde", total_tarde)
+    c3.metric("🚪 Liberados", total_lib)
+    c4.metric("📅 Data", data_info.strftime("%d/%m/%Y"))
+
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    col_aus, col_lib = st.columns(2, gap="large")
+    col_aus, col_tarde, col_lib = st.columns(3, gap="medium")
+
     with col_aus:
-        st.markdown(f'<div class="info-section"><div class="info-section-title">❌ ESTUDANTES AUSENTES</div><div class="info-section-count">{total_aus} estudante(s) sem registro de presença</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="info-section">'
+            f'<div class="info-section-title">❌ AUSENTES</div>'
+            f'<div class="info-section-count">{total_aus} estudante(s)</div>',
+            unsafe_allow_html=True,
+        )
+
         if df_aus.empty:
-            st.markdown('<div class="info-empty">✅ Nenhum estudante ausente nos filtros selecionados.</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="info-empty">✅ Nenhum estudante ausente.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             for row in df_aus.to_dict("records"):
-                nome = str(row.get("nome") or "")
-                codigo = str(row.get("codigo") or "")
-                turma = str(row.get("turma") or "")
-                motivo_falta = str(row.get("motivo_falta") or "").strip()
+                nome = _html.escape(str(row.get("nome") or ""))
+                codigo = _html.escape(str(row.get("codigo") or ""))
+                turma = _html.escape(str(row.get("turma") or ""))
+                motivo_falta = _html.escape(
+                    str(row.get("motivo_falta") or "").strip()
+                )
+
                 if motivo_falta:
-                    status_falta = f'<span style="color:#166534;font-weight:900;">✅ FALTA JUSTIFICADA</span> &nbsp;•&nbsp; Motivo: <b>{motivo_falta}</b>'
+                    status_falta = (
+                        '<span style="color:#166534;font-weight:900;">'
+                        '✅ FALTA JUSTIFICADA</span> • Motivo: '
+                        f'<b>{motivo_falta}</b>'
+                    )
                 else:
-                    status_falta = '<span style="color:#b91c1c;font-weight:900;">⚠️ FALTA NÃO JUSTIFICADA</span>'
+                    status_falta = (
+                        '<span style="color:#b91c1c;font-weight:900;">'
+                        '⚠️ FALTA NÃO JUSTIFICADA</span>'
+                    )
+
                 st.markdown(
                     f'<div class="info-student">'
                     f'<div class="info-student-name">{nome}</div>'
-                    f'<div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b></div>'
-                    f'<div style="margin-top:7px;font-size:.92rem;">{status_falta}</div>'
+                    f'<div class="info-student-meta">'
+                    f'Código: <b>{codigo}</b> • Turma: <b>{turma}</b>'
+                    f'</div>'
+                    f'<div style="margin-top:7px;font-size:.92rem;">'
+                    f'{status_falta}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_tarde:
+        st.markdown(
+            f'<div class="info-section">'
+            f'<div class="info-section-title">🌤️ PRESENTES À TARDE</div>'
+            f'<div class="info-section-count">'
+            f'{total_tarde} estudante(s) com entrada a partir de 12:00</div>',
+            unsafe_allow_html=True,
+        )
+
+        if df_tarde.empty:
+            st.markdown(
+                '<div class="info-empty">Nenhum estudante nesta condição.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            for row in df_tarde.to_dict("records"):
+                nome = _html.escape(str(row.get("nome") or ""))
+                codigo = _html.escape(str(row.get("codigo") or ""))
+                turma = _html.escape(str(row.get("turma") or ""))
+                hora_entrada = _html.escape(
+                    str(row.get("hora_entrada") or "")[:8]
+                )
+
+                st.markdown(
+                    f'<div class="info-student">'
+                    f'<div class="info-student-name">{nome}</div>'
+                    f'<div class="info-student-meta">'
+                    f'Código: <b>{codigo}</b> • Turma: <b>{turma}</b> • '
+                    f'Entrada: <b>{hora_entrada}</b>'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col_lib:
-        st.markdown(f'<div class="info-section"><div class="info-section-title">🚪 ESTUDANTES LIBERADOS</div><div class="info-section-count">{total_lib} estudante(s) liberado(s) antes do horário</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="info-section">'
+            f'<div class="info-section-title">🚪 LIBERADOS</div>'
+            f'<div class="info-section-count">{total_lib} estudante(s)</div>',
+            unsafe_allow_html=True,
+        )
+
         if df_lib.empty:
-            st.markdown('<div class="info-empty">✅ Nenhum estudante liberado antecipadamente nos filtros selecionados.</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="info-empty">✅ Nenhum estudante liberado.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             for row in df_lib.to_dict("records"):
-                nome = str(row.get("nome") or "")
-                codigo = str(row.get("codigo") or "")
-                turma = str(row.get("turma") or "")
-                hora_saida = str(row.get("hora_saida") or "")[:8]
-                motivo = str(row.get("motivo_saida") or "").strip()
-                motivo_html = f' &nbsp;•&nbsp; Motivo: <b>{motivo}</b>' if motivo else ''
-                st.markdown(f'<div class="info-student"><div class="info-student-name">{nome}</div><div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b> &nbsp;•&nbsp; Saída: <b>{hora_saida}</b>{motivo_html}</div></div>', unsafe_allow_html=True)
+                nome = _html.escape(str(row.get("nome") or ""))
+                codigo = _html.escape(str(row.get("codigo") or ""))
+                turma = _html.escape(str(row.get("turma") or ""))
+                hora_saida = _html.escape(
+                    str(row.get("hora_saida") or "")[:8]
+                )
+                motivo = _html.escape(
+                    str(row.get("motivo_saida") or "").strip()
+                )
+                motivo_html = (
+                    f' • Motivo: <b>{motivo}</b>' if motivo else ""
+                )
+
+                st.markdown(
+                    f'<div class="info-student">'
+                    f'<div class="info-student-name">{nome}</div>'
+                    f'<div class="info-student-meta">'
+                    f'Código: <b>{codigo}</b> • Turma: <b>{turma}</b> • '
+                    f'Saída: <b>{hora_saida}</b>{motivo_html}'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="info-public-note">Painel público • os dados apresentados são somente os necessários para a consulta diária de frequência.</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="info-public-note">'
+        'Painel público • informações exclusivamente necessárias à consulta diária.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
 
 if st.query_params.get("modo") in {"painel_informativo", "painel"}:
     renderizar_painel_informativo_publico()
@@ -2348,6 +2565,14 @@ if st.query_params.get("modo") in {"painel_informativo", "painel"}:
 # ------------------------------------------------------------
 # 8. AUTH E DASHBOARD
 # ------------------------------------------------------------
+# Credenciais obrigatórias no ambiente de produção. Não há mais senha padrão.
+if not SENHA_ADMIN or not SENHA_OPERADOR:
+    st.error(
+        "🚨 Configuração de segurança incompleta: defina SENHA_ADMIN e "
+        "SENHA_OPERADOR nos Secrets do Streamlit antes de acessar o painel administrativo."
+    )
+    st.stop()
+
 auth_cookie = cookies.get("auth_token")
 if not auth_cookie:
     if os.path.exists("logo.png"): 
@@ -2419,7 +2644,14 @@ tf = cf3.selectbox("Turma (Filtra TUDO)", ["Todas"] + lista_turmas_filtro, key="
 hoje_real = obter_hora_atual().strftime("%Y-%m-%d")
 data_selecionada_str = data_f_global.strftime("%Y-%m-%d")
 
-total_alunos, pres_data, pres_atual, liberados_antes = carregar_resumo_dashboard(data_selecionada_str, tf)
+total_alunos, pres_data, pres_atual, liberados_antes = carregar_resumo_dashboard(
+    data_selecionada_str,
+    tf,
+    st.session_state.get(
+        "h_lim_s_atual",
+        datetime.strptime("17:00", "%H:%M").time()
+    ).strftime("%H:%M:%S")
+)
 if total_alunos > 0:
     media_geral_freq = f"{(pres_data / total_alunos) * 100:.1f}%"
 else:
@@ -2656,6 +2888,49 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
     return True, f"{nome_aluno} | {status_confirmado} | {hora_confirmada_str}"
 
 
+def buscar_hora_entrada_na_planilha(codigo, data_hoje):
+    """
+    Consulta a planilha Google configurada somente quando uma entrada manual
+    ocorre depois do horário-limite. Assim, o caminho rápido normal não faz
+    requisição externa, mas atrasos podem usar a hora original da fonte.
+    """
+    try:
+        link = obter_link_planilha()
+        if not link:
+            return None
+
+        df_planilha, _diagnostico = ler_planilha_google(
+            link,
+            data_hoje,
+        )
+
+        if df_planilha is None or df_planilha.empty:
+            return None
+
+        codigo_normalizado = (
+            str(codigo or "")
+            .strip()
+            .upper()
+            .replace(".0", "")
+        )
+
+        candidatos = df_planilha[
+            df_planilha["CODIGO"].astype(str).str.strip().str.upper()
+            == codigo_normalizado
+        ]
+
+        if candidatos.empty:
+            return None
+
+        return normalizar_hora_entrada(
+            candidatos.iloc[-1]["HORA"]
+        )
+    except Exception:
+        # Não impedir o registro manual por causa de indisponibilidade
+        # temporária da planilha. Nesse caso, usa-se a hora do servidor.
+        return None
+
+
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
     st.markdown(
@@ -2682,10 +2957,26 @@ def popup_entrada_rapida(data_hoje, hora_limite):
             return
 
         agora = obter_hora_atual()
+        codigo_digitado = cod_en.strip()
+
+        # Regra de precisão da hora:
+        # - entrada até o limite: registra o instante real do acionamento;
+        # - entrada após o limite: tenta obter a hora ORIGINAL da planilha;
+        #   somente se não houver registro na planilha, usa o relógio do servidor.
+        hora_registro = agora.time().replace(microsecond=0)
+
+        if hora_registro > hora_limite:
+            hora_planilha = buscar_hora_entrada_na_planilha(
+                codigo_digitado,
+                data_hoje,
+            )
+            if hora_planilha is not None:
+                hora_registro = hora_planilha
+
         sucesso, mensagem = registrar_entrada_direta(
-            cod_en.strip(),
+            codigo_digitado,
             data_hoje,
-            agora.time().replace(microsecond=0),
+            hora_registro,
             hora_limite,
         )
 
@@ -2833,15 +3124,26 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                 conteudo_str = conteudo.decode('utf-8-sig')
                             except:
                                 conteudo_str = conteudo.decode('latin-1')
-                            df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=';')
-                            df_processar = normalizar_colunas(df_processar)
-                            if 'HORA' in df_processar.columns:
-                                df_processar['HORA'] = df_processar['HORA'].apply(normalizar_hora_entrada)
-                            if 'DATA' not in df_processar.columns:
-                                df_processar['DATA'] = data_base
+                            try:
+                                df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=';', dtype=str, keep_default_na=False)
+                                if len(df_processar.columns) == 1:
+                                    df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=',', dtype=str, keep_default_na=False)
+                            except Exception:
+                                df_processar = pd.read_csv(io.StringIO(conteudo_str), sep=',', dtype=str, keep_default_na=False)
+
+                            df_processar, _, erros_colunas = mapear_colunas_entrada(df_processar)
+                            if erros_colunas:
+                                diagnostic = "Erros: " + "; ".join(erros_colunas)
+                                df_processar = None
                             else:
-                                df_processar['DATA'] = pd.to_datetime(df_processar['DATA'], errors='coerce').dt.date
-                            df_processar = df_processar[df_processar['DATA'] == data_base]
+                                if 'DATA' not in df_processar.columns:
+                                    df_processar['DATA'] = data_base
+                                else:
+                                    df_processar['DATA'] = pd.to_datetime(
+                                        df_processar['DATA'], errors='coerce', dayfirst=True
+                                    ).dt.date
+                                df_processar['HORA'] = df_processar['HORA'].apply(normalizar_hora_entrada)
+                                df_processar = df_processar[df_processar['DATA'] == data_base]
                             fonte = "CSV"
                         elif usar_link_salvo and link_salvo:
                             df_processar, diagnostic = ler_planilha_google(link_salvo, data_base)
