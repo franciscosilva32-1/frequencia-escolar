@@ -765,6 +765,41 @@ st.markdown("""
 
     div[data-testid="stExpander"]:nth-child(even) { background-color: #f8fafc; border-radius: 12px; border: 1px solid #cbd5e1; margin-bottom: 10px;}
     div[data-testid="stExpander"]:nth-child(odd) { background-color: #e2e8f0; border-radius: 12px; border: 1px solid #94a3b8; margin-bottom: 10px;}
+
+    /* =========================================================
+       PAINEL INFORMATIVO — VISUAL PÚBLICO
+       ========================================================= */
+    .info-panel-hero {
+        background: linear-gradient(135deg, #0a1f35 0%, #1a4b82 58%, #0f766e 100%);
+        border-radius: 24px;
+        padding: 28px 30px;
+        color: #ffffff;
+        margin: 10px 0 24px 0;
+        box-shadow: 0 14px 35px rgba(10,31,53,.18);
+        position: relative;
+        overflow: hidden;
+    }
+    .info-panel-hero::after {
+        content: '';
+        position: absolute;
+        width: 230px;
+        height: 230px;
+        border-radius: 50%;
+        background: rgba(255,255,255,.08);
+        right: -65px;
+        top: -80px;
+    }
+    .info-panel-title { font-size: 2.45rem !important; font-weight: 900 !important; margin: 0; letter-spacing: -.5px; }
+    .info-panel-subtitle { font-size: 1.15rem !important; margin: 7px 0 0 0; opacity: .92; font-weight: 700; }
+    .info-filter-card { background: #ffffff; border: 2px solid #dbe4ee; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(15,23,42,.06); margin-bottom: 20px; }
+    .info-section { border-radius: 22px; padding: 20px; background: #ffffff; border: 2px solid #e2e8f0; box-shadow: 0 8px 24px rgba(15,23,42,.06); height: 100%; }
+    .info-section-title { font-size: 1.55rem !important; font-weight: 900 !important; margin-bottom: 4px; }
+    .info-section-count { font-size: 1rem !important; color: #64748b; font-weight: 800; margin-bottom: 14px; }
+    .info-student { padding: 13px 14px; margin: 9px 0; border-radius: 14px; border: 1px solid #e2e8f0; background: linear-gradient(90deg,#f8fafc,#ffffff); }
+    .info-student-name { font-weight: 900; color: #0f172a; font-size: 1.03rem; }
+    .info-student-meta { color: #64748b; font-size: .93rem; font-weight: 700; margin-top: 2px; }
+    .info-empty { padding: 35px 16px; text-align: center; color: #64748b; font-weight: 800; }
+    .info-public-note { text-align:center; color:#64748b; font-size:.92rem; margin-top:18px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -2155,6 +2190,142 @@ if st.query_params.get("modo") == "pesquisa":
     st.stop() 
 
 # ------------------------------------------------------------
+# 7.1 MÓDULO PÚBLICO: PAINEL INFORMATIVO
+# ------------------------------------------------------------
+@st.cache_data(ttl=30)
+def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17:00:00"):
+    """Carrega, em uma única conexão, os estudantes ausentes e liberados."""
+    try:
+        hora_limite = datetime.strptime(hora_limite_saida_str, "%H:%M:%S").time()
+    except Exception:
+        hora_limite = datetime.strptime("17:00:00", "%H:%M:%S").time()
+
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
+
+    try:
+        params_aus = [data_str]
+        query_aus = """
+            SELECT a.codigo, a.nome, a.turma
+            FROM alunos_v2 a
+            WHERE a.status = 'ATIVO'
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM registros_v2 r
+                    WHERE r.codigo_aluno = a.codigo
+                      AND r.data = %s
+                      AND r.tipo_registro = 'PRESENCA'
+              )
+        """
+        if turma != "Todas":
+            query_aus += " AND a.turma = %s"
+            params_aus.append(turma)
+        query_aus += " ORDER BY a.turma, a.nome"
+        df_aus = pd.read_sql_query(query_aus, conn, params=params_aus)
+
+        params_lib = [data_str, hora_limite]
+        query_lib = """
+            SELECT a.codigo, a.nome, a.turma, r.hora_saida, r.motivo_saida
+            FROM registros_v2 r
+            JOIN alunos_v2 a ON a.codigo = r.codigo_aluno
+            WHERE r.data = %s
+              AND r.tipo_registro = 'PRESENCA'
+              AND r.hora_saida IS NOT NULL
+              AND r.hora_saida < %s
+              AND a.status = 'ATIVO'
+        """
+        if turma != "Todas":
+            query_lib += " AND a.turma = %s"
+            params_lib.append(turma)
+        query_lib += " ORDER BY a.turma, r.hora_saida, a.nome"
+        df_lib = pd.read_sql_query(query_lib, conn, params=params_lib)
+
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(dia_letivo, FALSE) FROM calendario_letivo WHERE data = %s",
+            (data_str,),
+        )
+        res_cal = cur.fetchone()
+        dia_letivo = bool(res_cal[0]) if res_cal else False
+        return df_aus, df_lib, dia_letivo, ""
+    except Exception as e:
+        return pd.DataFrame(), pd.DataFrame(), False, str(e)
+    finally:
+        liberar_conn(conn)
+
+
+def renderizar_painel_informativo_publico():
+    """Interface pública, sem senha, para consulta de ausentes e liberados."""
+    renderizar_logo_central()
+    st.markdown(
+        '<div class="info-panel-hero"><div class="info-panel-title">📢 PAINEL INFORMATIVO</div><div class="info-panel-subtitle">Acompanhamento da frequência diária dos estudantes</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="info-filter-card">', unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1.6])
+    with c1:
+        data_info = st.date_input("📅 Data", value=obter_hora_atual().date(), key="painel_info_data_publico")
+    with c2:
+        df_publico_alunos = carregar_alunos()
+        turmas_publico = []
+        if not df_publico_alunos.empty:
+            turmas_publico = sorted(df_publico_alunos["turma"].dropna().astype(str).unique())
+        turma_info = st.selectbox("🏫 Turma", ["Todas"] + turmas_publico, key="painel_info_turma_publico")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    data_str = data_info.strftime("%Y-%m-%d")
+    df_aus, df_lib, dia_letivo, erro_info = carregar_dados_painel_informativo(data_str, turma_info, "17:00:00")
+    if erro_info:
+        st.error(f"Não foi possível carregar o painel: {erro_info}")
+        return
+    if not dia_letivo:
+        st.warning(f"📅 {data_info.strftime('%d/%m/%Y')} não está configurado como dia letivo. O painel não apresenta estudantes como ausentes para evitar interpretações incorretas.")
+        st.markdown('<div class="info-public-note">Painel público • consulta apenas informações de frequência</div>', unsafe_allow_html=True)
+        return
+
+    total_aus, total_lib = len(df_aus), len(df_lib)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("❌ Estudantes Ausentes", total_aus)
+    c2.metric("🚪 Estudantes Liberados", total_lib)
+    c3.metric("📅 Data Consultada", data_info.strftime("%d/%m/%Y"))
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    col_aus, col_lib = st.columns(2, gap="large")
+    with col_aus:
+        st.markdown(f'<div class="info-section"><div class="info-section-title">❌ ESTUDANTES AUSENTES</div><div class="info-section-count">{total_aus} estudante(s) sem registro de presença</div>', unsafe_allow_html=True)
+        if df_aus.empty:
+            st.markdown('<div class="info-empty">✅ Nenhum estudante ausente nos filtros selecionados.</div>', unsafe_allow_html=True)
+        else:
+            for row in df_aus.to_dict("records"):
+                nome = str(row.get("nome") or "")
+                codigo = str(row.get("codigo") or "")
+                turma = str(row.get("turma") or "")
+                st.markdown(f'<div class="info-student"><div class="info-student-name">{nome}</div><div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b></div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_lib:
+        st.markdown(f'<div class="info-section"><div class="info-section-title">🚪 ESTUDANTES LIBERADOS</div><div class="info-section-count">{total_lib} estudante(s) liberado(s) antes do horário</div>', unsafe_allow_html=True)
+        if df_lib.empty:
+            st.markdown('<div class="info-empty">✅ Nenhum estudante liberado antecipadamente nos filtros selecionados.</div>', unsafe_allow_html=True)
+        else:
+            for row in df_lib.to_dict("records"):
+                nome = str(row.get("nome") or "")
+                codigo = str(row.get("codigo") or "")
+                turma = str(row.get("turma") or "")
+                hora_saida = str(row.get("hora_saida") or "")[:8]
+                motivo = str(row.get("motivo_saida") or "").strip()
+                motivo_html = f' &nbsp;•&nbsp; Motivo: <b>{motivo}</b>' if motivo else ''
+                st.markdown(f'<div class="info-student"><div class="info-student-name">{nome}</div><div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b> &nbsp;•&nbsp; Saída: <b>{hora_saida}</b>{motivo_html}</div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="info-public-note">Painel público • os dados apresentados são somente os necessários para a consulta diária de frequência.</div>', unsafe_allow_html=True)
+
+if st.query_params.get("modo") in {"painel_informativo", "painel"}:
+    renderizar_painel_informativo_publico()
+    st.stop()
+
+# ------------------------------------------------------------
 # 8. AUTH E DASHBOARD
 # ------------------------------------------------------------
 auth_cookie = cookies.get("auth_token")
@@ -2239,6 +2410,7 @@ abas_do_sistema = [
     "📝 Registro",
     "📊 Gestão Frequência",
     "📱 Comunicação de Falta",
+    "📢 Painel Informativo",
     "🚨 Alertas",
     "📈 Histórico",
     "📑 Desempenho Acadêmico",
@@ -2376,18 +2548,40 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
 
         nome_aluno, email_responsavel = aluno
 
-        # Grava a entrada. Se já existir uma presença para a mesma data,
-        # atualiza o registro em vez de simplesmente descartá-lo.
+        # Se já existir um registro para a data, preserva a hora que já está
+        # armazenada. Isso evita que um novo acionamento direto substitua
+        # posteriormente a hora original proveniente da planilha.
+        cur.execute(
+            """
+            SELECT id, status_entrada, hora_entrada
+            FROM registros_v2
+            WHERE codigo_aluno = %s
+              AND data = %s
+              AND tipo_registro = 'PRESENCA'
+            LIMIT 1
+            """,
+            (codigo, data_db),
+        )
+        existente = cur.fetchone()
+
+        if existente:
+            registro_id, status_existente, hora_existente = existente
+            conn.rollback()
+            hora_confirmada_str = (
+                hora_existente.strftime("%H:%M:%S")
+                if hora_existente else hora_str
+            )
+            contar_presencas_data.clear()
+            carregar_resumo_dashboard.clear()
+            carregar_faltas.clear()
+            return True, f"{nome_aluno} | {status_existente} | {hora_confirmada_str}"
+
         cur.execute(
             """
             INSERT INTO registros_v2 (
                 codigo_aluno, data, hora_entrada, status_entrada, tipo_registro
             )
             VALUES (%s, %s, %s, %s, 'PRESENCA')
-            ON CONFLICT (codigo_aluno, data, tipo_registro)
-            DO UPDATE SET
-                hora_entrada = EXCLUDED.hora_entrada,
-                status_entrada = EXCLUDED.status_entrada
             RETURNING id
             """,
             (codigo, data_db, hora_db, status),
@@ -2979,6 +3173,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     st.warning("Sem WhatsApp cadastrado")
 
             st.markdown("---")
+
+indice_aba += 1
+
+# ================================================================
+# PAINEL INFORMATIVO — versão integrada ao menu autenticado
+# ================================================================
+if aba_atual == abas_do_sistema[indice_aba]:
+    renderizar_painel_informativo_publico()
 
 indice_aba += 1
 
