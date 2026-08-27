@@ -2205,10 +2205,18 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         return pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
 
     try:
-        params_aus = [data_str]
+        params_aus = [data_str, data_str]
         query_aus = """
-            SELECT a.codigo, a.nome, a.turma
+            SELECT
+                a.codigo,
+                a.nome,
+                a.turma,
+                f.motivo_saida AS motivo_falta
             FROM alunos_v2 a
+            LEFT JOIN registros_v2 f
+                ON f.codigo_aluno = a.codigo
+               AND f.data = %s
+               AND f.tipo_registro = 'FALTA'
             WHERE a.status = 'ATIVO'
               AND NOT EXISTS (
                     SELECT 1
@@ -2301,7 +2309,19 @@ def renderizar_painel_informativo_publico():
                 nome = str(row.get("nome") or "")
                 codigo = str(row.get("codigo") or "")
                 turma = str(row.get("turma") or "")
-                st.markdown(f'<div class="info-student"><div class="info-student-name">{nome}</div><div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b></div></div>', unsafe_allow_html=True)
+                motivo_falta = str(row.get("motivo_falta") or "").strip()
+                if motivo_falta:
+                    status_falta = f'<span style="color:#166534;font-weight:900;">✅ FALTA JUSTIFICADA</span> &nbsp;•&nbsp; Motivo: <b>{motivo_falta}</b>'
+                else:
+                    status_falta = '<span style="color:#b91c1c;font-weight:900;">⚠️ FALTA NÃO JUSTIFICADA</span>'
+                st.markdown(
+                    f'<div class="info-student">'
+                    f'<div class="info-student-name">{nome}</div>'
+                    f'<div class="info-student-meta">Código: <b>{codigo}</b> &nbsp;•&nbsp; Turma: <b>{turma}</b></div>'
+                    f'<div style="margin-top:7px;font-size:.92rem;">{status_falta}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col_lib:
