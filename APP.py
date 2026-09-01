@@ -2297,24 +2297,32 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
         pdf.cell(0, 7, f'Frequencia registrada: {frequencia_pct:.1f}%', 0, 1)
         pdf.ln(3)
 
+        # No histórico detalhado, mostrar apenas ocorrências relevantes:
+        # faltas, faltas justificadas e atrasos. Presenças normais são
+        # contabilizadas nos indicadores, mas não ocupam espaço na tabela.
+        df_ocorrencias = df_freq[df_freq['situacao'].isin([
+            'FALTA', 'FALTA JUSTIFICADA', 'ATRASO'
+        ])].copy()
+
         pdf.set_font('Arial', 'B', 9)
-        pdf.cell(25, 7, 'Data', 1)
-        pdf.cell(48, 7, 'Situacao', 1)
-        pdf.cell(30, 7, 'Entrada', 1)
-        pdf.cell(30, 7, 'Saida', 1)
-        pdf.cell(57, 7, 'Justificativa / Motivo', 1)
+        pdf.cell(28, 7, 'Data', 1)
+        pdf.cell(50, 7, 'Situacao', 1)
+        pdf.cell(35, 7, 'Hora de Entrada', 1)
+        pdf.cell(77, 7, 'Motivo / Justificativa', 1)
         pdf.ln()
         pdf.set_font('Arial', '', 8)
 
-        for row in df_freq.to_dict('records'):
+        if df_ocorrencias.empty:
+            pdf.cell(190, 8, 'Nenhuma falta ou atraso registrado no periodo.', 1, 1, 'C')
+
+        for row in df_ocorrencias.to_dict('records'):
             if pdf.get_y() > 268:
                 pdf.add_page()
                 pdf.set_font('Arial', 'B', 9)
-                pdf.cell(25, 7, 'Data', 1)
-                pdf.cell(48, 7, 'Situacao', 1)
-                pdf.cell(30, 7, 'Entrada', 1)
-                pdf.cell(30, 7, 'Saida', 1)
-                pdf.cell(57, 7, 'Justificativa / Motivo', 1)
+                pdf.cell(28, 7, 'Data', 1)
+                pdf.cell(50, 7, 'Situacao', 1)
+                pdf.cell(35, 7, 'Hora de Entrada', 1)
+                pdf.cell(77, 7, 'Motivo / Justificativa', 1)
                 pdf.ln()
                 pdf.set_font('Arial', '', 8)
 
@@ -2325,14 +2333,14 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
                 data_txt = str(data_val)
             situacao = str(row.get('situacao') or '')
             entrada = str(row.get('hora_entrada') or '')[:8]
-            saida = str(row.get('hora_saida') or '')[:8]
             motivo = str(row.get('motivo_saida') or '')
 
-            pdf.cell(25, 7, data_txt, 1)
-            pdf.cell(48, 7, situacao[:32], 1)
-            pdf.cell(30, 7, entrada, 1)
-            pdf.cell(30, 7, saida, 1)
-            pdf.cell(57, 7, motivo[:38], 1)
+            # Para atraso, mostra a hora real de entrada. Para faltas,
+            # o campo de horário permanece vazio e o motivo aparece ao lado.
+            pdf.cell(28, 7, data_txt, 1)
+            pdf.cell(50, 7, situacao[:34], 1)
+            pdf.cell(35, 7, entrada if situacao == 'ATRASO' else '', 1)
+            pdf.cell(77, 7, motivo[:52], 1)
             pdf.ln()
 
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
