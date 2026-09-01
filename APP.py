@@ -146,6 +146,25 @@ DICIONARIO_ABREVIACAO = {
     "QUÍMICA": "QUI", "SOCIOLOGIA": "SOC", "SOCIOLGIA": "SOC"
 }
 
+MOTIVOS_JUSTIFICATIVA = [
+    "Febre",
+    "Dor de cabeça",
+    "Gripe",
+    "Tontura",
+    "Dor de cólica",
+    "Dor de barriga",
+    "Sinusite-Rinite",
+    "Alergia",
+    "Vômito",
+    "Solicitação do responsável",
+    "Consulta Médica",
+    "Liberação da Direção",
+    "Término do Turno",
+    "Outros",
+    "Sem justificativa do responsável",
+]
+
+
 DICIONARIO_PERGUNTAS_SATISFACAO = {
     "Todos": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Específica 1", "Específica 2"],
     "Estudante": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Qualidade das Aulas", "Organização Eventos"],
@@ -532,7 +551,12 @@ def inicializar_tabelas():
     try:
         cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT, telefone_responsavel TEXT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
+        cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, origem_entrada TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
+        try:
+            cur.execute("ALTER TABLE registros_v2 ADD COLUMN origem_entrada TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
         cur.execute("CREATE TABLE IF NOT EXISTS avaliacoes_avs (id SERIAL PRIMARY KEY, ano TEXT, periodo TEXT, area TEXT, turma TEXT, nome TEXT, disciplina TEXT, questao INTEGER, resposta TEXT, gabarito TEXT, acerto INTEGER, UNIQUE(ano, periodo, area, turma, nome, disciplina, questao))")
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
@@ -1468,17 +1492,21 @@ def ler_planilha_google(url, data_base):
 # ------------------------------------------------------------
 # 6.4 FUNÇÃO CENTRAL DE PROCESSAMENTO (DF)
 # ------------------------------------------------------------
-def processar_entrada_df(df, data_base, hora_limite):
+def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
     """
     Processa os registros de entrada provenientes da planilha/CSV.
 
     Regras:
-    - A hora gravada em hora_entrada é SEMPRE a hora real informada na fonte.
-    - Para registros novos, insere normalmente e envia a notificação de entrada.
-    - Se o registro já existir para o mesmo aluno/data, NÃO duplica a entrada.
-      Porém, confere a hora/status da fonte e corrige o registro existente quando
-      necessário. A correção não dispara um novo e-mail.
+    - PLANILHA: a hora_entrada é exclusivamente a hora da planilha/CSV.
+    - SISTEMA: a hora_entrada é exclusivamente a hora do servidor no momento do registro.
+    - Um registro existente não é sobrescrito por uma fonte menos autoritativa.
+    - Quando a origem é PLANILHA, a fonte pode corrigir hora/status existentes.
+    - Quando a origem é SISTEMA, um registro existente é preservado.
     """
+    origem_entrada = str(origem_entrada or "PLANILHA").strip().upper()
+    if origem_entrada not in {"PLANILHA", "SISTEMA"}:
+        origem_entrada = "PLANILHA"
+
     if df.empty:
         return 0, 0, 0, ["Nenhum registro encontrado para a data selecionada."]
 
@@ -1614,18 +1642,21 @@ def processar_entrada_df(df, data_base, hora_limite):
                 else None
             )
 
-            if (
-                hora_existente_str != hora_real_str
-                or status_existente != status
-            ):
-                registros_atualizar.append(
-                    (
-                        codigo,
-                        data,
-                        hora_real_str,
-                        status,
+            # A PLANILHA é a fonte oficial para correção da hora/status.
+            # A entrada via SISTEMA nunca sobrescreve um registro já existente.
+            if origem_entrada == "PLANILHA":
+                if (
+                    hora_existente_str != hora_real_str
+                    or status_existente != status
+                ):
+                    registros_atualizar.append(
+                        (
+                            codigo,
+                            data,
+                            hora_real_str,
+                            status,
+                        )
                     )
-                )
 
             # Não dispara e-mail novamente para um registro que já existia.
             continue
@@ -1637,6 +1668,7 @@ def processar_entrada_df(df, data_base, hora_limite):
                 hora_real_str,
                 status,
                 "PRESENCA",
+                origem_entrada,
             )
         )
 
@@ -1671,7 +1703,8 @@ def processar_entrada_df(df, data_base, hora_limite):
                         data,
                         hora_entrada,
                         status_entrada,
-                        tipo_registro
+                        tipo_registro,
+                        origem_entrada
                     )
                     VALUES %s
                     ON CONFLICT DO NOTHING
@@ -1687,7 +1720,8 @@ def processar_entrada_df(df, data_base, hora_limite):
                     UPDATE registros_v2 AS r
                     SET
                         hora_entrada = v.hora::time,
-                        status_entrada = v.status
+                        status_entrada = v.status,
+                        origem_entrada = 'PLANILHA'
                     FROM (
                         VALUES %s
                     ) AS v(
@@ -3072,7 +3106,12 @@ indice_aba = 1
 # POP-UP DE ENTRADA RÁPIDA
 # =====================================================================
 def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
-    """Grava e confirma a entrada do estudante diretamente no PostgreSQL."""
+    """
+    Registra entrada pelo MODO SISTEMA.
+    A hora recebida é a hora do servidor; não consulta a planilha.
+    Um registro já existente é preservado para evitar sobrescrita de uma hora
+    oficial proveniente da planilha.
+    """
     codigo = str(codigo or "").strip().upper()
     if not codigo:
         return False, "Código do estudante não informado."
@@ -3119,9 +3158,9 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
 
         nome_aluno, email_responsavel = aluno
 
-        # Se já existir um registro para a data, preserva a hora que já está
-        # armazenada. Isso evita que um novo acionamento direto substitua
-        # posteriormente a hora original proveniente da planilha.
+        # Se já existir um registro para a data, preserva integralmente
+        # o registro existente. Assim, o modo SISTEMA nunca sobrescreve
+        # uma entrada previamente registrada pela PLANILHA.
         cur.execute(
             """
             SELECT id, status_entrada, hora_entrada
@@ -3150,9 +3189,9 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
         cur.execute(
             """
             INSERT INTO registros_v2 (
-                codigo_aluno, data, hora_entrada, status_entrada, tipo_registro
+                codigo_aluno, data, hora_entrada, status_entrada, tipo_registro, origem_entrada
             )
-            VALUES (%s, %s, %s, %s, 'PRESENCA')
+            VALUES (%s, %s, %s, %s, 'PRESENCA', 'SISTEMA')
             RETURNING id
             """,
             (codigo, data_db, hora_db, status),
@@ -3207,55 +3246,12 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
     return True, f"{nome_aluno} | {status_confirmado} | {hora_confirmada_str}"
 
 
-def buscar_hora_entrada_na_planilha(codigo, data_hoje):
-    """
-    Consulta a planilha Google configurada somente quando uma entrada manual
-    ocorre depois do horário-limite. Assim, o caminho rápido normal não faz
-    requisição externa, mas atrasos podem usar a hora original da fonte.
-    """
-    try:
-        link = obter_link_planilha()
-        if not link:
-            return None
-
-        df_planilha, _diagnostico = ler_planilha_google(
-            link,
-            data_hoje,
-        )
-
-        if df_planilha is None or df_planilha.empty:
-            return None
-
-        codigo_normalizado = (
-            str(codigo or "")
-            .strip()
-            .upper()
-            .replace(".0", "")
-        )
-
-        candidatos = df_planilha[
-            df_planilha["CODIGO"].astype(str).str.strip().str.upper()
-            == codigo_normalizado
-        ]
-
-        if candidatos.empty:
-            return None
-
-        return normalizar_hora_entrada(
-            candidatos.iloc[-1]["HORA"]
-        )
-    except Exception:
-        # Não impedir o registro manual por causa de indisponibilidade
-        # temporária da planilha. Nesse caso, usa-se a hora do servidor.
-        return None
-
-
 @st.dialog("🚀 MODO DE ENTRADA RÁPIDA", width="large")
 def popup_entrada_rapida(data_hoje, hora_limite):
     st.markdown(
         "<p style='text-align:center; color:#64748b;'>"
         "Bipe o cartão ou digite o código. "
-        "O registro será gravado diretamente no sistema."
+        "A entrada será gravada diretamente no sistema usando o horário do servidor."
         "</p>",
         unsafe_allow_html=True,
     )
@@ -3275,25 +3271,13 @@ def popup_entrada_rapida(data_hoje, hora_limite):
             st.warning("Digite ou bipe um código de estudante.")
             return
 
+        # MODO 2 — ENTRADA VIA ABA DO SISTEMA:
+        # a hora é exclusivamente o instante real do servidor.
         agora = obter_hora_atual()
-        codigo_digitado = cod_en.strip()
-
-        # Regra de precisão da hora:
-        # - entrada até o limite: registra o instante real do acionamento;
-        # - entrada após o limite: tenta obter a hora ORIGINAL da planilha;
-        #   somente se não houver registro na planilha, usa o relógio do servidor.
         hora_registro = agora.time().replace(microsecond=0)
 
-        if hora_registro > hora_limite:
-            hora_planilha = buscar_hora_entrada_na_planilha(
-                codigo_digitado,
-                data_hoje,
-            )
-            if hora_planilha is not None:
-                hora_registro = hora_planilha
-
         sucesso, mensagem = registrar_entrada_direta(
-            codigo_digitado,
+            cod_en.strip(),
             data_hoje,
             hora_registro,
             hora_limite,
@@ -3481,7 +3465,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         if df_processar is not None:
                             with st.spinner(f"Processando registros da {fonte}..."):
                                 hora_limite = st.session_state.get('h_lim_e_atual', datetime.strptime("07:30", "%H:%M").time())
-                                total, salvos, emails, erros = processar_entrada_df(df_processar, data_base, hora_limite)
+                                total, salvos, emails, erros = processar_entrada_df(df_processar, data_base, hora_limite, origem_entrada="PLANILHA")
                                 if emails:
                                     st.success(
                                         f"✅ Processamento concluído: {salvos} registros salvos; "
@@ -3521,7 +3505,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
                 
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-                mot = st.selectbox("Motivo", ["Febre", "Dor de cabeça", "Gripe", "Tontura", "Dor de cólica", "Dor de barriga", "Sinusite-Rinite", "Alergia", "Vômito", "Solicitação do responsável", "Consulta Médica", "Liberação da Direção", "Término do Turno", "Outros"])
+                mot = st.selectbox("Motivo", MOTIVOS_JUSTIFICATIVA)
                 
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
@@ -3564,8 +3548,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         [""] + [f"{r['codigo_aluno']} - {r['nome']} ({r['turma']})" for _, r in df_pendentes.iterrows()]
                     )
                     motivo_falta = st.selectbox(
-                        "Justificativa Oficial", 
-                        ["DOENTE", "VIAGEM", "ACOMPANHAR PARENTE", "CONSULTA", "EXAME", "OUTROS"]
+                        "Justificativa Oficial",
+                        MOTIVOS_JUSTIFICATIVA
                     )
                     
                     if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
@@ -4344,7 +4328,7 @@ if eh_admin:
                 lista_alunos_falta += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
                 
             f1_aluno = st.selectbox("Selecione o Estudante", lista_alunos_falta)
-            f1_motivo = st.selectbox("Motivo da Falta", ["Doença", "Viagem", "Acompanhar parente", "Sem justificativa", "Outros"])
+            f1_motivo = st.selectbox("Motivo da Falta / Justificativa", MOTIVOS_JUSTIFICATIVA)
             
             if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
                 if f1_aluno:
