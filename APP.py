@@ -1996,7 +1996,207 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
     finally: 
         liberar_conn(conn)
 
-def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
+
+
+@st.cache_data(ttl=60)
+def carregar_historico_frequencia_aluno(codigo_aluno):
+    """Retorna o histórico completo de frequência do estudante até hoje."""
+    if not codigo_aluno:
+        return pd.DataFrame()
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        query = """
+            WITH dias AS (
+                SELECT data
+                FROM calendario_letivo
+                WHERE dia_letivo = TRUE
+                  AND data <= CURRENT_DATE
+                UNION
+                SELECT data
+                FROM registros_v2
+                WHERE codigo_aluno = %s
+                  AND data <= CURRENT_DATE
+            )
+            SELECT
+                d.data,
+                CASE
+                    WHEN r.tipo_registro = 'PRESENCA'
+                         AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
+                    WHEN r.tipo_registro = 'PRESENCA' THEN 'PRESENTE'
+                    WHEN r.tipo_registro = 'FALTA'
+                         AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL
+                        THEN 'FALTA JUSTIFICADA'
+                    WHEN r.tipo_registro = 'FALTA' THEN 'FALTA'
+                    ELSE 'AUSENTE SEM REGISTRO'
+                END AS situacao,
+                r.hora_entrada,
+                r.hora_saida,
+                r.motivo_saida
+            FROM dias d
+            LEFT JOIN registros_v2 r
+              ON r.codigo_aluno = %s
+             AND r.data = d.data
+            ORDER BY d.data DESC
+        """
+        return pd.read_sql_query(
+            query, conn, params=[codigo_aluno, codigo_aluno]
+        )
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
+def obter_codigo_aluno_df(nome, turma, df_alunos):
+    """Localiza o código do estudante sem nova consulta ao banco."""
+    if df_alunos is None or df_alunos.empty:
+        return None
+    try:
+        filtro = (
+            df_alunos['nome'].astype(str).str.upper().eq(str(nome).upper())
+            & df_alunos['turma'].astype(str).str.upper().eq(str(turma).upper())
+        )
+        linhas = df_alunos.loc[filtro]
+        if not linhas.empty:
+            return str(linhas.iloc[0]['codigo']).strip()
+    except Exception:
+        pass
+    return None
+
+
+def gerar_pdf_painel_informativo(data_info, turma_info, df_aus, df_tarde, df_lib):
+    """Gera PDF com exatamente os três grupos exibidos no Painel Informativo."""
+    if not FPDF:
+        return None
+
+    def txt(valor):
+        if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+            return ''
+        return str(valor)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Cabeçalho
+    pdf.set_fill_color(10, 31, 53)
+    pdf.rect(0, 0, 210, 38, 'F')
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font('Arial', 'B', 18)
+    pdf.cell(0, 12, 'PAINEL INFORMATIVO', 0, 1, 'C')
+    pdf.set_font('Arial', '', 10)
+    pdf.cell(0, 7, 'Relatorio diario de frequencia dos estudantes', 0, 1, 'C')
+    pdf.ln(14)
+    pdf.set_text_color(15, 23, 42)
+
+    data_fmt = data_info.strftime('%d/%m/%Y')
+    pdf.set_font('Arial', 'B', 11)
+    pdf.cell(95, 8, f'Data: {data_fmt}', 0, 0)
+    pdf.cell(95, 8, f'Turma: {txt(turma_info)}', 0, 1)
+    pdf.ln(4)
+
+    # Resumo
+    resumo = [
+        ('AUSENTES', len(df_aus), (239, 68, 68)),
+        ('PRESENTES A TARDE', len(df_tarde), (14, 165, 233)),
+        ('LIBERADOS', len(df_lib), (139, 92, 246)),
+    ]
+    largura = 60
+    for i, (rotulo, qtd, cor) in enumerate(resumo):
+        x = 10 + i * 65
+        pdf.set_fill_color(*cor)
+        pdf.rect(x, pdf.get_y(), largura, 22, 'F')
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font('Arial', 'B', 8)
+        pdf.set_xy(x, pdf.get_y() + 3)
+        pdf.cell(largura, 6, rotulo, 0, 1, 'C')
+        pdf.set_font('Arial', 'B', 15)
+        pdf.cell(largura, 8, str(qtd), 0, 0, 'C')
+    pdf.ln(28)
+    pdf.set_text_color(15, 23, 42)
+
+    def secao(titulo, cor, registros, tipo):
+        pdf.set_fill_color(*cor)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 9, titulo, 0, 1, 'L', fill=True)
+        pdf.set_text_color(15, 23, 42)
+        pdf.set_font('Arial', 'B', 9)
+        if tipo == 'ausentes':
+            pdf.cell(55, 7, 'Estudante', 1)
+            pdf.cell(25, 7, 'Codigo', 1)
+            pdf.cell(28, 7, 'Turma', 1)
+            pdf.cell(82, 7, 'Situacao / Motivo', 1)
+            pdf.ln()
+        elif tipo == 'tarde':
+            pdf.cell(65, 7, 'Estudante', 1)
+            pdf.cell(25, 7, 'Codigo', 1)
+            pdf.cell(35, 7, 'Turma', 1)
+            pdf.cell(65, 7, 'Entrada', 1)
+            pdf.ln()
+        else:
+            pdf.cell(55, 7, 'Estudante', 1)
+            pdf.cell(25, 7, 'Codigo', 1)
+            pdf.cell(28, 7, 'Turma', 1)
+            pdf.cell(25, 7, 'Saida', 1)
+            pdf.cell(57, 7, 'Motivo', 1)
+            pdf.ln()
+
+        pdf.set_font('Arial', '', 8)
+        if registros is None or registros.empty:
+            pdf.cell(0, 8, 'Nenhum estudante nesta condicao.', 1, 1)
+            pdf.ln(5)
+            return
+
+        for row in registros.to_dict('records'):
+            if pdf.get_y() > 265:
+                pdf.add_page()
+                pdf.set_font('Arial', 'B', 12)
+                pdf.cell(0, 9, titulo + ' (continua)', 0, 1, 'L', fill=True)
+                pdf.set_font('Arial', '', 8)
+            nome = txt(row.get('nome'))
+            codigo = txt(row.get('codigo'))
+            turma = txt(row.get('turma'))
+            if tipo == 'ausentes':
+                motivo = txt(row.get('motivo_falta')).strip()
+                situacao = 'FALTA JUSTIFICADA - ' + motivo if motivo else 'FALTA NAO JUSTIFICADA'
+                pdf.cell(55, 7, nome[:35], 1)
+                pdf.cell(25, 7, codigo[:15], 1)
+                pdf.cell(28, 7, turma[:18], 1)
+                pdf.cell(82, 7, situacao[:58], 1)
+            elif tipo == 'tarde':
+                hora = txt(row.get('hora_entrada'))[:8]
+                pdf.cell(65, 7, nome[:40], 1)
+                pdf.cell(25, 7, codigo[:15], 1)
+                pdf.cell(35, 7, turma[:22], 1)
+                pdf.cell(65, 7, hora, 1)
+            else:
+                hora = txt(row.get('hora_saida'))[:8]
+                motivo = txt(row.get('motivo_saida')).strip()
+                pdf.cell(55, 7, nome[:35], 1)
+                pdf.cell(25, 7, codigo[:15], 1)
+                pdf.cell(28, 7, turma[:18], 1)
+                pdf.cell(25, 7, hora, 1)
+                pdf.cell(57, 7, motivo[:40], 1)
+            pdf.ln()
+        pdf.ln(7)
+
+    secao('AUSENTES', (239, 68, 68), df_aus, 'ausentes')
+    secao('PRESENTES A TARDE (ENTRADA A PARTIR DE 12:00)', (14, 165, 233), df_tarde, 'tarde')
+    secao('LIBERADOS', (139, 92, 246), df_lib, 'liberados')
+
+    pdf.set_font('Arial', 'I', 8)
+    pdf.set_text_color(100, 116, 139)
+    pdf.cell(0, 7, 'Documento gerado pelo sistema de gestao escolar.', 0, 1, 'C')
+
+    out = pdf.output(dest='S')
+    if isinstance(out, str):
+        return out.encode('latin-1', errors='replace')
+    return bytes(out)
+
+def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None):
     if not FPDF: 
         return None
     pdf = FPDF()
@@ -2053,6 +2253,88 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None):
                 y = y
             pdf.set_y(y + 5)
             pdf.set_text_color(0, 0, 0)
+    # ------------------------------------------------------------
+    # FREQUENCIA: faltas, justificativas e atrasos
+    # ------------------------------------------------------------
+    if df_frequencia_aluno is not None and not df_frequencia_aluno.empty:
+        df_freq = df_frequencia_aluno.copy()
+        total_dias = len(df_freq)
+        presentes_freq = int(df_freq['situacao'].isin(['PRESENTE', 'ATRASO']).sum())
+        atrasos_freq = int((df_freq['situacao'] == 'ATRASO').sum())
+        faltas_just = int((df_freq['situacao'] == 'FALTA JUSTIFICADA').sum())
+        faltas_nao = int(df_freq['situacao'].isin(['FALTA', 'AUSENTE SEM REGISTRO']).sum())
+        total_faltas = faltas_just + faltas_nao
+        frequencia_pct = (presentes_freq / total_dias * 100) if total_dias else 0
+
+        pdf.add_page()
+        pdf.set_fill_color(10, 31, 53)
+        pdf.rect(0, 0, 210, 30, 'F')
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font('Arial', 'B', 16)
+        pdf.cell(0, 12, 'HISTORICO DE FREQUENCIA', 0, 1, 'C')
+        pdf.ln(12)
+        pdf.set_text_color(15, 23, 42)
+
+        indicadores = [
+            ('Dias letivos', total_dias),
+            ('Presencas', presentes_freq),
+            ('Atrasos', atrasos_freq),
+            ('Faltas', total_faltas),
+            ('Justificadas', faltas_just),
+            ('Nao justificadas', faltas_nao),
+        ]
+        x_positions = [10, 43, 76, 109, 142, 175]
+        for (rotulo, valor), x in zip(indicadores, x_positions):
+            pdf.set_fill_color(241, 245, 249)
+            pdf.rect(x, pdf.get_y(), 28, 23, 'F')
+            pdf.set_xy(x, pdf.get_y() + 3)
+            pdf.set_font('Arial', 'B', 7)
+            pdf.cell(28, 6, rotulo, 0, 1, 'C')
+            pdf.set_font('Arial', 'B', 12)
+            pdf.cell(28, 8, str(valor), 0, 0, 'C')
+        pdf.ln(28)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 7, f'Frequencia registrada: {frequencia_pct:.1f}%', 0, 1)
+        pdf.ln(3)
+
+        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(25, 7, 'Data', 1)
+        pdf.cell(48, 7, 'Situacao', 1)
+        pdf.cell(30, 7, 'Entrada', 1)
+        pdf.cell(30, 7, 'Saida', 1)
+        pdf.cell(57, 7, 'Justificativa / Motivo', 1)
+        pdf.ln()
+        pdf.set_font('Arial', '', 8)
+
+        for row in df_freq.to_dict('records'):
+            if pdf.get_y() > 268:
+                pdf.add_page()
+                pdf.set_font('Arial', 'B', 9)
+                pdf.cell(25, 7, 'Data', 1)
+                pdf.cell(48, 7, 'Situacao', 1)
+                pdf.cell(30, 7, 'Entrada', 1)
+                pdf.cell(30, 7, 'Saida', 1)
+                pdf.cell(57, 7, 'Justificativa / Motivo', 1)
+                pdf.ln()
+                pdf.set_font('Arial', '', 8)
+
+            data_val = row.get('data')
+            try:
+                data_txt = pd.to_datetime(data_val).strftime('%d/%m/%Y')
+            except Exception:
+                data_txt = str(data_val)
+            situacao = str(row.get('situacao') or '')
+            entrada = str(row.get('hora_entrada') or '')[:8]
+            saida = str(row.get('hora_saida') or '')[:8]
+            motivo = str(row.get('motivo_saida') or '')
+
+            pdf.cell(25, 7, data_txt, 1)
+            pdf.cell(48, 7, situacao[:32], 1)
+            pdf.cell(30, 7, entrada, 1)
+            pdf.cell(30, 7, saida, 1)
+            pdf.cell(57, 7, motivo[:38], 1)
+            pdf.ln()
+
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
         progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
         progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
@@ -2549,6 +2831,23 @@ def renderizar_painel_informativo_publico():
                 )
 
         st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('---')
+    pdf_painel = gerar_pdf_painel_informativo(
+        data_info, turma_info, df_aus, df_tarde, df_lib
+    )
+    if pdf_painel:
+        nome_pdf_painel = f"Painel_Informativo_{data_info.strftime('%Y-%m-%d')}"
+        if turma_info != 'Todas':
+            nome_pdf_painel += '_' + re.sub(r'[^A-Za-z0-9_-]+', '_', str(turma_info))
+        nome_pdf_painel += '.pdf'
+        st.download_button(
+            '📄 EXPORTAR PAINEL EM PDF',
+            data=pdf_painel,
+            file_name=nome_pdf_painel,
+            mime='application/pdf',
+            use_container_width=True,
+        )
 
     st.markdown(
         '<div class="info-public-note">'
@@ -3779,7 +4078,9 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             for a in lista_completa:
                                 df_bol_ind = dff[dff['nome'] == a['nome']]
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
-                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                                codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
+                                df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
+                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a)
                                 
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -3823,7 +4124,9 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
                         
                         if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
-                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno)
+                            codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
+                            df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
+                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a)
                             if b_pdf: 
                                 st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                             else: 
