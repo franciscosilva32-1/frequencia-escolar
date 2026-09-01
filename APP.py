@@ -2300,8 +2300,12 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
         # No histórico detalhado, mostrar apenas ocorrências relevantes:
         # faltas, faltas justificadas e atrasos. Presenças normais são
         # contabilizadas nos indicadores, mas não ocupam espaço na tabela.
+        # O histórico completo também pode representar uma ausência sem uma
+        # linha explícita de FALTA em registros_v2. Nesses casos, a consulta
+        # retorna AUSENTE SEM REGISTRO; para o boletim, isso deve aparecer
+        # como FALTA NAO JUSTIFICADA, pois também compõe as faltas.
         df_ocorrencias = df_freq[df_freq['situacao'].isin([
-            'FALTA', 'FALTA JUSTIFICADA', 'ATRASO'
+            'FALTA', 'FALTA JUSTIFICADA', 'AUSENTE SEM REGISTRO', 'ATRASO'
         ])].copy()
 
         pdf.set_font('Arial', 'B', 9)
@@ -2331,9 +2335,17 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
                 data_txt = pd.to_datetime(data_val).strftime('%d/%m/%Y')
             except Exception:
                 data_txt = str(data_val)
-            situacao = str(row.get('situacao') or '')
+            situacao_raw = str(row.get('situacao') or '')
             entrada = str(row.get('hora_entrada') or '')[:8]
             motivo = str(row.get('motivo_saida') or '')
+
+            # Normaliza a ausência sem registro para a mesma categoria
+            # apresentada nos indicadores do boletim: falta não justificada.
+            if situacao_raw == 'AUSENTE SEM REGISTRO':
+                situacao = 'FALTA NAO JUSTIFICADA'
+                motivo = ''
+            else:
+                situacao = situacao_raw
 
             # Para atraso, mostra a hora real de entrada. Para faltas,
             # o campo de horário permanece vazio e o motivo aparece ao lado.
