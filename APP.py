@@ -162,6 +162,7 @@ MOTIVOS_JUSTIFICATIVA = [
     "Término do Turno",
     "Outros",
     "Sem justificativa do responsável",
+    "Falta de transporte",
 ]
 
 MOTIVOS_SUSPENSAO = {
@@ -2879,7 +2880,9 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
 
     try:
-        params_aus = [data_str, data_str, data_str]
+        # A consulta utiliza quatro parâmetros de data:
+        # 1) falta, 2) início da suspensão, 3) fim da suspensão, 4) presença.
+        params_aus = [data_str, data_str, data_str, data_str]
         query_aus = """
             SELECT
                 a.codigo,
