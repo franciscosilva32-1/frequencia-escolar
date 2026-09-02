@@ -164,6 +164,43 @@ MOTIVOS_JUSTIFICATIVA = [
     "Sem justificativa do responsável",
 ]
 
+MOTIVOS_SUSPENSAO = {
+    "Violência e segurança": [
+        "Brigas, agressão física ou tentativa de lesão",
+        "Ameaças verbais, escritas ou virtuais contra colegas, professores ou funcionários",
+        "Porte ou uso de armas (incluindo réplicas, canivetes, estiletes etc.)",
+        "Comportamento que coloque em risco a segurança coletiva, como acionar alarme de incêndio sem necessidade",
+    ],
+    "Substâncias proibidas": [
+        "Posse, uso, venda ou distribuição de drogas ilícitas",
+        "Porte ou consumo de bebidas alcoólicas na escola ou em eventos escolares",
+        "Uso de cigarro, cigarro eletrônico ou produtos de tabaco em menores de idade, quando proibido",
+    ],
+    "Conduta e respeito": [
+        "Bullying, cyberbullying ou assédio moral",
+        "Assédio sexual, comentários ou gestos de conotação sexual indevidos",
+        "Discriminação, injúria racial, homofobia, intolerância religiosa ou qualquer forma de preconceito",
+        "Desacato, insulto ou desobediência grave a professor ou funcionário",
+        "Uso de linguagem obscena, agressiva ou desrespeitosa",
+    ],
+    "Dano e patrimônio": [
+        "Vandalismo, pichação ou depredação de instalações e materiais escolares",
+        "Furto ou roubo de pertences de colegas, funcionários ou da própria escola",
+        "Danificação de equipamentos, livros, laboratórios ou outros recursos",
+    ],
+    "Integridade acadêmica e regras escolares": [
+        "Cola, plágio ou fraude em provas, trabalhos e avaliações",
+        "Uso indevido de celular ou dispositivos eletrônicos para filmar, difamar, trapacear ou invadir privacidade",
+        "Reincidência em infrações disciplinares após advertências e notificações aos responsáveis",
+        "Violação de regras de uso da internet ou da rede da escola, como acesso a conteúdo impróprio ou invasão de sistemas",
+    ],
+    "Outros motivos comuns": [
+        "Participação em tumultos, motins, trotes violentos ou incitação à desordem coletiva",
+        "Falsificação de assinatura de responsáveis, documentos escolares ou comunicados",
+        "Atos de desrespeito a normas de saúde e segurança, como exposição a risco em laboratório ou oficina",
+    ],
+}
+
 
 DICIONARIO_PERGUNTAS_SATISFACAO = {
     "Todos": ["Conservação/Limpeza", "Acolhimento/Atenção", "Satisfação Geral", "Específica 1", "Específica 2"],
@@ -525,6 +562,78 @@ def disparar_email_background(
                 pass
 
 
+def mensagem_suspensao_email(nome_aluno, turma, data_inicio, data_fim, motivo):
+    try:
+        inicio = pd.to_datetime(data_inicio).strftime("%d/%m/%Y")
+        fim = pd.to_datetime(data_fim).strftime("%d/%m/%Y")
+    except Exception:
+        inicio = str(data_inicio)
+        fim = str(data_fim)
+
+    assunto = "🏫 Comunicação de Suspensão Disciplinar - Jansen Veloso"
+    texto = (
+        f"Olá, família!\n\n"
+        f"Informamos que o(a) estudante {nome_aluno}, da turma {turma}, "
+        f"foi submetido(a) a uma SUSPENSÃO DISCIPLINAR.\n\n"
+        f"Período da suspensão: {inicio} a {fim}.\n"
+        f"Motivo: {motivo}.\n\n"
+        f"Solicitamos a atenção do responsável para o cumprimento do período informado.\n\n"
+        f"Atenciosamente,\nEquipe Jansen Veloso."
+    )
+    return assunto, texto
+
+
+def enviar_email_suspensao_background(email_destino, nome_aluno, turma, data_inicio, data_fim, motivo):
+    if not email_destino or not ATIVAR_EMAILS or not EMAIL_ESCOLA or not SENHA_APP_ESCOLA:
+        return False, "Configuração de e-mail indisponível."
+
+    server = None
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(EMAIL_ESCOLA, SENHA_APP_ESCOLA)
+        assunto, texto = mensagem_suspensao_email(
+            nome_aluno, turma, data_inicio, data_fim, motivo
+        )
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_ESCOLA
+        msg["To"] = str(email_destino).strip()
+        msg["Subject"] = assunto
+        msg.attach(MIMEText(texto, "plain", "utf-8"))
+        recusados = server.send_message(msg) or {}
+        if recusados:
+            return False, "Destinatário recusado pelo servidor SMTP: " + formatar_recusa_smtp(recusados)
+        return True, None
+    except smtplib.SMTPException as e:
+        return False, f"Erro SMTP: {e}"
+    except Exception as e:
+        return False, f"Erro inesperado: {e}"
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except Exception:
+                pass
+
+
+def mensagem_suspensao_whatsapp(nome_aluno, data_inicio, data_fim, motivo):
+    try:
+        inicio = pd.to_datetime(data_inicio).strftime("%d/%m/%Y")
+        fim = pd.to_datetime(data_fim).strftime("%d/%m/%Y")
+    except Exception:
+        inicio = str(data_inicio)
+        fim = str(data_fim)
+    return (
+        f"Olá, família!\n\n"
+        f"Informamos que o(a) estudante {nome_aluno} recebeu uma SUSPENSÃO DISCIPLINAR.\n\n"
+        f"Período: {inicio} a {fim}.\n"
+        f"Motivo: {motivo}.\n\n"
+        f"Atenciosamente,\nEquipe Jansen Veloso."
+    )
+
+
 @st.cache_resource 
 def carregar_logo_base64():
     if os.path.exists("logo.png"):
@@ -552,6 +661,15 @@ def inicializar_tabelas():
         cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS alunos_v2 (codigo TEXT PRIMARY KEY, nome TEXT, turma TEXT, status TEXT DEFAULT 'ATIVO', email_responsavel TEXT, telefone_responsavel TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS registros_v2 (id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), data DATE, hora_entrada TIME, status_entrada TEXT, hora_saida TIME, motivo_saida TEXT, pais_informados BOOLEAN, tipo_registro TEXT, origem_entrada TEXT, UNIQUE(codigo_aluno, data, tipo_registro))")
+        cur.execute("""CREATE TABLE IF NOT EXISTS suspensoes_v1 (
+            id SERIAL PRIMARY KEY,
+            codigo_aluno TEXT REFERENCES alunos_v2(codigo),
+            data_inicio DATE NOT NULL,
+            data_fim DATE NOT NULL,
+            motivo TEXT NOT NULL,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_susp_codigo_datas ON suspensoes_v1(codigo_aluno, data_inicio, data_fim)")
         try:
             cur.execute("ALTER TABLE registros_v2 ADD COLUMN origem_entrada TEXT")
             conn.commit()
@@ -2195,7 +2313,13 @@ def gerar_pdf_painel_informativo(data_info, turma_info, df_aus, df_tarde, df_lib
             turma = txt(row.get('turma'))
             if tipo == 'ausentes':
                 motivo = txt(row.get('motivo_falta')).strip()
-                situacao = 'FALTA JUSTIFICADA - ' + motivo if motivo else 'FALTA NAO JUSTIFICADA'
+                motivo_susp = txt(row.get('motivo_suspensao')).strip()
+                if motivo_susp:
+                    inicio_s = txt(row.get('suspensao_inicio'))[:10]
+                    fim_s = txt(row.get('suspensao_fim'))[:10]
+                    situacao = f'SUSPENSAO DISCIPLINAR | {inicio_s} a {fim_s} | {motivo_susp}'
+                else:
+                    situacao = 'FALTA JUSTIFICADA - ' + motivo if motivo else 'FALTA NAO JUSTIFICADA'
                 pdf.cell(55, 7, nome[:35], 1)
                 pdf.cell(25, 7, codigo[:15], 1)
                 pdf.cell(28, 7, turma[:18], 1)
@@ -2230,7 +2354,124 @@ def gerar_pdf_painel_informativo(data_info, turma_info, df_aus, df_tarde, df_lib
         return out.encode('latin-1', errors='replace')
     return bytes(out)
 
-def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None):
+@st.cache_data(ttl=60)
+def carregar_suspensoes_aluno(codigo_aluno):
+    if not codigo_aluno:
+        return pd.DataFrame()
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        query = """
+            SELECT data_inicio, data_fim, motivo, criado_em
+            FROM suspensoes_v1
+            WHERE codigo_aluno = %s
+            ORDER BY data_inicio DESC, id DESC
+        """
+        return pd.read_sql_query(query, conn, params=[codigo_aluno])
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
+def registrar_suspensao(codigo_aluno, data_inicio, data_fim, motivo):
+    codigo = str(codigo_aluno or "").strip().upper()
+    motivo = str(motivo or "").strip()
+    if not codigo or not motivo:
+        return False, "Dados incompletos para registrar a suspensão."
+    if data_fim < data_inicio:
+        return False, "A data final não pode ser anterior à data inicial."
+
+    conn = conectar_bd()
+    if not conn:
+        return False, "Não foi possível conectar ao banco de dados."
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT nome, turma, email_responsavel FROM alunos_v2 WHERE codigo=%s AND status='ATIVO' LIMIT 1",
+            (codigo,),
+        )
+        aluno = cur.fetchone()
+        if not aluno:
+            conn.rollback()
+            return False, "Estudante não encontrado ou inativo."
+
+        nome, turma, email = aluno
+        cur.execute(
+            """
+            INSERT INTO suspensoes_v1 (codigo_aluno, data_inicio, data_fim, motivo)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (codigo, data_inicio, data_fim, motivo),
+        )
+        susp_id = cur.fetchone()[0]
+        conn.commit()
+        carregar_suspensoes_aluno.clear()
+        return True, {
+            "id": susp_id,
+            "codigo": codigo,
+            "nome": nome,
+            "turma": turma,
+            "email": email,
+            "data_inicio": data_inicio,
+            "data_fim": data_fim,
+            "motivo": motivo,
+        }
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, f"Erro ao registrar suspensão: {e}"
+    finally:
+        liberar_conn(conn)
+
+
+def excluir_suspensao(suspensao_id):
+    conn = conectar_bd()
+    if not conn:
+        return False, "Sem conexão com o banco de dados."
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM suspensoes_v1 WHERE id=%s", (suspensao_id,))
+        apagados = cur.rowcount
+        conn.commit()
+        carregar_suspensoes_aluno.clear()
+        return (True, "Suspensão excluída com sucesso." if apagados else "Registro não encontrado.")
+    except Exception as e:
+        conn.rollback()
+        return False, f"Erro ao excluir suspensão: {e}"
+    finally:
+        liberar_conn(conn)
+
+
+def buscar_suspensoes_na_data(data_str, turma="Todas"):
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        params = [data_str, data_str]
+        query = """
+            SELECT s.id, a.codigo, a.nome, a.turma, s.data_inicio, s.data_fim, s.motivo, a.telefone_responsavel, a.email_responsavel
+            FROM suspensoes_v1 s
+            JOIN alunos_v2 a ON a.codigo = s.codigo_aluno
+            WHERE s.data_inicio <= %s AND s.data_fim >= %s AND a.status='ATIVO'
+        """
+        if turma != "Todas":
+            query += " AND a.turma=%s"
+            params.append(turma)
+        query += " ORDER BY a.turma, a.nome"
+        return pd.read_sql_query(query, conn, params=params)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
+def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None, df_suspensoes_aluno=None):
     if not FPDF: 
         return None
     pdf = FPDF()
@@ -2387,6 +2628,46 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
             pdf.cell(50, 7, situacao[:34], 1)
             pdf.cell(35, 7, entrada if situacao == 'ATRASO' else '', 1)
             pdf.cell(77, 7, motivo[:52], 1)
+            pdf.ln()
+
+    # ------------------------------------------------------------
+    # SUSPENSÕES DISCIPLINARES
+    # ------------------------------------------------------------
+    if df_suspensoes_aluno is not None and not df_suspensoes_aluno.empty:
+        pdf.add_page()
+        pdf.set_fill_color(124, 45, 18)
+        pdf.rect(0, 0, 210, 30, 'F')
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font('Arial', 'B', 16)
+        pdf.cell(0, 12, 'HISTORICO DE SUSPENSOES DISCIPLINARES', 0, 1, 'C')
+        pdf.ln(12)
+        pdf.set_text_color(15, 23, 42)
+        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(38, 7, 'Inicio', 1)
+        pdf.cell(38, 7, 'Fim', 1)
+        pdf.cell(114, 7, 'Motivo', 1)
+        pdf.ln()
+        pdf.set_font('Arial', '', 8)
+        for row in df_suspensoes_aluno.to_dict('records'):
+            if pdf.get_y() > 268:
+                pdf.add_page()
+                pdf.set_font('Arial', 'B', 9)
+                pdf.cell(38, 7, 'Inicio', 1)
+                pdf.cell(38, 7, 'Fim', 1)
+                pdf.cell(114, 7, 'Motivo', 1)
+                pdf.ln()
+                pdf.set_font('Arial', '', 8)
+            try:
+                di = pd.to_datetime(row.get('data_inicio')).strftime('%d/%m/%Y')
+            except Exception:
+                di = str(row.get('data_inicio') or '')
+            try:
+                dfim = pd.to_datetime(row.get('data_fim')).strftime('%d/%m/%Y')
+            except Exception:
+                dfim = str(row.get('data_fim') or '')
+            pdf.cell(38, 7, di, 1)
+            pdf.cell(38, 7, dfim, 1)
+            pdf.cell(114, 7, str(row.get('motivo') or '')[:78], 1)
             pdf.ln()
 
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
@@ -2598,18 +2879,30 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
 
     try:
-        params_aus = [data_str, data_str]
+        params_aus = [data_str, data_str, data_str]
         query_aus = """
             SELECT
                 a.codigo,
                 a.nome,
                 a.turma,
-                f.motivo_saida AS motivo_falta
+                f.motivo_saida AS motivo_falta,
+                s.data_inicio AS suspensao_inicio,
+                s.data_fim AS suspensao_fim,
+                s.motivo AS motivo_suspensao
             FROM alunos_v2 a
             LEFT JOIN registros_v2 f
                 ON f.codigo_aluno = a.codigo
                AND f.data = %s
                AND f.tipo_registro = 'FALTA'
+            LEFT JOIN LATERAL (
+                SELECT data_inicio, data_fim, motivo
+                FROM suspensoes_v1 s0
+                WHERE s0.codigo_aluno = a.codigo
+                  AND s0.data_inicio <= %s::date
+                  AND s0.data_fim >= %s::date
+                ORDER BY s0.data_inicio DESC, s0.id DESC
+                LIMIT 1
+            ) s ON TRUE
             WHERE a.status = 'ATIVO'
               AND NOT EXISTS (
                     SELECT 1
@@ -2782,8 +3075,20 @@ def renderizar_painel_informativo_publico():
                 motivo_falta = _html.escape(
                     str(row.get("motivo_falta") or "").strip()
                 )
+                motivo_suspensao = _html.escape(
+                    str(row.get("motivo_suspensao") or "").strip()
+                )
 
-                if motivo_falta:
+                if motivo_suspensao:
+                    inicio_s = _html.escape(str(row.get("suspensao_inicio") or "")[:10])
+                    fim_s = _html.escape(str(row.get("suspensao_fim") or "")[:10])
+                    status_falta = (
+                        '<span style="color:#7c2d12;font-weight:900;">'
+                        '⛔ SUSPENSÃO DISCIPLINAR</span><br>'
+                        f'Período: <b>{inicio_s} a {fim_s}</b><br>'
+                        f'Motivo: <b>{motivo_suspensao}</b>'
+                    )
+                elif motivo_falta:
                     status_falta = (
                         '<span style="color:#166534;font-weight:900;">'
                         '✅ FALTA JUSTIFICADA</span> • Motivo: '
@@ -3013,11 +3318,11 @@ else:
 abas_do_sistema = [
     "🏠 Visão Geral",
     "📝 Registro",
-    "📊 Gestão Frequência",
+    "📊 Gestão de Frequência",
     "📱 Comunicação de Falta",
     "📢 Painel Informativo",
-    "🚨 Alertas",
-    "📈 Histórico",
+    "🚨 Risco de Evasão",
+    "📈 Histórico de Frequência",
     "📑 Desempenho Acadêmico",
     "💬 Satisfação Pública"
 ]
@@ -3033,11 +3338,15 @@ aba_atual = st.sidebar.radio(
     label_visibility="collapsed"
 )
 
-if eh_admin:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown('<div style="font-size:0.95rem;font-weight:900;color:#64748b;margin:0 0 8px 2px;">ADMINISTRAÇÃO</div>', unsafe_allow_html=True)
+if eh_admin and aba_atual == "⚙️ Manutenção do Sistema":
+    st.sidebar.markdown(
+        '<div style="margin:8px 0 4px 18px;padding:10px 14px;border-left:5px solid #f59e0b;'
+        'background:#fff7ed;border-radius:10px;font-weight:900;color:#9a3412;">'
+        'SUBMENU DE MANUTENÇÃO</div>',
+        unsafe_allow_html=True,
+    )
     try:
-        st.sidebar.page_link("pages/06_Manutencao_AVS.py", label="📊 Painel de Avaliação")
+        st.sidebar.page_link("pages/06_Manutencao_AVS.py", label="↳ 📊 Painel de Avaliação")
     except Exception:
         pass
 
@@ -3340,7 +3649,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
     st.markdown("---")
     
-    t_en, t_sa, t_jf = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS"])
+    t_en, t_sa, t_jf, t_susp = st.tabs(["✅ ENTRADA", "🚪 REGISTRO DE SAÍDA", "📝 JUSTIFICAR FALTAS", "⛔ SUSPENSÃO DO ESTUDANTE"])
     
     with t_en:
         if not verificar_dia_letivo(hoje_real): 
@@ -3525,6 +3834,112 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     else:
                         st.warning("⚠️ Por favor, informe o código do cartão ou selecione o nome na lista antes de confirmar.")
 
+    with t_susp:
+        st.subheader("⛔ Suspensão do Estudante")
+        st.info(
+            "Registre aqui uma suspensão disciplinar. Se houver e-mail cadastrado, "
+            "o responsável receberá automaticamente a comunicação após o salvamento."
+        )
+
+        lista_susp_alunos = [""]
+        if not df_alunos.empty:
+            lista_susp_alunos += [
+                f"{r['codigo']} - {r['nome']} ({r['turma']})"
+                for _, r in df_alunos.iterrows()
+            ]
+
+        with st.form("form_suspensao", clear_on_submit=True):
+            aluno_susp = st.selectbox(
+                "👤 Estudante",
+                lista_susp_alunos,
+                key="suspensao_aluno"
+            )
+            c_s1, c_s2 = st.columns(2)
+            with c_s1:
+                data_susp_inicio = st.date_input(
+                    "📅 Início da suspensão",
+                    value=obter_hora_atual().date(),
+                    key="suspensao_inicio"
+                )
+            with c_s2:
+                data_susp_fim = st.date_input(
+                    "📅 Fim da suspensão",
+                    value=obter_hora_atual().date(),
+                    key="suspensao_fim"
+                )
+
+            categoria_susp = st.selectbox(
+                "📚 Categoria da infração",
+                list(MOTIVOS_SUSPENSAO.keys()),
+                key="categoria_suspensao"
+            )
+            motivo_susp = st.selectbox(
+                "⚖️ Motivo da penalidade",
+                MOTIVOS_SUSPENSAO[categoria_susp],
+                key="motivo_suspensao"
+            )
+
+            if st.form_submit_button("💾 APLICAR SUSPENSÃO", type="primary"):
+                if not aluno_susp:
+                    st.warning("Selecione um estudante.")
+                elif data_susp_fim < data_susp_inicio:
+                    st.error("A data final não pode ser anterior à data inicial.")
+                else:
+                    cod_susp = aluno_susp.split(" - ")[0].strip()
+                    sucesso_susp, resultado_susp = registrar_suspensao(
+                        cod_susp,
+                        data_susp_inicio,
+                        data_susp_fim,
+                        motivo_susp,
+                    )
+                    if sucesso_susp:
+                        st.success(
+                            f"✅ Suspensão registrada para {resultado_susp['nome']} "
+                            f"({data_susp_inicio.strftime('%d/%m/%Y')} a {data_susp_fim.strftime('%d/%m/%Y')})."
+                        )
+                        if resultado_susp.get("email"):
+                            threading.Thread(
+                                target=enviar_email_suspensao_background,
+                                args=(
+                                    resultado_susp["email"],
+                                    resultado_susp["nome"],
+                                    resultado_susp["turma"],
+                                    data_susp_inicio,
+                                    data_susp_fim,
+                                    motivo_susp,
+                                ),
+                                daemon=True,
+                            ).start()
+                            st.info("📧 Comunicação de suspensão enviada para processamento.")
+                        else:
+                            st.warning("⚠️ O estudante não possui e-mail de responsável cadastrado.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(resultado_susp)
+
+        st.markdown("---")
+        st.subheader("📋 Suspensões registradas")
+        susp_aluno_filtro = aluno_susp if 'aluno_susp' in locals() else ""
+        if susp_aluno_filtro:
+            cod_filtro_susp = susp_aluno_filtro.split(" - ")[0].strip()
+            df_susp_reg = carregar_suspensoes_aluno(cod_filtro_susp)
+        else:
+            df_susp_reg = buscar_suspensoes_na_data(hoje_real, tf)
+
+        if df_susp_reg.empty:
+            st.info("Nenhuma suspensão encontrada para a seleção atual.")
+        else:
+            df_susp_exib = df_susp_reg.copy()
+            if 'codigo' not in df_susp_exib.columns:
+                df_susp_exib = df_susp_exib.rename(columns={'codigo_aluno': 'codigo'})
+            cols_show = [c for c in ['data_inicio','data_fim','motivo'] if c in df_susp_exib.columns]
+            if cols_show:
+                df_susp_exib = df_susp_exib[cols_show].rename(columns={
+                    'data_inicio': 'Início', 'data_fim': 'Fim', 'motivo': 'Motivo'
+                })
+                st.dataframe(df_susp_exib, use_container_width=True, hide_index=True)
+
     with t_jf:
         st.subheader("Justificar Faltas de Estudantes")
         d_just = st.date_input("Data da Falta", value=data_f_global)
@@ -3588,7 +4003,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
 indice_aba += 1
 
 # ================================================================
-# ABA "📊 GESTÃO FREQUÊNCIA" – COM CONTADORES
+# ABA "📊 GESTÃO DE FREQUÊNCIA" – COM CONTADORES
 # ================================================================
 if aba_atual == abas_do_sistema[indice_aba]:
     st.subheader("📊 Relatório Diário")
@@ -3799,6 +4214,49 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
             st.markdown("---")
 
+    st.markdown("## ⛔ Suspensões disciplinares")
+    st.caption("Estudantes com suspensão vigente na data selecionada. A comunicação pode ser encaminhada pelo WhatsApp.")
+    df_susp_com = buscar_suspensoes_na_data(data_comunicacao, turma_comunicacao)
+    if df_susp_com.empty:
+        st.info("Nenhuma suspensão vigente para os filtros selecionados.")
+    else:
+        for _, row_susp in df_susp_com.iterrows():
+            nome_susp = str(row_susp.get("nome") or "").strip()
+            turma_susp = str(row_susp.get("turma") or "").strip()
+            telefone_susp = normalizar_telefone_whatsapp(row_susp.get("telefone_responsavel", ""))
+            motivo_susp_com = str(row_susp.get("motivo") or "").strip()
+            try:
+                inicio_susp = pd.to_datetime(row_susp.get("data_inicio")).strftime("%d/%m/%Y")
+                fim_susp = pd.to_datetime(row_susp.get("data_fim")).strftime("%d/%m/%Y")
+            except Exception:
+                inicio_susp = str(row_susp.get("data_inicio") or "")
+                fim_susp = str(row_susp.get("data_fim") or "")
+
+            c_sc1, c_sc2 = st.columns([4, 2])
+            with c_sc1:
+                st.markdown(
+                    f"**⛔ {nome_susp}**  \n"
+                    f"Código: **{row_susp.get('codigo')}** • Turma: **{turma_susp}**  \n"
+                    f"Período: **{inicio_susp} a {fim_susp}**  \n"
+                    f"Motivo: **{motivo_susp_com}**"
+                )
+            with c_sc2:
+                if telefone_susp:
+                    link_susp = gerar_link_whatsapp(
+                        telefone_susp,
+                        mensagem_suspensao_whatsapp(
+                            nome_susp,
+                            row_susp.get("data_inicio"),
+                            row_susp.get("data_fim"),
+                            motivo_susp_com,
+                        ),
+                    )
+                    if link_susp:
+                        st.link_button("📱 ENVIAR SUSPENSÃO", link_susp, use_container_width=True)
+                else:
+                    st.warning("Sem WhatsApp cadastrado")
+            st.markdown("---")
+
 indice_aba += 1
 
 # ================================================================
@@ -3810,10 +4268,10 @@ if aba_atual == abas_do_sistema[indice_aba]:
 indice_aba += 1
 
 # ------------------------------------------------------------
-# DEMAIS ABAS (Alertas, Histórico, Desempenho, Satisfação, Manutenção)
+# DEMAIS ABAS (Risco de Evasão, Histórico de Frequência, Desempenho, Satisfação, Manutenção)
 # ------------------------------------------------------------
 if aba_atual == abas_do_sistema[indice_aba]:
-    st.subheader("🚨 Alunos em Risco (5 dias ausentes)")
+    st.subheader("🚨 Risco de Evasão — alunos com 5 dias ausentes")
     dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
     
     if dias_u:
@@ -3977,6 +4435,19 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         hide_index=True,
                     )
 
+                    st.markdown("### ⛔ Suspensões disciplinares")
+                    df_susp_hist = carregar_suspensoes_aluno(codigo_historico)
+                    if df_susp_hist.empty:
+                        st.info("Nenhuma suspensão disciplinar registrada para este estudante.")
+                    else:
+                        df_susp_hist_exib = df_susp_hist.copy()
+                        df_susp_hist_exib["data_inicio"] = pd.to_datetime(df_susp_hist_exib["data_inicio"], errors="coerce").dt.strftime("%d/%m/%Y")
+                        df_susp_hist_exib["data_fim"] = pd.to_datetime(df_susp_hist_exib["data_fim"], errors="coerce").dt.strftime("%d/%m/%Y")
+                        df_susp_hist_exib = df_susp_hist_exib.rename(
+                            columns={"data_inicio": "Início", "data_fim": "Fim", "motivo": "Motivo"}
+                        )[["Início", "Fim", "Motivo"]]
+                        st.dataframe(df_susp_hist_exib, use_container_width=True, hide_index=True)
+
             except Exception as e:
                 st.warning(
                     f"Erro ao carregar histórico: {e}"
@@ -4084,7 +4555,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                 df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
                                 codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
                                 df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
-                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a)
+                                df_susp_a = carregar_suspensoes_aluno(codigo_a)
+                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a)
                                 
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -4130,7 +4602,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
                             codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
                             df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
-                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a)
+                            df_susp_a = carregar_suspensoes_aluno(codigo_a)
+                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a)
                             if b_pdf: 
                                 st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                             else: 
@@ -4559,6 +5032,7 @@ if eh_admin:
                     cur = conn.cursor()
                     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM suspensoes_v1 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
                     conn.commit()
                     _carregar_alunos_cache.clear() 
