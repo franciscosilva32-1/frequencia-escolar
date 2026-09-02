@@ -2363,9 +2363,10 @@ def carregar_suspensoes_aluno(codigo_aluno):
     if not conn:
         return pd.DataFrame()
     try:
+        garantir_tabela_suspensoes_na_conexao(conn)
         query = """
             SELECT data_inicio, data_fim, motivo, criado_em
-            FROM suspensoes_v1
+            FROM public.suspensoes_v1
             WHERE codigo_aluno = %s
             ORDER BY data_inicio DESC, id DESC
         """
@@ -2389,6 +2390,7 @@ def registrar_suspensao(codigo_aluno, data_inicio, data_fim, motivo):
         return False, "Não foi possível conectar ao banco de dados."
 
     try:
+        garantir_tabela_suspensoes_na_conexao(conn)
         cur = conn.cursor()
         cur.execute(
             "SELECT nome, turma, email_responsavel FROM alunos_v2 WHERE codigo=%s AND status='ATIVO' LIMIT 1",
@@ -2402,7 +2404,7 @@ def registrar_suspensao(codigo_aluno, data_inicio, data_fim, motivo):
         nome, turma, email = aluno
         cur.execute(
             """
-            INSERT INTO suspensoes_v1 (codigo_aluno, data_inicio, data_fim, motivo)
+            INSERT INTO public.suspensoes_v1 (codigo_aluno, data_inicio, data_fim, motivo)
             VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
@@ -2437,7 +2439,7 @@ def excluir_suspensao(suspensao_id):
         return False, "Sem conexão com o banco de dados."
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM suspensoes_v1 WHERE id=%s", (suspensao_id,))
+        cur.execute("DELETE FROM public.suspensoes_v1 WHERE id=%s", (suspensao_id,))
         apagados = cur.rowcount
         conn.commit()
         carregar_suspensoes_aluno.clear()
@@ -2457,7 +2459,7 @@ def buscar_suspensoes_na_data(data_str, turma="Todas"):
         params = [data_str, data_str]
         query = """
             SELECT s.id, a.codigo, a.nome, a.turma, s.data_inicio, s.data_fim, s.motivo, a.telefone_responsavel, a.email_responsavel
-            FROM suspensoes_v1 s
+            FROM public.suspensoes_v1 s
             JOIN alunos_v2 a ON a.codigo = s.codigo_aluno
             WHERE s.data_inicio <= %s AND s.data_fim >= %s AND a.status='ATIVO'
         """
@@ -2865,6 +2867,73 @@ if st.query_params.get("modo") == "pesquisa":
     st.stop() 
 
 # ------------------------------------------------------------
+# GARANTIA DE SCHEMA PARA O PAINEL INFORMATIVO PÚBLICO
+# ------------------------------------------------------------
+def garantir_tabela_suspensoes_na_conexao(conn):
+    """Cria/ajusta a tabela de suspensões usando a MESMA conexão que fará a consulta.
+
+    Isso evita a condição de corrida/visibilidade que ocorria quando o painel abria uma
+    conexão para consultar os dados e outra para criar a tabela. A criação é idempotente.
+    A tabela é criada sem FK para não depender da ordem de criação de alunos_v2; a referência
+    lógica continua sendo o código do estudante.
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.suspensoes_v1 (
+            id SERIAL PRIMARY KEY,
+            codigo_aluno TEXT NOT NULL,
+            data_inicio DATE NOT NULL,
+            data_fim DATE NOT NULL,
+            motivo TEXT NOT NULL,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        ALTER TABLE public.suspensoes_v1
+        ADD COLUMN IF NOT EXISTS codigo_aluno TEXT
+    """)
+    cur.execute("""
+        ALTER TABLE public.suspensoes_v1
+        ADD COLUMN IF NOT EXISTS data_inicio DATE
+    """)
+    cur.execute("""
+        ALTER TABLE public.suspensoes_v1
+        ADD COLUMN IF NOT EXISTS data_fim DATE
+    """)
+    cur.execute("""
+        ALTER TABLE public.suspensoes_v1
+        ADD COLUMN IF NOT EXISTS motivo TEXT
+    """)
+    cur.execute("""
+        ALTER TABLE public.suspensoes_v1
+        ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_susp_codigo_datas
+        ON public.suspensoes_v1(codigo_aluno, data_inicio, data_fim)
+    """)
+    conn.commit()
+    return True, ""
+
+def garantir_tabela_suspensoes():
+    """Wrapper para pontos do sistema que precisam garantir o schema."""
+    conn = None
+    try:
+        conn = conectar_bd()
+        if not conn:
+            return False, "Não foi possível conectar ao banco de dados."
+        return garantir_tabela_suspensoes_na_conexao(conn)
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False, str(e)
+    finally:
+        liberar_conn(conn)
+
+# ------------------------------------------------------------
 # 7.1 MÓDULO PÚBLICO: PAINEL INFORMATIVO
 # ------------------------------------------------------------
 @st.cache_data(ttl=30)
@@ -2878,6 +2947,17 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
     conn = conectar_bd()
     if not conn:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, "Não foi possível conectar ao banco de dados."
+
+    # O painel é público e roda antes da autenticação administrativa.
+    # Cria/ajusta o schema na MESMA conexão que executará as consultas.
+    try:
+        garantir_tabela_suspensoes_na_conexao(conn)
+    except Exception as e_schema:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, f"Não foi possível preparar a estrutura de suspensões: {e_schema}"
 
     try:
         # A consulta utiliza quatro parâmetros de data:
@@ -2899,7 +2979,7 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
                AND f.tipo_registro = 'FALTA'
             LEFT JOIN LATERAL (
                 SELECT data_inicio, data_fim, motivo
-                FROM suspensoes_v1 s0
+                FROM public.suspensoes_v1 s0
                 WHERE s0.codigo_aluno = a.codigo
                   AND s0.data_inicio <= %s::date
                   AND s0.data_fim >= %s::date
@@ -5035,7 +5115,7 @@ if eh_admin:
                     cur = conn.cursor()
                     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
-                    cur.execute("DELETE FROM suspensoes_v1 WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM public.suspensoes_v1 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
                     conn.commit()
                     _carregar_alunos_cache.clear() 
