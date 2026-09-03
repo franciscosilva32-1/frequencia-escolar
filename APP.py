@@ -1533,7 +1533,7 @@ def ler_planilha_google(url, data_base):
         else:
             csv_url = url
 
-        response = requests.get(csv_url, timeout=30)
+        response = requests.get(csv_url, timeout=60)
         response.raise_for_status()
 
         from io import StringIO
@@ -1572,6 +1572,10 @@ def ler_planilha_google(url, data_base):
         else:
             # Se não tem coluna DATA, assume que todos são da data base
             df['DATA'] = data_base
+
+        # Guarda o valor bruto recebido pelo CSV da fonte para auditoria.
+        # Isso permite comparar: valor exibido na planilha -> valor recebido -> valor normalizado.
+        df['HORA_FONTE_BRUTA'] = df['HORA'].astype(str)
 
         # Preserva explicitamente a HORA ORIGINAL da planilha.
         # IMPORTANTE: nunca substituir por obter_hora_atual() ou pela hora do upload.
@@ -1635,6 +1639,13 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
         ]
 
     df = df.copy()
+
+    # Mantém o valor original da fonte antes de qualquer normalização.
+    if "HORA_FONTE_BRUTA" not in df.columns:
+        df["HORA_FONTE_BRUTA"] = df["HORA"].astype(str)
+    else:
+        df["HORA_FONTE_BRUTA"] = df["HORA_FONTE_BRUTA"].astype(str)
+
     df["HORA"] = df["HORA"].apply(normalizar_hora_entrada)
 
     linhas_invalidas_hora = df["HORA"].isna()
@@ -1731,6 +1742,7 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
     registros_novos = []
     registros_atualizar = []
     emails_para_disparar = []
+    auditoria_horas = []
 
     for idx, row in df.iterrows():
         codigo = str(row["CODIGO"]).strip().upper()
@@ -1750,7 +1762,23 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
         )
 
         hora_real_str = hora_real.strftime("%H:%M:%S")
+        hora_fonte_bruta = str(row.get("HORA_FONTE_BRUTA", "")).strip()
         chave = (codigo, data)
+
+        auditoria_horas.append({
+            "codigo": codigo,
+            "nome": alunos[codigo][0],
+            "data": data,
+            "hora_fonte_bruta": hora_fonte_bruta,
+            "hora_normalizada": hora_real_str,
+            "status_calculado": status,
+            "hora_banco_antes": None,
+            "status_banco_antes": None,
+            "hora_banco_depois": None,
+            "status_banco_depois": None,
+            "origem_banco_depois": None,
+            "divergencia": False,
+        })
 
         if chave in registros_existentes:
             hora_existente, status_existente = registros_existentes[chave]
@@ -1760,6 +1788,8 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
                 if hora_existente is not None
                 else None
             )
+            auditoria_horas[-1]["hora_banco_antes"] = hora_existente_str
+            auditoria_horas[-1]["status_banco_antes"] = status_existente
 
             # A PLANILHA é a fonte oficial para correção da hora/status.
             # A entrada via SISTEMA nunca sobrescreve um registro já existente.
@@ -1899,6 +1929,56 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
             f"E-mail NÃO enviado para {nome_falha} <{email_falha}>: "
             f"{motivo_falha}"
         )
+
+    # Auditoria pós-gravação: lê novamente do banco e compara com a fonte.
+    if auditoria_horas:
+        conn_aud = conectar_bd()
+        if conn_aud:
+            try:
+                cur_aud = conn_aud.cursor()
+                chaves = [(a["codigo"], a["data"]) for a in auditoria_horas]
+                for codigo_aud, data_aud in chaves:
+                    cur_aud.execute(
+                        """
+                        SELECT hora_entrada, status_entrada, origem_entrada
+                        FROM registros_v2
+                        WHERE codigo_aluno = %s
+                          AND data = %s
+                          AND tipo_registro = 'PRESENCA'
+                        LIMIT 1
+                        """,
+                        (codigo_aud, data_aud),
+                    )
+                    rec = cur_aud.fetchone()
+                    for a in auditoria_horas:
+                        if a["codigo"] == codigo_aud and a["data"] == data_aud:
+                            if rec:
+                                hora_pos = rec[0].strftime("%H:%M:%S") if rec[0] else None
+                                a["hora_banco_depois"] = hora_pos
+                                a["status_banco_depois"] = rec[1]
+                                a["origem_banco_depois"] = rec[2]
+                                a["divergencia"] = (
+                                    a["hora_normalizada"] != (hora_pos or "")
+                                    or str(a["status_calculado"] or "") != str(rec[1] or "")
+                                )
+                            break
+            finally:
+                liberar_conn(conn_aud)
+
+        # Guarda a auditoria na sessão para exibição após o processamento.
+        try:
+            st.session_state["auditoria_horas_entrada"] = auditoria_horas
+            st.session_state["auditoria_horas_data"] = data_base
+            st.session_state["auditoria_horas_origem"] = origem_entrada
+        except Exception:
+            pass
+
+        divergencias = [a for a in auditoria_horas if a.get("divergencia")]
+        if divergencias:
+            erros.append(
+                f"⚠️ AUDITORIA: {len(divergencias)} registro(s) apresentou(aram) divergência entre "
+                "hora/status processados e o que ficou gravado no banco. Consulte a Auditoria de Horários abaixo."
+            )
 
     # Se houve correção de horários/status, informe de forma explícita.
     if atualizados:
@@ -3837,6 +3917,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                     df_processar['DATA'] = pd.to_datetime(
                                         df_processar['DATA'], errors='coerce', dayfirst=True
                                     ).dt.date
+                                df_processar['HORA_FONTE_BRUTA'] = df_processar['HORA'].astype(str)
                                 df_processar['HORA'] = df_processar['HORA'].apply(normalizar_hora_entrada)
                                 df_processar = df_processar[df_processar['DATA'] == data_base]
                             fonte = "CSV"
@@ -3874,6 +3955,33 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                     st.markdown("### ⚠️ Detalhes dos erros")
                                     for e in erros:
                                         st.error(e)
+
+                                # Painel de auditoria: mostra exatamente o que a fonte enviou,
+                                # o que foi normalizado e o que ficou persistido no banco.
+                                auditoria = st.session_state.get("auditoria_horas_entrada", [])
+                                if auditoria:
+                                    df_aud = pd.DataFrame(auditoria)
+                                    if not df_aud.empty:
+                                        df_aud = df_aud[[
+                                            "codigo", "nome", "hora_fonte_bruta",
+                                            "hora_normalizada", "status_calculado",
+                                            "hora_banco_depois", "status_banco_depois",
+                                            "origem_banco_depois", "divergencia"
+                                        ]].copy()
+                                        df_aud.columns = [
+                                            "Código", "Estudante", "Hora na fonte",
+                                            "Hora processada", "Status calculado",
+                                            "Hora no banco", "Status no banco",
+                                            "Origem no banco", "Divergência"
+                                        ]
+                                        st.markdown("### 🕵️ Auditoria de Horários")
+                                        st.caption("Fonte → processamento → banco. Esta tabela existe para localizar exatamente onde uma hora eventualmente muda.")
+                                        st.dataframe(df_aud, use_container_width=True, hide_index=True)
+                                        if bool(df_aud["Divergência"].any()):
+                                            st.error("🚨 Existe pelo menos uma divergência entre a hora processada e a hora persistida no banco.")
+                                        else:
+                                            st.success("✅ Nenhuma divergência de hora/status foi detectada nesta importação.")
+
                                 contar_presencas_data.clear()
                                 carregar_faltas.clear()
                         else:
