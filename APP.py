@@ -725,10 +725,22 @@ def inicializar_tabelas():
             id SERIAL PRIMARY KEY, data_hora TIMESTAMP, categoria TEXT, turma TEXT, q1 INTEGER, q2 INTEGER, q3 INTEGER, q4 INTEGER, q5 INTEGER, sugestao TEXT
         )""")
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS comunicacoes_faltas_v1 (
+                id SERIAL PRIMARY KEY,
+                codigo_aluno TEXT REFERENCES alunos_v2(codigo),
+                data_falta DATE NOT NULL,
+                tipo_comunicacao TEXT NOT NULL DEFAULT 'WHATSAPP',
+                status TEXT NOT NULL DEFAULT 'COMUNICADO',
+                data_comunicacao TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(codigo_aluno, data_falta, tipo_comunicacao)
+            )
+        """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_com_falta_codigo ON comunicacoes_faltas_v1(codigo_aluno, data_falta)")
         conn.commit()
-        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'configuracoes']:
+        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'configuracoes', 'comunicacoes_faltas_v1']:
             try: 
                 cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
                 conn.commit()
@@ -983,6 +995,133 @@ def mensagem_falta_whatsapp(nome_aluno, data):
         f"Caso a falta já esteja justificada, desconsidere esta mensagem.\n\n"
         f"Atenciosamente,\nEquipe Jansen Veloso."
     )
+
+
+def registrar_comunicacao_falta(codigo_aluno, data_falta, tipo_comunicacao="WHATSAPP"):
+    """Registra que o operador acionou a comunicação da falta.
+
+    O registro é persistido no banco no momento do clique. Para a mesma
+    combinação aluno/data/tipo, a operação é idempotente: uma nova ação
+    atualiza o horário do último acionamento sem criar duplicidade.
+    """
+    conn = conectar_bd()
+    if not conn:
+        return False, "Não foi possível conectar ao banco de dados."
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO comunicacoes_faltas_v1
+                (codigo_aluno, data_falta, tipo_comunicacao, status, data_comunicacao)
+            VALUES (%s, %s, %s, 'COMUNICADO', %s)
+            ON CONFLICT (codigo_aluno, data_falta, tipo_comunicacao)
+            DO UPDATE SET
+                status = 'COMUNICADO',
+                data_comunicacao = EXCLUDED.data_comunicacao
+            RETURNING data_comunicacao
+        """, (codigo_aluno, data_falta, tipo_comunicacao, obter_hora_atual().replace(tzinfo=None)))
+        data_registro = cur.fetchone()[0]
+        conn.commit()
+        return True, data_registro
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, str(e)
+    finally:
+        liberar_conn(conn)
+
+
+def carregar_comunicacoes_aluno(codigo_aluno):
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        query = """
+            SELECT
+                data_falta,
+                tipo_comunicacao,
+                status,
+                data_comunicacao
+            FROM comunicacoes_faltas_v1
+            WHERE codigo_aluno = %s
+            ORDER BY data_falta DESC, data_comunicacao DESC
+        """
+        return pd.read_sql_query(query, conn, params=[codigo_aluno])
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
+def carregar_status_comunicacoes(data_falta, turma="Todas"):
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        params = [data_falta]
+        query = """
+            SELECT
+                c.codigo_aluno,
+                c.status AS comunicacao_status,
+                c.data_comunicacao,
+                c.tipo_comunicacao
+            FROM comunicacoes_faltas_v1 c
+            JOIN alunos_v2 a ON a.codigo = c.codigo_aluno
+            WHERE c.data_falta = %s
+              AND c.tipo_comunicacao = 'WHATSAPP'
+        """
+        if turma != "Todas":
+            query += " AND a.turma = %s"
+            params.append(turma)
+        return pd.read_sql_query(query, conn, params=params)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
+def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
+    """Calcula, sem depender do histórico de comunicação, a reincidência de faltas."""
+    conn = conectar_bd()
+    resultado = {
+        "faltas_anteriores": 0,
+        "comunicacoes_realizadas": 0,
+        "ultima_comunicacao": None,
+    }
+    if not conn:
+        return resultado
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT r.data
+                FROM registros_v2 r
+                WHERE r.codigo_aluno = %s
+                  AND r.data < %s::date
+                  AND (
+                        r.tipo_registro = 'FALTA'
+                        OR (r.tipo_registro IS NULL)
+                  )
+            ) x
+        """, (codigo_aluno, data_falta_atual))
+        resultado["faltas_anteriores"] = int(cur.fetchone()[0] or 0)
+
+        cur.execute("""
+            SELECT COUNT(*), MAX(data_comunicacao)
+            FROM comunicacoes_faltas_v1
+            WHERE codigo_aluno = %s
+              AND tipo_comunicacao = 'WHATSAPP'
+        """, (codigo_aluno,))
+        qtd, ultima = cur.fetchone()
+        resultado["comunicacoes_realizadas"] = int(qtd or 0)
+        resultado["ultima_comunicacao"] = ultima
+        return resultado
+    except Exception:
+        return resultado
+    finally:
+        liberar_conn(conn)
 
 # ------------------------------------------------------------
 # 6. LÓGICA DE NEGÓCIO E CACHES
@@ -2554,7 +2693,7 @@ def buscar_suspensoes_na_data(data_str, turma="Todas"):
         liberar_conn(conn)
 
 
-def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None, df_suspensoes_aluno=None):
+def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None, df_suspensoes_aluno=None, df_comunicacoes_aluno=None):
     if not FPDF: 
         return None
     pdf = FPDF()
@@ -2711,6 +2850,57 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
             pdf.cell(50, 7, situacao[:34], 1)
             pdf.cell(35, 7, entrada if situacao == 'ATRASO' else '', 1)
             pdf.cell(77, 7, motivo[:52], 1)
+            pdf.ln()
+
+    # ------------------------------------------------------------
+    # HISTÓRICO DE COMUNICAÇÃO DE FALTAS
+    # ------------------------------------------------------------
+    if df_comunicacoes_aluno is not None and not df_comunicacoes_aluno.empty:
+        pdf.add_page()
+        pdf.set_fill_color(10, 31, 53)
+        pdf.rect(0, 0, 210, 30, 'F')
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font('Arial', 'B', 16)
+        pdf.cell(0, 12, 'HISTORICO DE COMUNICACAO DE FALTAS', 0, 1, 'C')
+        pdf.ln(12)
+        pdf.set_text_color(15, 23, 42)
+
+        total_com = len(df_comunicacoes_aluno)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 7, f'Comunicacoes de falta registradas: {total_com}', 0, 1)
+        pdf.ln(2)
+
+        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(38, 7, 'Data da falta', 1)
+        pdf.cell(48, 7, 'Meio', 1)
+        pdf.cell(44, 7, 'Status', 1)
+        pdf.cell(60, 7, 'Data/Hora da acao', 1)
+        pdf.ln()
+        pdf.set_font('Arial', '', 8)
+
+        for row in df_comunicacoes_aluno.to_dict('records'):
+            if pdf.get_y() > 268:
+                pdf.add_page()
+                pdf.set_font('Arial', 'B', 9)
+                pdf.cell(38, 7, 'Data da falta', 1)
+                pdf.cell(48, 7, 'Meio', 1)
+                pdf.cell(44, 7, 'Status', 1)
+                pdf.cell(60, 7, 'Data/Hora da acao', 1)
+                pdf.ln()
+                pdf.set_font('Arial', '', 8)
+
+            try:
+                data_f_com = pd.to_datetime(row.get('data_falta')).strftime('%d/%m/%Y')
+            except Exception:
+                data_f_com = str(row.get('data_falta') or '')
+            try:
+                data_h_com = pd.to_datetime(row.get('data_comunicacao')).strftime('%d/%m/%Y %H:%M')
+            except Exception:
+                data_h_com = str(row.get('data_comunicacao') or '')
+            pdf.cell(38, 7, data_f_com, 1)
+            pdf.cell(48, 7, str(row.get('tipo_comunicacao') or 'WHATSAPP')[:24], 1)
+            pdf.cell(44, 7, str(row.get('status') or '')[:22], 1)
+            pdf.cell(60, 7, data_h_com[:32], 1)
             pdf.ln()
 
     # ------------------------------------------------------------
@@ -4289,7 +4479,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
     st.info(
         f"Os estudantes listados abaixo não possuem registro de presença "
         f"na data selecionada ({data_f_global.strftime('%d/%m/%Y')}). "
-        "O botão abre o WhatsApp Web com a mensagem já preparada."
+        "Ao clicar em 'ENVIAR / REGISTRAR', o sistema considera a comunicação concluída e grava a ocorrência no banco."
     )
 
     data_comunicacao = data_f_global.strftime("%Y-%m-%d")
@@ -4307,12 +4497,18 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     a.nome,
                     a.turma,
                     a.telefone_responsavel,
-                    r.motivo_saida
+                    r.motivo_saida,
+                    c.status AS comunicacao_status,
+                    c.data_comunicacao
                 FROM alunos_v2 a
                 LEFT JOIN registros_v2 r
                     ON a.codigo = r.codigo_aluno
                     AND r.data = %s
                     AND r.tipo_registro = 'FALTA'
+                LEFT JOIN comunicacoes_faltas_v1 c
+                    ON c.codigo_aluno = a.codigo
+                    AND c.data_falta = %s
+                    AND c.tipo_comunicacao = 'WHATSAPP'
                 WHERE a.status = 'ATIVO'
                   AND a.codigo NOT IN (
                       SELECT codigo_aluno
@@ -4321,7 +4517,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         AND tipo_registro = 'PRESENCA'
                   )
             """
-            params_com.append(data_comunicacao)
+            params_com.extend([data_comunicacao, data_comunicacao])
 
             if turma_comunicacao != "Todas":
                 query_com += " AND a.turma = %s"
@@ -4329,11 +4525,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
             query_com += " ORDER BY a.turma, a.nome"
 
-            df_faltosos_com = pd.read_sql_query(
-                query_com,
-                conn_com,
-                params=params_com
-            )
+            df_faltosos_com = pd.read_sql_query(query_com, conn_com, params=params_com)
         except Exception as e:
             st.error(f"Não foi possível carregar os estudantes faltosos: {e}")
         finally:
@@ -4342,86 +4534,142 @@ if aba_atual == abas_do_sistema[indice_aba]:
     if df_faltosos_com.empty:
         st.success("✅ Nenhum estudante faltoso encontrado para os filtros selecionados.")
     else:
+        df_faltosos_com['comunicado'] = (
+            df_faltosos_com['comunicacao_status'].fillna('').astype(str).str.upper() == 'COMUNICADO'
+        )
         total_faltosos_com = len(df_faltosos_com)
         total_com_whatsapp = int(
-            df_faltosos_com["telefone_responsavel"]
-            .fillna("")
-            .astype(str)
-            .apply(normalizar_telefone_whatsapp)
-            .ne("")
-            .sum()
+            df_faltosos_com['telefone_responsavel'].fillna('').astype(str).apply(normalizar_telefone_whatsapp).ne('').sum()
         )
+        total_comunicados = int(df_faltosos_com['comunicado'].sum())
+        total_pendentes = total_faltosos_com - total_comunicados
         total_sem_whatsapp = total_faltosos_com - total_com_whatsapp
 
-        c_com1, c_com2, c_com3 = st.columns(3)
+        c_com1, c_com2, c_com3, c_com4 = st.columns(4)
         c_com1.metric("❌ Faltosos", total_faltosos_com)
-        c_com2.metric("📱 Com WhatsApp", total_com_whatsapp)
-        c_com3.metric("⚠️ Sem WhatsApp", total_sem_whatsapp)
+        c_com2.metric("✅ Comunicados", total_comunicados)
+        c_com3.metric("🕐 Pendentes", total_pendentes)
+        c_com4.metric("⚠️ Sem WhatsApp", total_sem_whatsapp)
 
         st.markdown("---")
 
-        for idx, row in enumerate(df_faltosos_com.to_dict("records"), start=1):
-            nome_f = str(row.get("nome") or "").strip()
-            turma_f = str(row.get("turma") or "").strip()
-            telefone_f = normalizar_telefone_whatsapp(
-                row.get("telefone_responsavel", "")
-            )
-            motivo_f = str(row.get("motivo_saida") or "").strip()
+        for idx, row in enumerate(df_faltosos_com.to_dict('records'), start=1):
+            nome_f = str(row.get('nome') or '').strip()
+            turma_f = str(row.get('turma') or '').strip()
+            codigo_f = str(row.get('codigo') or '').strip()
+            telefone_f = normalizar_telefone_whatsapp(row.get('telefone_responsavel', ''))
+            motivo_f = str(row.get('motivo_saida') or '').strip()
+            comunicado_f = bool(row.get('comunicado', False))
+            reincidencia = resumo_reincidencia_aluno(codigo_f, data_comunicacao)
+            faltas_anteriores = reincidencia.get('faltas_anteriores', 0)
+            total_comunicacoes = reincidencia.get('comunicacoes_realizadas', 0)
 
-            col_nome, col_status, col_acao = st.columns([4, 2, 2])
+            titulo_status = '✅ COMUNICADO' if comunicado_f else '🕐 PENDENTE'
+            reincidente_txt = '🔁 REINCIDENTE' if faltas_anteriores > 0 else '🆕 PRIMEIRA OCORRÊNCIA'
 
-            with col_nome:
-                st.markdown(
-                    f"**{idx}. {nome_f}**  \n"
-                    f"Turma: **{turma_f}**"
-                )
+            with st.expander(
+                f"{idx}. {nome_f} — {turma_f} | {titulo_status} | {reincidente_txt}",
+                expanded=False,
+            ):
+                info1, info2, info3, info4 = st.columns(4)
+                info1.metric('Faltas anteriores', faltas_anteriores)
+                info2.metric('Comunicações realizadas', total_comunicacoes)
+                info3.metric('Status de hoje', 'COMUNICADO' if comunicado_f else 'PENDENTE')
+                ultima = reincidencia.get('ultima_comunicacao')
+                if ultima:
+                    try:
+                        ultima_txt = pd.to_datetime(ultima).strftime('%d/%m/%Y %H:%M')
+                    except Exception:
+                        ultima_txt = str(ultima)
+                else:
+                    ultima_txt = '—'
+                info4.metric('Última comunicação', ultima_txt)
 
-            with col_status:
                 if motivo_f:
                     st.warning(f"Falta registrada: {motivo_f}")
                 else:
-                    st.error("Falta sem justificativa")
+                    st.error('Falta sem justificativa')
 
-            with col_acao:
-                if telefone_f:
-                    mensagem_f = mensagem_falta_whatsapp(
-                        nome_f,
-                        data_comunicacao
-                    )
-                    link_f = gerar_link_whatsapp(
-                        telefone_f,
-                        mensagem_f
-                    )
-                    if link_f:
-                        st.link_button(
-                            "📱 ENVIAR WHATSAPP",
-                            link_f,
-                            use_container_width=True
-                        )
+                col_detalhe, col_acao = st.columns([4, 2])
+                with col_detalhe:
+                    if comunicado_f:
+                        data_com_reg = row.get('data_comunicacao')
+                        try:
+                            data_com_reg_txt = pd.to_datetime(data_com_reg).strftime('%d/%m/%Y %H:%M')
+                        except Exception:
+                            data_com_reg_txt = str(data_com_reg or '')
+                        st.success(f"✅ Comunicação de hoje registrada em **{data_com_reg_txt}**.")
+                    elif faltas_anteriores > 0:
+                        st.warning("🔁 Este estudante já possui ocorrência anterior de falta.")
+
+                with col_acao:
+                    mensagem_f = mensagem_falta_whatsapp(nome_f, data_comunicacao)
+                    link_f = gerar_link_whatsapp(telefone_f, mensagem_f) if telefone_f else None
+
+                    if telefone_f and link_f:
+                        chave_envio = f"com_falta_{codigo_f}_{data_comunicacao}"
+                        if comunicado_f:
+                            st.success('✅ Já comunicado')
+                            st.link_button('📱 REABRIR WHATSAPP', link_f, use_container_width=True)
+                        else:
+                            if st.button('📱 ENVIAR / REGISTRAR', key=chave_envio, use_container_width=True, type='primary'):
+                                ok_reg, retorno_reg = registrar_comunicacao_falta(codigo_f, data_comunicacao, 'WHATSAPP')
+                                if ok_reg:
+                                    st.success('✅ Comunicação registrada no banco.')
+                                    # Tentativa de abertura automática. Caso o navegador bloqueie a nova aba,
+                                    # o botão abaixo continuará disponível para abertura manual.
+                                    st.markdown(
+                                        f"<script>window.open({json.dumps(link_f)}, '_blank');</script>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.link_button('📱 ABRIR WHATSAPP', link_f, use_container_width=True)
+                                    st.rerun()
+                                else:
+                                    st.error(f'Não foi possível registrar a comunicação: {retorno_reg}')
+                    elif not telefone_f:
+                        st.warning('Sem WhatsApp cadastrado')
                     else:
-                        st.warning("Número inválido")
+                        st.warning('Número inválido')
+
+                st.markdown('#### 📜 Histórico do estudante')
+                df_com_hist = carregar_comunicacoes_aluno(codigo_f)
+                if df_com_hist.empty:
+                    st.info('Nenhuma comunicação anterior registrada.')
                 else:
-                    st.warning("Sem WhatsApp cadastrado")
+                    df_hist_com_exib = df_com_hist.copy()
+                    df_hist_com_exib['data_falta'] = pd.to_datetime(df_hist_com_exib['data_falta'], errors='coerce').dt.strftime('%d/%m/%Y')
+                    df_hist_com_exib['data_comunicacao'] = pd.to_datetime(df_hist_com_exib['data_comunicacao'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+                    df_hist_com_exib = df_hist_com_exib.rename(columns={
+                        'data_falta': 'Data da falta',
+                        'tipo_comunicacao': 'Meio',
+                        'status': 'Status',
+                        'data_comunicacao': 'Data/Hora da comunicação',
+                    })
+                    st.dataframe(
+                        df_hist_com_exib[['Data da falta', 'Meio', 'Status', 'Data/Hora da comunicação']],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
-            st.markdown("---")
+        st.caption('Critério operacional: ao clicar em “ENVIAR / REGISTRAR”, a escola considera a comunicação concluída e o evento fica persistido no banco. Isso registra a ação do operador, não uma confirmação de entrega do WhatsApp.')
 
-    st.markdown("## ⛔ Suspensões disciplinares")
-    st.caption("Estudantes com suspensão vigente na data selecionada. A comunicação pode ser encaminhada pelo WhatsApp.")
+    st.markdown('## ⛔ Suspensões disciplinares')
+    st.caption('Estudantes com suspensão vigente na data selecionada. A comunicação pode ser encaminhada pelo WhatsApp.')
     df_susp_com = buscar_suspensoes_na_data(data_comunicacao, turma_comunicacao)
     if df_susp_com.empty:
-        st.info("Nenhuma suspensão vigente para os filtros selecionados.")
+        st.info('Nenhuma suspensão vigente para os filtros selecionados.')
     else:
         for _, row_susp in df_susp_com.iterrows():
-            nome_susp = str(row_susp.get("nome") or "").strip()
-            turma_susp = str(row_susp.get("turma") or "").strip()
-            telefone_susp = normalizar_telefone_whatsapp(row_susp.get("telefone_responsavel", ""))
-            motivo_susp_com = str(row_susp.get("motivo") or "").strip()
+            nome_susp = str(row_susp.get('nome') or '').strip()
+            turma_susp = str(row_susp.get('turma') or '').strip()
+            telefone_susp = normalizar_telefone_whatsapp(row_susp.get('telefone_responsavel', ''))
+            motivo_susp_com = str(row_susp.get('motivo') or '').strip()
             try:
-                inicio_susp = pd.to_datetime(row_susp.get("data_inicio")).strftime("%d/%m/%Y")
-                fim_susp = pd.to_datetime(row_susp.get("data_fim")).strftime("%d/%m/%Y")
+                inicio_susp = pd.to_datetime(row_susp.get('data_inicio')).strftime('%d/%m/%Y')
+                fim_susp = pd.to_datetime(row_susp.get('data_fim')).strftime('%d/%m/%Y')
             except Exception:
-                inicio_susp = str(row_susp.get("data_inicio") or "")
-                fim_susp = str(row_susp.get("data_fim") or "")
+                inicio_susp = str(row_susp.get('data_inicio') or '')
+                fim_susp = str(row_susp.get('data_fim') or '')
 
             c_sc1, c_sc2 = st.columns([4, 2])
             with c_sc1:
@@ -4437,16 +4685,16 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         telefone_susp,
                         mensagem_suspensao_whatsapp(
                             nome_susp,
-                            row_susp.get("data_inicio"),
-                            row_susp.get("data_fim"),
+                            row_susp.get('data_inicio'),
+                            row_susp.get('data_fim'),
                             motivo_susp_com,
                         ),
                     )
                     if link_susp:
-                        st.link_button("📱 ENVIAR SUSPENSÃO", link_susp, use_container_width=True)
+                        st.link_button('📱 ENVIAR SUSPENSÃO', link_susp, use_container_width=True)
                 else:
-                    st.warning("Sem WhatsApp cadastrado")
-            st.markdown("---")
+                    st.warning('Sem WhatsApp cadastrado')
+            st.markdown('---')
 
 indice_aba += 1
 
@@ -4639,6 +4887,26 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         )[["Início", "Fim", "Motivo"]]
                         st.dataframe(df_susp_hist_exib, use_container_width=True, hide_index=True)
 
+                    st.markdown('### 📱 Comunicação de faltas')
+                    df_com_hist_ind = carregar_comunicacoes_aluno(codigo_historico)
+                    if df_com_hist_ind.empty:
+                        st.info('Nenhuma comunicação de falta registrada para este estudante.')
+                    else:
+                        df_com_hist_ind_exib = df_com_hist_ind.copy()
+                        df_com_hist_ind_exib['data_falta'] = pd.to_datetime(df_com_hist_ind_exib['data_falta'], errors='coerce').dt.strftime('%d/%m/%Y')
+                        df_com_hist_ind_exib['data_comunicacao'] = pd.to_datetime(df_com_hist_ind_exib['data_comunicacao'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+                        df_com_hist_ind_exib = df_com_hist_ind_exib.rename(columns={
+                            'data_falta': 'Data da falta',
+                            'tipo_comunicacao': 'Meio',
+                            'status': 'Status',
+                            'data_comunicacao': 'Data/Hora da comunicação',
+                        })
+                        st.dataframe(
+                            df_com_hist_ind_exib[['Data da falta', 'Meio', 'Status', 'Data/Hora da comunicação']],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
             except Exception as e:
                 st.warning(
                     f"Erro ao carregar histórico: {e}"
@@ -4747,7 +5015,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                 codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
                                 df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
                                 df_susp_a = carregar_suspensoes_aluno(codigo_a)
-                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a)
+                                df_com_a = carregar_comunicacoes_aluno(codigo_a)
+                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a, df_com_a)
                                 
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
@@ -4794,7 +5063,8 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
                             df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
                             df_susp_a = carregar_suspensoes_aluno(codigo_a)
-                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a)
+                            df_com_a = carregar_comunicacoes_aluno(codigo_a)
+                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a, df_com_a)
                             if b_pdf: 
                                 st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
                             else: 
@@ -5223,6 +5493,7 @@ if eh_admin:
                     cur = conn.cursor()
                     cur.execute("DELETE FROM registros_v2 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM faltas_primeira_chamada WHERE codigo_aluno = %s", (cod_del,))
+                    cur.execute("DELETE FROM comunicacoes_faltas_v1 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM public.suspensoes_v1 WHERE codigo_aluno = %s", (cod_del,))
                     cur.execute("DELETE FROM alunos_v2 WHERE codigo = %s", (cod_del,))
                     conn.commit()
