@@ -1082,32 +1082,82 @@ def carregar_status_comunicacoes(data_falta, turma="Todas"):
 
 
 def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
-    """Calcula, sem depender do histórico de comunicação, a reincidência de faltas."""
+    """Retorna o resumo de reincidência e as datas das faltas anteriores.
+
+    Para identificar faltas anteriores, considera:
+    - registros explícitos do tipo FALTA; e
+    - dias marcados como letivos no calendário em que o estudante não possui
+      registro de PRESENCA.
+
+    A lista de datas também preserva a indicação de falta justificada quando
+    houver motivo registrado.
+    """
     conn = conectar_bd()
     resultado = {
         "faltas_anteriores": 0,
+        "datas_faltas_anteriores": [],
         "comunicacoes_realizadas": 0,
         "ultima_comunicacao": None,
     }
     if not conn:
         return resultado
     try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT COUNT(*)
-            FROM (
-                SELECT DISTINCT r.data
-                FROM registros_v2 r
-                WHERE r.codigo_aluno = %s
-                  AND r.data < %s::date
-                  AND (
-                        r.tipo_registro = 'FALTA'
-                        OR (r.tipo_registro IS NULL)
-                  )
-            ) x
-        """, (codigo_aluno, data_falta_atual))
-        resultado["faltas_anteriores"] = int(cur.fetchone()[0] or 0)
+        query_faltas = """
+            WITH dias AS (
+                SELECT data
+                FROM calendario_letivo
+                WHERE dia_letivo = TRUE
+                  AND data < %s::date
 
+                UNION
+
+                SELECT data
+                FROM registros_v2
+                WHERE codigo_aluno = %s
+                  AND data < %s::date
+            )
+            SELECT
+                d.data,
+                CASE
+                    WHEN r.tipo_registro = 'FALTA' AND r.motivo_saida IS NOT NULL
+                        THEN 'FALTA JUSTIFICADA'
+                    WHEN r.tipo_registro = 'FALTA'
+                        THEN 'FALTA'
+                    WHEN r.id IS NULL
+                        THEN 'FALTA SEM REGISTRO'
+                    ELSE NULL
+                END AS situacao
+            FROM dias d
+            LEFT JOIN registros_v2 r
+              ON r.codigo_aluno = %s
+             AND r.data = d.data
+            WHERE r.tipo_registro = 'FALTA'
+               OR r.id IS NULL
+            ORDER BY d.data DESC
+        """
+
+        df_faltas = pd.read_sql_query(
+            query_faltas,
+            conn,
+            params=[data_falta_atual, codigo_aluno, data_falta_atual, codigo_aluno],
+        )
+
+        if not df_faltas.empty:
+            resultado["faltas_anteriores"] = int(df_faltas["data"].nunique())
+            datas = []
+            for _, linha in df_faltas.iterrows():
+                data_ocorrencia = pd.to_datetime(linha.get("data"), errors="coerce")
+                if pd.isna(data_ocorrencia):
+                    continue
+                situacao = str(linha.get("situacao") or "FALTA").strip().upper()
+                datas.append({
+                    "data": data_ocorrencia.date(),
+                    "justificada": situacao == "FALTA JUSTIFICADA",
+                    "situacao": situacao,
+                })
+            resultado["datas_faltas_anteriores"] = datas
+
+        cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*), MAX(data_comunicacao)
             FROM comunicacoes_faltas_v1
@@ -4585,10 +4635,29 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     ultima_txt = '—'
                 info4.metric('Última comunicação', ultima_txt)
 
-                if motivo_f:
-                    st.warning(f"Falta registrada: {motivo_f}")
+                datas_faltas_anteriores = reincidencia.get('datas_faltas_anteriores', []) or []
+
+                if faltas_anteriores > 0:
+                    st.markdown('**📅 Datas das faltas anteriores:**')
+                    linhas_datas = []
+                    for ocorrencia in datas_faltas_anteriores:
+                        try:
+                            data_txt = ocorrencia['data'].strftime('%d/%m/%Y')
+                        except Exception:
+                            data_txt = str(ocorrencia.get('data') or '')
+                        if ocorrencia.get('justificada'):
+                            data_txt += ' — 📝 justificada'
+                        elif ocorrencia.get('situacao') == 'FALTA SEM REGISTRO':
+                            data_txt += ' — ❌ sem registro'
+                        linhas_datas.append(f'• {data_txt}')
+                    st.markdown('\n'.join(linhas_datas))
                 else:
-                    st.error('Falta sem justificativa')
+                    st.info('🆕 Nenhuma falta anterior encontrada para este estudante.')
+
+                if motivo_f:
+                    st.warning(f"Falta registrada hoje: {motivo_f}")
+                else:
+                    st.error('Falta de hoje sem justificativa')
 
                 col_detalhe, col_acao = st.columns([4, 2])
                 with col_detalhe:
