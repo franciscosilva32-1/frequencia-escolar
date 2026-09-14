@@ -980,7 +980,10 @@ def gerar_link_whatsapp(telefone, mensagem):
     numero = normalizar_telefone_whatsapp(telefone)
     if not numero or len(numero) < 12 or len(numero) > 13:
         return None
-    return f"https://web.whatsapp.com/send?phone={numero}&text={quote(mensagem)}"
+    # Link universal do WhatsApp. Em dispositivos móveis, o sistema operacional
+    # pode encaminhar para o aplicativo instalado; em desktop, o WhatsApp Web
+    # assume o fluxo. Evitamos apontar diretamente para web.whatsapp.com.
+    return f"https://wa.me/{numero}?text={quote(mensagem)}"
 
 
 def mensagem_falta_whatsapp(nome_aluno, data):
