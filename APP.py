@@ -9,6 +9,7 @@ import os
 import io
 import base64
 import json
+import html
 import unicodedata
 import streamlit.components.v1 as components
 from streamlit_cookies_manager import CookieManager
