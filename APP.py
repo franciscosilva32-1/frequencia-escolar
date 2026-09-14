@@ -980,10 +980,21 @@ def gerar_link_whatsapp(telefone, mensagem):
     numero = normalizar_telefone_whatsapp(telefone)
     if not numero or len(numero) < 12 or len(numero) > 13:
         return None
-    # Link universal do WhatsApp. Em dispositivos móveis, o sistema operacional
-    # pode encaminhar para o aplicativo instalado; em desktop, o WhatsApp Web
-    # assume o fluxo. Evitamos apontar diretamente para web.whatsapp.com.
+    # Link universal do WhatsApp.
+    # No celular, permite que o sistema operacional encaminhe para o
+    # aplicativo; no computador, abre o fluxo web.
     return f"https://wa.me/{numero}?text={quote(mensagem)}"
+
+
+def gerar_link_acao_comunicacao(codigo_aluno, data_falta):
+    """Rota intermediária que registra a comunicação e redireciona ao WhatsApp.
+
+    A rota é aberta em uma janela com nome fixo (whatsapp_comunicacao).
+    Isso evita que o navegador crie uma nova janela para cada estudante.
+    """
+    codigo = quote(str(codigo_aluno or "").strip().upper(), safe="")
+    data = quote(str(data_falta or "").strip(), safe="")
+    return f"?acao=comunicar_falta&codigo={codigo}&data={data}"
 
 
 def mensagem_falta_whatsapp(nome_aluno, data):
@@ -3625,6 +3636,83 @@ except Exception:
 # Inicializa/valida o schema apenas para usuários autenticados.
 inicializar_tabelas()
 
+# ----------------------------------------------------------------
+# ROTA ESPECIAL DE COMUNICAÇÃO
+# Abre na janela nomeada "whatsapp_comunicacao", registra a ação
+# no banco e então encaminha para o WhatsApp.
+# ----------------------------------------------------------------
+if st.query_params.get("acao") == "comunicar_falta":
+    codigo_acao = str(st.query_params.get("codigo", "")).strip().upper()
+    data_acao = str(st.query_params.get("data", "")).strip()
+
+    if not codigo_acao or not data_acao:
+        st.error("Dados da comunicação incompletos.")
+        st.stop()
+
+    conn_acao = conectar_bd()
+    telefone_acao = ""
+    nome_acao = ""
+    try:
+        cur_acao = conn_acao.cursor()
+        cur_acao.execute(
+            "SELECT nome, telefone_responsavel FROM alunos_v2 WHERE codigo = %s",
+            (codigo_acao,),
+        )
+        registro_acao = cur_acao.fetchone()
+
+        if not registro_acao:
+            st.error("Estudante não encontrado.")
+            st.stop()
+
+        nome_acao = str(registro_acao[0] or "").strip()
+        telefone_acao = normalizar_telefone_whatsapp(registro_acao[1])
+
+    finally:
+        liberar_conn(conn_acao)
+
+    mensagem_acao = mensagem_falta_whatsapp(nome_acao, data_acao)
+    link_whats_acao = gerar_link_whatsapp(telefone_acao, mensagem_acao)
+
+    if not link_whats_acao:
+        st.error("O estudante não possui um número de WhatsApp válido.")
+        st.stop()
+
+    ok_acao, retorno_acao = registrar_comunicacao_falta(
+        codigo_acao,
+        data_acao,
+        "WHATSAPP",
+    )
+
+    if not ok_acao:
+        st.error(f"Não foi possível registrar a comunicação: {retorno_acao}")
+        st.stop()
+
+    components.html(
+        f"""
+        <script>
+        window.parent.location.replace({json.dumps(link_whats_acao)});
+        </script>
+        """,
+        height=1,
+    )
+
+    st.markdown(
+        f"""
+        <div style="
+            text-align:center;
+            padding:35px 15px;
+            font-size:1.15rem;
+            font-weight:700;
+            color:#0a1f35;
+        ">
+            ✅ Comunicação registrada.<br>
+            Abrindo o WhatsApp para <strong>{html.escape(nome_acao)}</strong>...
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 df_alunos = carregar_alunos()
 
 c_out1, c_out2 = st.columns([10, 1])
@@ -4610,40 +4698,40 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     link_f = gerar_link_whatsapp(telefone_f, mensagem_f) if telefone_f else None
 
                     if telefone_f and link_f:
-                        chave_envio = f"com_falta_{codigo_f}_{data_comunicacao}"
                         if comunicado_f:
-                            st.success('✅ Já comunicado')
-                            st.link_button('📱 REABRIR WHATSAPP', link_f, use_container_width=True)
+                            st.markdown(
+                                f'''
+                                <a href="{html.escape(link_f, quote=True)}"
+                                   target="whatsapp_comunicacao"
+                                   rel="noopener noreferrer"
+                                   style="display:block;width:100%;box-sizing:border-box;
+                                          background:#16a34a;color:#ffffff;text-align:center;
+                                          text-decoration:none;border-radius:12px;font-weight:800;
+                                          font-size:1.15rem;padding:15px 10px;">
+                                   📱 REABRIR WHATSAPP
+                                </a>
+                                ''',
+                                unsafe_allow_html=True,
+                            )
                         else:
-                            if st.button('📱 ENVIAR / REGISTRAR', key=chave_envio, use_container_width=True, type='primary'):
-                                ok_reg, retorno_reg = registrar_comunicacao_falta(codigo_f, data_comunicacao, 'WHATSAPP')
-                                if ok_reg:
-                                    st.success('✅ Comunicação registrada no banco.')
-                                    # Tentativa de abertura automática. Caso o navegador bloqueie a nova aba,
-                                    # o botão abaixo continuará disponível para abertura manual.
-                                    # Reutiliza uma única janela nomeada para o WhatsApp Web.
-                                    # O navegador mantém a mesma janela ao trocar de destinatário.
-                                    st.markdown(
-                                        f"<script>window.open({json.dumps(link_f)}, 'whatsapp_comunicacao');</script>",
-                                        unsafe_allow_html=True,
-                                    )
-                                    st.markdown(
-                                        f'''
-                                        <a href="{html.escape(link_f, quote=True)}"
-                                           target="whatsapp_comunicacao"
-                                           rel="noopener noreferrer"
-                                           style="display:block;width:100%;box-sizing:border-box;
-                                                  background:#16a34a;color:#ffffff;text-align:center;
-                                                  text-decoration:none;border-radius:12px;font-weight:800;
-                                                  font-size:1.15rem;padding:15px 10px;margin-top:8px;">
-                                           📱 ABRIR WHATSAPP
-                                        </a>
-                                        ''',
-                                        unsafe_allow_html=True,
-                                    )
-                                    st.rerun()
-                                else:
-                                    st.error(f'Não foi possível registrar a comunicação: {retorno_reg}')
+                            link_acao = gerar_link_acao_comunicacao(
+                                codigo_f,
+                                data_comunicacao,
+                            )
+                            st.markdown(
+                                f'''
+                                <a href="{html.escape(link_acao, quote=True)}"
+                                   target="whatsapp_comunicacao"
+                                   rel="noopener noreferrer"
+                                   style="display:block;width:100%;box-sizing:border-box;
+                                          background:#ff7b00;color:#ffffff;text-align:center;
+                                          text-decoration:none;border-radius:12px;font-weight:800;
+                                          font-size:1.15rem;padding:15px 10px;">
+                                   📱 ENVIAR / REGISTRAR
+                                </a>
+                                ''',
+                                unsafe_allow_html=True,
+                            )
                     elif not telefone_f:
                         st.warning('Sem WhatsApp cadastrado')
                     else:
