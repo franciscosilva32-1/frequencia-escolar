@@ -987,70 +987,43 @@ def gerar_link_whatsapp(telefone, mensagem):
     return f"https://wa.me/{numero}?text={quote(mensagem)}"
 
 
-def gerar_link_acao_comunicacao(codigo_aluno, data_falta):
-    """Rota intermediária que registra a comunicação e redireciona ao WhatsApp.
+def gerar_link_whatsapp_app(telefone, mensagem):
+    """Gera um link direto para o aplicativo WhatsApp.
 
-    A rota é aberta em uma janela com nome fixo (whatsapp_comunicacao).
-    Isso evita que o navegador crie uma nova janela para cada estudante.
+    Este fluxo é usado na Comunicação de Falta para evitar que o navegador
+    crie uma nova aba/janela para cada estudante. Em dispositivos com
+    WhatsApp instalado, o sistema operacional encaminha a ação ao aplicativo.
+    Não usa target=_blank nem window.open.
     """
-    codigo = quote(str(codigo_aluno or "").strip().upper(), safe="")
-    data = quote(str(data_falta or "").strip(), safe="")
-    return f"?acao=comunicar_falta&codigo={codigo}&data={data}"
+    numero = normalizar_telefone_whatsapp(telefone)
+    if not numero or len(numero) < 12 or len(numero) > 13:
+        return None
+    return f"whatsapp://send?phone={numero}&text={quote(mensagem)}"
 
 
-def renderizar_botao_whatsapp_janela_unica(url_destino, rotulo, cor):
-    """Renderiza um botão que reutiliza uma única janela/aba chamada WhatsApp.
+def renderizar_link_whatsapp_app(url_destino, rotulo="📱 ABRIR WHATSAPP", cor="#16a34a"):
+    """Renderiza um link direto para o aplicativo, na mesma página.
 
-    O clique permanece sendo uma ação direta do usuário. O JavaScript abre a URL
-    em um contexto de navegação nomeado, evitando que cada estudante gere uma
-    nova aba. Para rotas relativas do próprio Streamlit, a URL é resolvida a
-    partir da página principal antes da abertura.
+    Não define target e não usa window.open; portanto, não cria uma nova
+    aba pelo código do sistema.
     """
-    url_js = json.dumps(str(url_destino or ""), ensure_ascii=False)
-    rotulo_html = html.escape(str(rotulo or ""))
-    cor_html = html.escape(str(cor or "#ff7b00"), quote=True)
-
-    components.html(
+    if not url_destino:
+        return
+    url_html = html.escape(str(url_destino), quote=True)
+    rotulo_html = html.escape(str(rotulo))
+    cor_html = html.escape(str(cor or "#16a34a"), quote=True)
+    st.markdown(
         f"""
-        <style>
-            body {{ margin: 0; background: transparent; }}
-            .wa-single-window-btn {{
-                width: 100%;
-                box-sizing: border-box;
-                border: none;
-                border-radius: 12px;
-                padding: 15px 10px;
-                background: {cor_html};
-                color: #ffffff;
-                font-size: 1.15rem;
-                font-weight: 800;
-                font-family: Arial, sans-serif;
-                cursor: pointer;
-                box-shadow: 0 4px 10px rgba(15,23,42,.12);
-            }}
-            .wa-single-window-btn:hover {{ filter: brightness(.95); }}
-            .wa-single-window-btn:active {{ transform: scale(.99); }}
-        </style>
-        <button class="wa-single-window-btn" type="button"
-                onclick='abrirWhatsAppJanelaUnica({url_js})'>
-            {rotulo_html}
-        </button>
-        <script>
-            function abrirWhatsAppJanelaUnica(destino) {{
-                try {{
-                    let urlFinal = destino;
-                    if (destino.startsWith('?') || destino.startsWith('/')) {{
-                        const topo = window.top.location;
-                        urlFinal = topo.origin + topo.pathname + destino;
-                    }}
-                    window.open(urlFinal, 'whatsapp_comunicacao');
-                }} catch (e) {{
-                    window.open(destino, 'whatsapp_comunicacao');
-                }}
-            }}
-        </script>
+        <a href="{url_html}"
+           style="display:block;width:100%;box-sizing:border-box;
+                  background:{cor_html};color:#ffffff;text-align:center;
+                  text-decoration:none;border-radius:12px;font-weight:800;
+                  font-size:1.15rem;padding:15px 10px;
+                  box-shadow:0 4px 10px rgba(15,23,42,.12);">
+           {rotulo_html}
+        </a>
         """,
-        height=72,
+        unsafe_allow_html=True,
     )
 
 
@@ -1153,7 +1126,13 @@ def carregar_status_comunicacoes(data_falta, turma="Todas"):
 
 
 def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
-    """Calcula, sem depender do histórico de comunicação, a reincidência de faltas."""
+    """Retorna faltas anteriores e histórico de comunicação do estudante.
+
+    A contagem de faltas anteriores considera também dias letivos sem uma
+    linha explícita em registros_v2, classificando-os como AUSENTE SEM REGISTRO.
+    Isso mantém o indicador de reincidência coerente com o histórico de
+    frequência e com o boletim.
+    """
     conn = conectar_bd()
     resultado = {
         "faltas_anteriores": 0,
@@ -1165,18 +1144,38 @@ def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
     try:
         cur = conn.cursor()
         cur.execute("""
+            WITH dias AS (
+                SELECT data
+                FROM calendario_letivo
+                WHERE dia_letivo = TRUE
+                  AND data < %s::date
+                UNION
+                SELECT data
+                FROM registros_v2
+                WHERE codigo_aluno = %s
+                  AND data < %s::date
+            ), historico AS (
+                SELECT
+                    d.data,
+                    CASE
+                        WHEN r.tipo_registro = 'PRESENCA'
+                             AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
+                        WHEN r.tipo_registro = 'PRESENCA' THEN 'PRESENTE'
+                        WHEN r.tipo_registro = 'FALTA'
+                             AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL
+                            THEN 'FALTA JUSTIFICADA'
+                        WHEN r.tipo_registro = 'FALTA' THEN 'FALTA'
+                        ELSE 'AUSENTE SEM REGISTRO'
+                    END AS situacao
+                FROM dias d
+                LEFT JOIN registros_v2 r
+                  ON r.codigo_aluno = %s
+                 AND r.data = d.data
+            )
             SELECT COUNT(*)
-            FROM (
-                SELECT DISTINCT r.data
-                FROM registros_v2 r
-                WHERE r.codigo_aluno = %s
-                  AND r.data < %s::date
-                  AND (
-                        r.tipo_registro = 'FALTA'
-                        OR (r.tipo_registro IS NULL)
-                  )
-            ) x
-        """, (codigo_aluno, data_falta_atual))
+            FROM historico
+            WHERE situacao IN ('FALTA', 'FALTA JUSTIFICADA', 'AUSENTE SEM REGISTRO')
+        """, (data_falta_atual, codigo_aluno, data_falta_atual, codigo_aluno))
         resultado["faltas_anteriores"] = int(cur.fetchone()[0] or 0)
 
         cur.execute("""
@@ -3693,83 +3692,6 @@ except Exception:
 # Inicializa/valida o schema apenas para usuários autenticados.
 inicializar_tabelas()
 
-# ----------------------------------------------------------------
-# ROTA ESPECIAL DE COMUNICAÇÃO
-# Abre na janela nomeada "whatsapp_comunicacao", registra a ação
-# no banco e então encaminha para o WhatsApp.
-# ----------------------------------------------------------------
-if st.query_params.get("acao") == "comunicar_falta":
-    codigo_acao = str(st.query_params.get("codigo", "")).strip().upper()
-    data_acao = str(st.query_params.get("data", "")).strip()
-
-    if not codigo_acao or not data_acao:
-        st.error("Dados da comunicação incompletos.")
-        st.stop()
-
-    conn_acao = conectar_bd()
-    telefone_acao = ""
-    nome_acao = ""
-    try:
-        cur_acao = conn_acao.cursor()
-        cur_acao.execute(
-            "SELECT nome, telefone_responsavel FROM alunos_v2 WHERE codigo = %s",
-            (codigo_acao,),
-        )
-        registro_acao = cur_acao.fetchone()
-
-        if not registro_acao:
-            st.error("Estudante não encontrado.")
-            st.stop()
-
-        nome_acao = str(registro_acao[0] or "").strip()
-        telefone_acao = normalizar_telefone_whatsapp(registro_acao[1])
-
-    finally:
-        liberar_conn(conn_acao)
-
-    mensagem_acao = mensagem_falta_whatsapp(nome_acao, data_acao)
-    link_whats_acao = gerar_link_whatsapp(telefone_acao, mensagem_acao)
-
-    if not link_whats_acao:
-        st.error("O estudante não possui um número de WhatsApp válido.")
-        st.stop()
-
-    ok_acao, retorno_acao = registrar_comunicacao_falta(
-        codigo_acao,
-        data_acao,
-        "WHATSAPP",
-    )
-
-    if not ok_acao:
-        st.error(f"Não foi possível registrar a comunicação: {retorno_acao}")
-        st.stop()
-
-    components.html(
-        f"""
-        <script>
-        window.parent.location.replace({json.dumps(link_whats_acao)});
-        </script>
-        """,
-        height=1,
-    )
-
-    st.markdown(
-        f"""
-        <div style="
-            text-align:center;
-            padding:35px 15px;
-            font-size:1.15rem;
-            font-weight:700;
-            color:#0a1f35;
-        ">
-            ✅ Comunicação registrada.<br>
-            Abrindo o WhatsApp para <strong>{html.escape(nome_acao)}</strong>...
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.stop()
-
 df_alunos = carregar_alunos()
 
 c_out1, c_out2 = st.columns([10, 1])
@@ -4627,7 +4549,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
     st.info(
         f"Os estudantes listados abaixo não possuem registro de presença "
         f"na data selecionada ({data_f_global.strftime('%d/%m/%Y')}). "
-        "Ao clicar em 'ENVIAR / REGISTRAR', o sistema considera a comunicação concluída e grava a ocorrência no banco."
+        "Registre primeiro a comunicação no banco. Em seguida, clique em 'ABRIR WHATSAPP' para abrir diretamente o aplicativo, sem criar novas abas pelo sistema."
     )
 
     data_comunicacao = data_f_global.strftime("%Y-%m-%d")
@@ -4752,31 +4674,87 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
                 with col_acao:
                     mensagem_f = mensagem_falta_whatsapp(nome_f, data_comunicacao)
-                    link_f = gerar_link_whatsapp(telefone_f, mensagem_f) if telefone_f else None
+                    link_app_f = gerar_link_whatsapp_app(telefone_f, mensagem_f) if telefone_f else None
 
-                    if telefone_f and link_f:
+                    if telefone_f and link_app_f:
                         if comunicado_f:
-                            renderizar_botao_whatsapp_janela_unica(
-                                link_f,
-                                "📱 REABRIR WHATSAPP",
+                            renderizar_link_whatsapp_app(
+                                link_app_f,
+                                "📱 ABRIR WHATSAPP",
                                 "#16a34a",
                             )
                         else:
-                            link_acao = gerar_link_acao_comunicacao(
-                                codigo_f,
-                                data_comunicacao,
-                            )
-                            renderizar_botao_whatsapp_janela_unica(
-                                link_acao,
-                                "📱 ENVIAR / REGISTRAR",
-                                "#ff7b00",
-                            )
+                            if st.button(
+                                "✅ REGISTRAR COMUNICAÇÃO",
+                                key=f"registrar_com_falta_{codigo_f}_{data_comunicacao}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                ok_reg, retorno_reg = registrar_comunicacao_falta(
+                                    codigo_f,
+                                    data_comunicacao,
+                                    "WHATSAPP",
+                                )
+                                if ok_reg:
+                                    st.success("✅ Comunicação registrada no banco.")
+                                    renderizar_link_whatsapp_app(
+                                        link_app_f,
+                                        "📱 ABRIR WHATSAPP",
+                                        "#16a34a",
+                                    )
+                                else:
+                                    st.error(f"Não foi possível registrar a comunicação: {retorno_reg}")
                     elif not telefone_f:
                         st.warning('Sem WhatsApp cadastrado')
                     else:
                         st.warning('Número inválido')
 
-                st.markdown('#### 📜 Histórico do estudante')
+                # --------------------------------------------------------
+                # HISTÓRICO DE FALTAS — separado do histórico de comunicação
+                # --------------------------------------------------------
+                st.markdown('#### 📚 Histórico de faltas anteriores')
+                df_hist_faltas = carregar_historico_frequencia_aluno(codigo_f)
+                if df_hist_faltas.empty:
+                    st.info('Nenhum histórico de frequência disponível para este estudante.')
+                else:
+                    datas_hist = pd.to_datetime(df_hist_faltas['data'], errors='coerce')
+                    data_atual_hist = pd.to_datetime(data_comunicacao, errors='coerce')
+                    mascara_faltas = (
+                        datas_hist.notna()
+                        & (datas_hist < data_atual_hist)
+                        & df_hist_faltas['situacao'].isin([
+                            'FALTA',
+                            'FALTA JUSTIFICADA',
+                            'AUSENTE SEM REGISTRO',
+                        ])
+                    )
+                    df_hist_faltas = df_hist_faltas.loc[mascara_faltas].copy()
+
+                    if df_hist_faltas.empty:
+                        st.info('Nenhuma falta anterior encontrada.')
+                    else:
+                        df_hist_faltas['Data'] = pd.to_datetime(
+                            df_hist_faltas['data'], errors='coerce'
+                        ).dt.strftime('%d/%m/%Y')
+                        df_hist_faltas['Situação'] = df_hist_faltas['situacao'].replace({
+                            'AUSENTE SEM REGISTRO': 'FALTA NÃO JUSTIFICADA',
+                        })
+                        df_hist_faltas['Motivo / Justificativa'] = (
+                            df_hist_faltas['motivo_saida']
+                            .fillna('')
+                            .astype(str)
+                            .replace('', '—')
+                        )
+                        df_hist_faltas_exib = df_hist_faltas[[
+                            'Data', 'Situação', 'Motivo / Justificativa'
+                        ]]
+                        st.dataframe(
+                            df_hist_faltas_exib,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                st.markdown('#### 📜 Histórico de comunicação')
                 df_com_hist = carregar_comunicacoes_aluno(codigo_f)
                 if df_com_hist.empty:
                     st.info('Nenhuma comunicação anterior registrada.')
@@ -4796,7 +4774,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         hide_index=True,
                     )
 
-        st.caption('Critério operacional: ao clicar em “ENVIAR / REGISTRAR”, a escola considera a comunicação concluída e o evento fica persistido no banco. Isso registra a ação do operador, não uma confirmação de entrega do WhatsApp.')
+        st.caption('Critério operacional: “REGISTRAR COMUNICAÇÃO” grava a ação do operador no banco. “ABRIR WHATSAPP” apenas encaminha a mensagem para o aplicativo instalado; isso não representa confirmação de entrega ou de envio da mensagem pelo WhatsApp.')
 
     st.markdown('## ⛔ Suspensões disciplinares')
     st.caption('Estudantes com suspensão vigente na data selecionada. A comunicação pode ser encaminhada pelo WhatsApp.')
