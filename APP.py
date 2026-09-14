@@ -7,7 +7,6 @@ from psycopg2 import pool
 from psycopg2.extras import execute_values
 import os
 import io
-import html
 import base64
 import json
 import unicodedata
@@ -984,13 +983,6 @@ def gerar_link_whatsapp(telefone, mensagem):
     return f"https://web.whatsapp.com/send?phone={numero}&text={quote(mensagem)}"
 
 
-def gerar_link_acao_comunicacao(codigo_aluno, data_falta):
-    """Gera a rota intermediária que registra a comunicação e abre o WhatsApp."""
-    codigo = quote(str(codigo_aluno or '').strip().upper(), safe='')
-    data = quote(str(data_falta or '').strip(), safe='')
-    return f"?acao=comunicar_falta&codigo={codigo}&data={data}"
-
-
 def mensagem_falta_whatsapp(nome_aluno, data):
     try:
         data_f = datetime.strptime(str(data), "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -1090,82 +1082,32 @@ def carregar_status_comunicacoes(data_falta, turma="Todas"):
 
 
 def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
-    """Retorna o resumo de reincidência e as datas das faltas anteriores.
-
-    Para identificar faltas anteriores, considera:
-    - registros explícitos do tipo FALTA; e
-    - dias marcados como letivos no calendário em que o estudante não possui
-      registro de PRESENCA.
-
-    A lista de datas também preserva a indicação de falta justificada quando
-    houver motivo registrado.
-    """
+    """Calcula, sem depender do histórico de comunicação, a reincidência de faltas."""
     conn = conectar_bd()
     resultado = {
         "faltas_anteriores": 0,
-        "datas_faltas_anteriores": [],
         "comunicacoes_realizadas": 0,
         "ultima_comunicacao": None,
     }
     if not conn:
         return resultado
     try:
-        query_faltas = """
-            WITH dias AS (
-                SELECT data
-                FROM calendario_letivo
-                WHERE dia_letivo = TRUE
-                  AND data < %s::date
-
-                UNION
-
-                SELECT data
-                FROM registros_v2
-                WHERE codigo_aluno = %s
-                  AND data < %s::date
-            )
-            SELECT
-                d.data,
-                CASE
-                    WHEN r.tipo_registro = 'FALTA' AND r.motivo_saida IS NOT NULL
-                        THEN 'FALTA JUSTIFICADA'
-                    WHEN r.tipo_registro = 'FALTA'
-                        THEN 'FALTA'
-                    WHEN r.id IS NULL
-                        THEN 'FALTA SEM REGISTRO'
-                    ELSE NULL
-                END AS situacao
-            FROM dias d
-            LEFT JOIN registros_v2 r
-              ON r.codigo_aluno = %s
-             AND r.data = d.data
-            WHERE r.tipo_registro = 'FALTA'
-               OR r.id IS NULL
-            ORDER BY d.data DESC
-        """
-
-        df_faltas = pd.read_sql_query(
-            query_faltas,
-            conn,
-            params=[data_falta_atual, codigo_aluno, data_falta_atual, codigo_aluno],
-        )
-
-        if not df_faltas.empty:
-            resultado["faltas_anteriores"] = int(df_faltas["data"].nunique())
-            datas = []
-            for _, linha in df_faltas.iterrows():
-                data_ocorrencia = pd.to_datetime(linha.get("data"), errors="coerce")
-                if pd.isna(data_ocorrencia):
-                    continue
-                situacao = str(linha.get("situacao") or "FALTA").strip().upper()
-                datas.append({
-                    "data": data_ocorrencia.date(),
-                    "justificada": situacao == "FALTA JUSTIFICADA",
-                    "situacao": situacao,
-                })
-            resultado["datas_faltas_anteriores"] = datas
-
         cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT r.data
+                FROM registros_v2 r
+                WHERE r.codigo_aluno = %s
+                  AND r.data < %s::date
+                  AND (
+                        r.tipo_registro = 'FALTA'
+                        OR (r.tipo_registro IS NULL)
+                  )
+            ) x
+        """, (codigo_aluno, data_falta_atual))
+        resultado["faltas_anteriores"] = int(cur.fetchone()[0] or 0)
+
         cur.execute("""
             SELECT COUNT(*), MAX(data_comunicacao)
             FROM comunicacoes_faltas_v1
@@ -1661,48 +1603,47 @@ def normalizar_hora_entrada(valor):
 # ------------------------------------------------------------
 def mapear_colunas_entrada(df):
     """
-    Lê a entrada usando EXATAMENTE o cabeçalho oficial da planilha.
-
-    Cabeçalho aceito (após normalização de acentos):
-        CODIGO | ESTUDANTE | HORA DE ENTRADA | DATA
-
-    Não há correspondência por sinônimos nem por partes do nome da coluna.
-    Isso impede que outra coluna contendo a palavra HORA seja escolhida
-    acidentalmente como fonte do horário.
+    Normaliza e mapeia as colunas usadas pela entrada em lote.
+    Retorna (df_mapeado, colunas_encontradas, erros).
     """
     df = normalizar_colunas(df)
+    colunas_esperadas = {
+        'CODIGO': ['CODIGO', 'COD', 'MATRICULA', 'MATRIC', 'COD_ALUNO', 'CODALUNO'],
+        'ESTUDANTE': ['ESTUDANTE', 'NOME', 'ALUNO', 'NOME_ALUNO', 'NOME DO ALUNO'],
+        'HORA': ['HORA DE ENTRADA', 'HORA_ENTRADA', 'HORAENTRADA', 'HORA', 'HORARIO'],
+        'DATA': ['DATA', 'DIA', 'DT', 'DAT']
+    }
 
-    cabecalho_oficial = ['CODIGO', 'ESTUDANTE', 'HORA DE ENTRADA', 'DATA']
-    colunas_disponiveis = [str(c).strip().upper() for c in df.columns.tolist()]
-    df.columns = colunas_disponiveis
-
+    colunas_disponiveis = df.columns.tolist()
     colunas_encontradas = {}
+
+    for nome, sinonimos in colunas_esperadas.items():
+        for col in colunas_disponiveis:
+            if any(sin == col or sin in col for sin in sinonimos):
+                colunas_encontradas[nome] = col
+                break
+
     erros = []
-    for coluna in cabecalho_oficial:
-        if coluna in colunas_disponiveis:
-            colunas_encontradas[coluna] = coluna
-        else:
-            erros.append(
-                f"Coluna obrigatória ausente: '{coluna}'. "
-                f"Cabeçalho esperado: {', '.join(cabecalho_oficial)}"
-            )
+    if 'CODIGO' not in colunas_encontradas:
+        erros.append("CÓDIGO (nenhuma coluna contém: " + ", ".join(colunas_esperadas['CODIGO']) + ")")
+    if 'HORA' not in colunas_encontradas:
+        erros.append("HORA DE ENTRADA (nenhuma coluna contém: " + ", ".join(colunas_esperadas['HORA']) + ")")
 
     if erros:
         return df, colunas_encontradas, erros
 
-    df = df.rename(columns={
-        'CODIGO': 'CODIGO',
-        'ESTUDANTE': 'ESTUDANTE',
-        'HORA DE ENTRADA': 'HORA',
-        'DATA': 'DATA',
-    })
+    renomear = {
+        colunas_encontradas['CODIGO']: 'CODIGO',
+        colunas_encontradas['HORA']: 'HORA',
+    }
+    if 'DATA' in colunas_encontradas:
+        renomear[colunas_encontradas['DATA']] = 'DATA'
+    if 'ESTUDANTE' in colunas_encontradas:
+        renomear[colunas_encontradas['ESTUDANTE']] = 'ESTUDANTE'
 
-    return df, {
-        'CODIGO': 'CODIGO',
-        'ESTUDANTE': 'ESTUDANTE',
-        'HORA': 'HORA DE ENTRADA',
-        'DATA': 'DATA',
-    }, erros
+    # Evita problemas quando uma coluna já tem o nome final.
+    df = df.rename(columns=renomear)
+    return df, colunas_encontradas, erros
 
 # ------------------------------------------------------------
 # 6.3 FUNÇÃO PARA LER PLANILHA GOOGLE (SEM EXPANDER ANINHADO)
@@ -1747,9 +1688,8 @@ def ler_planilha_google(url, data_base):
 
         df, colunas_encontradas, erros_colunas = mapear_colunas_entrada(df)
 
-        diagnostic = f"Cabeçalho recebido: {', '.join(df.columns.tolist())}\n"
-        diagnostic += f"Mapeamento oficial: {colunas_encontradas}\n"
-        diagnostic += "Regra de leitura: CODIGO | ESTUDANTE | HORA DE ENTRADA | DATA (nomes exatos).\n"
+        diagnostic = f"Colunas disponíveis: {', '.join(df.columns.tolist())}\n"
+        diagnostic += f"Mapeamento: {colunas_encontradas}\n"
 
         if erros_colunas:
             diagnostic += "Erros: " + "; ".join(erros_colunas)
@@ -3682,78 +3622,6 @@ except Exception:
 # Inicializa/valida o schema apenas para usuários autenticados.
 inicializar_tabelas()
 
-# ------------------------------------------------------------
-# AÇÃO INTERMEDIÁRIA — REGISTRAR COMUNICAÇÃO E ABRIR WHATSAPP
-# ------------------------------------------------------------
-if st.query_params.get("acao") == "comunicar_falta":
-    codigo_acao = str(st.query_params.get("codigo") or "").strip().upper()
-    data_acao = str(st.query_params.get("data") or "").strip()
-
-    if not codigo_acao or not data_acao:
-        st.error("Não foi possível identificar o estudante e a data da falta.")
-        st.stop()
-
-    conn_acao = conectar_bd()
-    try:
-        cur_acao = conn_acao.cursor()
-        cur_acao.execute(
-            """
-            SELECT nome, telefone_responsavel
-            FROM alunos_v2
-            WHERE UPPER(TRIM(codigo)) = %s
-              AND UPPER(TRIM(status)) = 'ATIVO'
-            LIMIT 1
-            """,
-            (codigo_acao,),
-        )
-        aluno_acao = cur_acao.fetchone()
-    finally:
-        liberar_conn(conn_acao)
-
-    if not aluno_acao:
-        st.error(f"Estudante {codigo_acao} não encontrado ou inativo.")
-        st.stop()
-
-    nome_acao, telefone_acao = aluno_acao
-    telefone_acao = normalizar_telefone_whatsapp(telefone_acao)
-    if not telefone_acao:
-        st.error("Este estudante não possui um WhatsApp válido cadastrado.")
-        st.stop()
-
-    mensagem_acao = mensagem_falta_whatsapp(nome_acao, data_acao)
-    link_whatsapp_acao = gerar_link_whatsapp(telefone_acao, mensagem_acao)
-    if not link_whatsapp_acao:
-        st.error("O número de WhatsApp cadastrado é inválido.")
-        st.stop()
-
-    ok_acao, retorno_acao = registrar_comunicacao_falta(
-        codigo_acao, data_acao, 'WHATSAPP'
-    )
-    if not ok_acao:
-        st.error(f"Não foi possível registrar a comunicação: {retorno_acao}")
-        st.stop()
-
-    st.success(f"✅ Comunicação de {nome_acao} registrada no banco.")
-    st.info("📱 Abrindo o WhatsApp Web...")
-
-    components.html(
-        f"""
-        <script>
-            const destino = {json.dumps(link_whatsapp_acao)};
-            window.top.location.href = destino;
-        </script>
-        <div style="font-family:Arial,sans-serif;padding:10px;text-align:center;">
-            <a href={json.dumps(link_whatsapp_acao)} target="_blank"
-               style="font-size:18px;font-weight:700;">
-               📱 ABRIR WHATSAPP MANUALMENTE
-            </a>
-        </div>
-        """,
-        height=90,
-        scrolling=False,
-    )
-    st.stop()
-
 df_alunos = carregar_alunos()
 
 c_out1, c_out2 = st.columns([10, 1])
@@ -4698,10 +4566,9 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
             titulo_status = '✅ COMUNICADO' if comunicado_f else '🕐 PENDENTE'
             reincidente_txt = '🔁 REINCIDENTE' if faltas_anteriores > 0 else '🆕 PRIMEIRA OCORRÊNCIA'
-            whatsapp_txt = '📱 WHATSAPP CADASTRADO' if telefone_f else '⚠️ SEM WHATSAPP'
 
             with st.expander(
-                f"{idx}. {nome_f} — {turma_f} | {titulo_status} | {reincidente_txt} | {whatsapp_txt}",
+                f"{idx}. {nome_f} — {turma_f} | {titulo_status} | {reincidente_txt}",
                 expanded=False,
             ):
                 info1, info2, info3, info4 = st.columns(4)
@@ -4718,29 +4585,10 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     ultima_txt = '—'
                 info4.metric('Última comunicação', ultima_txt)
 
-                datas_faltas_anteriores = reincidencia.get('datas_faltas_anteriores', []) or []
-
-                if faltas_anteriores > 0:
-                    st.markdown('**📅 Datas das faltas anteriores:**')
-                    linhas_datas = []
-                    for ocorrencia in datas_faltas_anteriores:
-                        try:
-                            data_txt = ocorrencia['data'].strftime('%d/%m/%Y')
-                        except Exception:
-                            data_txt = str(ocorrencia.get('data') or '')
-                        if ocorrencia.get('justificada'):
-                            data_txt += ' — 📝 justificada'
-                        elif ocorrencia.get('situacao') == 'FALTA SEM REGISTRO':
-                            data_txt += ' — ❌ sem registro'
-                        linhas_datas.append(f'• {data_txt}')
-                    st.markdown('\n'.join(linhas_datas))
-                else:
-                    st.info('🆕 Nenhuma falta anterior encontrada para este estudante.')
-
                 if motivo_f:
-                    st.warning(f"Falta registrada hoje: {motivo_f}")
+                    st.warning(f"Falta registrada: {motivo_f}")
                 else:
-                    st.error('Falta de hoje sem justificativa')
+                    st.error('Falta sem justificativa')
 
                 col_detalhe, col_acao = st.columns([4, 2])
                 with col_detalhe:
@@ -4759,31 +4607,44 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     link_f = gerar_link_whatsapp(telefone_f, mensagem_f) if telefone_f else None
 
                     if telefone_f and link_f:
+                        chave_envio = f"com_falta_{codigo_f}_{data_comunicacao}"
                         if comunicado_f:
                             st.success('✅ Já comunicado')
                             st.link_button('📱 REABRIR WHATSAPP', link_f, use_container_width=True)
                         else:
-                            # Um único clique: abre a rota intermediária do app,
-                            # que grava a comunicação e redireciona ao WhatsApp.
-                            link_acao = gerar_link_acao_comunicacao(
-                                codigo_f, data_comunicacao
-                            )
-                            st.markdown(
-                                f"""
-                                <a href="{html.escape(link_acao, quote=True)}" target="_blank" rel="noopener noreferrer"
-                                   style="display:block;width:100%;box-sizing:border-box;background:#ff7b00;color:#ffffff;
-                                          text-align:center;text-decoration:none;border-radius:12px;font-weight:800;
-                                          font-size:1.15rem;padding:15px 10px;">
-                                    📱 ENVIAR / REGISTRAR
-                                </a>
-                                """,
-                                unsafe_allow_html=True,
-                            )
+                            if st.button('📱 ENVIAR / REGISTRAR', key=chave_envio, use_container_width=True, type='primary'):
+                                ok_reg, retorno_reg = registrar_comunicacao_falta(codigo_f, data_comunicacao, 'WHATSAPP')
+                                if ok_reg:
+                                    st.success('✅ Comunicação registrada no banco.')
+                                    # Tentativa de abertura automática. Caso o navegador bloqueie a nova aba,
+                                    # o botão abaixo continuará disponível para abertura manual.
+                                    # Reutiliza uma única janela nomeada para o WhatsApp Web.
+                                    # O navegador mantém a mesma janela ao trocar de destinatário.
+                                    st.markdown(
+                                        f"<script>window.open({json.dumps(link_f)}, 'whatsapp_comunicacao');</script>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.markdown(
+                                        f'''
+                                        <a href="{html.escape(link_f, quote=True)}"
+                                           target="whatsapp_comunicacao"
+                                           rel="noopener noreferrer"
+                                           style="display:block;width:100%;box-sizing:border-box;
+                                                  background:#16a34a;color:#ffffff;text-align:center;
+                                                  text-decoration:none;border-radius:12px;font-weight:800;
+                                                  font-size:1.15rem;padding:15px 10px;margin-top:8px;">
+                                           📱 ABRIR WHATSAPP
+                                        </a>
+                                        ''',
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(f'Não foi possível registrar a comunicação: {retorno_reg}')
                     elif not telefone_f:
-                        st.warning('⚠️ Sem WhatsApp cadastrado')
+                        st.warning('Sem WhatsApp cadastrado')
                     else:
-                        st.warning('⚠️ Número de WhatsApp inválido')
-
+                        st.warning('Número inválido')
 
                 st.markdown('#### 📜 Histórico do estudante')
                 df_com_hist = carregar_comunicacoes_aluno(codigo_f)
