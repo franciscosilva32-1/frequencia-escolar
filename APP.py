@@ -998,6 +998,62 @@ def gerar_link_acao_comunicacao(codigo_aluno, data_falta):
     return f"?acao=comunicar_falta&codigo={codigo}&data={data}"
 
 
+def renderizar_botao_whatsapp_janela_unica(url_destino, rotulo, cor):
+    """Renderiza um botão que reutiliza uma única janela/aba chamada WhatsApp.
+
+    O clique permanece sendo uma ação direta do usuário. O JavaScript abre a URL
+    em um contexto de navegação nomeado, evitando que cada estudante gere uma
+    nova aba. Para rotas relativas do próprio Streamlit, a URL é resolvida a
+    partir da página principal antes da abertura.
+    """
+    url_js = json.dumps(str(url_destino or ""), ensure_ascii=False)
+    rotulo_html = html.escape(str(rotulo or ""))
+    cor_html = html.escape(str(cor or "#ff7b00"), quote=True)
+
+    components.html(
+        f"""
+        <style>
+            body {{ margin: 0; background: transparent; }}
+            .wa-single-window-btn {{
+                width: 100%;
+                box-sizing: border-box;
+                border: none;
+                border-radius: 12px;
+                padding: 15px 10px;
+                background: {cor_html};
+                color: #ffffff;
+                font-size: 1.15rem;
+                font-weight: 800;
+                font-family: Arial, sans-serif;
+                cursor: pointer;
+                box-shadow: 0 4px 10px rgba(15,23,42,.12);
+            }}
+            .wa-single-window-btn:hover {{ filter: brightness(.95); }}
+            .wa-single-window-btn:active {{ transform: scale(.99); }}
+        </style>
+        <button class="wa-single-window-btn" type="button"
+                onclick='abrirWhatsAppJanelaUnica({url_js})'>
+            {rotulo_html}
+        </button>
+        <script>
+            function abrirWhatsAppJanelaUnica(destino) {{
+                try {{
+                    let urlFinal = destino;
+                    if (destino.startsWith('?') || destino.startsWith('/')) {{
+                        const topo = window.top.location;
+                        urlFinal = topo.origin + topo.pathname + destino;
+                    }}
+                    window.open(urlFinal, 'whatsapp_comunicacao');
+                }} catch (e) {{
+                    window.open(destino, 'whatsapp_comunicacao');
+                }}
+            }}
+        </script>
+        """,
+        height=72,
+    )
+
+
 def mensagem_falta_whatsapp(nome_aluno, data):
     try:
         data_f = datetime.strptime(str(data), "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -4012,7 +4068,7 @@ def popup_entrada_rapida(data_hoje, hora_limite):
 
     gerar_camera("Entrada", "REGISTRAR", "cam_popup")
 
-    with st.form("f_popup", clear_on_submit=False):
+    with st.form("f_popup", clear_on_submit=True):
         cod_en = st.text_input(
             "Código do Estudante",
             placeholder="Bipe o cartão ou digite manualmente...",
@@ -4700,38 +4756,20 @@ if aba_atual == abas_do_sistema[indice_aba]:
 
                     if telefone_f and link_f:
                         if comunicado_f:
-                            st.markdown(
-                                f'''
-                                <a href="{html.escape(link_f, quote=True)}"
-                                   target="whatsapp_comunicacao"
-                                   rel="noopener noreferrer"
-                                   style="display:block;width:100%;box-sizing:border-box;
-                                          background:#16a34a;color:#ffffff;text-align:center;
-                                          text-decoration:none;border-radius:12px;font-weight:800;
-                                          font-size:1.15rem;padding:15px 10px;">
-                                   📱 REABRIR WHATSAPP
-                                </a>
-                                ''',
-                                unsafe_allow_html=True,
+                            renderizar_botao_whatsapp_janela_unica(
+                                link_f,
+                                "📱 REABRIR WHATSAPP",
+                                "#16a34a",
                             )
                         else:
                             link_acao = gerar_link_acao_comunicacao(
                                 codigo_f,
                                 data_comunicacao,
                             )
-                            st.markdown(
-                                f'''
-                                <a href="{html.escape(link_acao, quote=True)}"
-                                   target="whatsapp_comunicacao"
-                                   rel="noopener noreferrer"
-                                   style="display:block;width:100%;box-sizing:border-box;
-                                          background:#ff7b00;color:#ffffff;text-align:center;
-                                          text-decoration:none;border-radius:12px;font-weight:800;
-                                          font-size:1.15rem;padding:15px 10px;">
-                                   📱 ENVIAR / REGISTRAR
-                                </a>
-                                ''',
-                                unsafe_allow_html=True,
+                            renderizar_botao_whatsapp_janela_unica(
+                                link_acao,
+                                "📱 ENVIAR / REGISTRAR",
+                                "#ff7b00",
                             )
                     elif not telefone_f:
                         st.warning('Sem WhatsApp cadastrado')
