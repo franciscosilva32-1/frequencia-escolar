@@ -147,7 +147,7 @@ DICIONARIO_ABREVIACAO = {
     "QUÍMICA": "QUI", "SOCIOLOGIA": "SOC", "SOCIOLGIA": "SOC"
 }
 
-MOTIVOS_JUSTIFICATIVA = [
+MOTIVOS_JUSTIFICATIVA_INICIAIS = [
     "Febre",
     "Dor de cabeça",
     "Gripe",
@@ -1520,7 +1520,171 @@ def importar_csv_alunos(file):
         liberar_conn(conn)
 
 # ------------------------------------------------------------
-# 6.1 FUNÇÕES PARA GERENCIAR O LINK DA PLANILHA
+# 6.1 GERENCIAMENTO DINÂMICO DOS MOTIVOS DE JUSTIFICATIVA/LIBERAÇÃO
+# ------------------------------------------------------------
+CHAVE_MOTIVOS_JUSTIFICATIVA = "motivos_justificativa"
+
+def _normalizar_lista_motivos(motivos):
+    """Normaliza, elimina duplicidades e ordena motivos em MAIÚSCULAS."""
+    resultado = []
+    vistos = set()
+
+    for motivo in motivos or []:
+        texto = re.sub(r"\s+", " ", str(motivo or "").strip()).upper()
+        if not texto:
+            continue
+
+        chave = texto
+        if chave in vistos:
+            continue
+
+        vistos.add(chave)
+        resultado.append(texto)
+
+    def chave_alfabetica(valor):
+        # Ignora acentos somente para fins de ordenação, preservando-os no texto.
+        sem_acentos = "".join(
+            caractere
+            for caractere in unicodedata.normalize("NFD", valor)
+            if unicodedata.category(caractere) != "Mn"
+        )
+        return sem_acentos
+
+    return sorted(resultado, key=chave_alfabetica)
+
+
+@st.cache_data(ttl=300)
+def obter_motivos_justificativa():
+    """Carrega do banco a lista configurável de motivos.
+
+    Na primeira utilização, a lista histórica definida no código é migrada
+    automaticamente para a tabela de configurações.
+    """
+    motivos_padrao = _normalizar_lista_motivos(MOTIVOS_JUSTIFICATIVA_INICIAIS)
+    conn = conectar_bd()
+    if not conn:
+        return motivos_padrao
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT valor FROM configuracoes WHERE chave = %s",
+            (CHAVE_MOTIVOS_JUSTIFICATIVA,),
+        )
+        registro = cur.fetchone()
+
+        if not registro or not registro[0]:
+            valor_json = json.dumps(motivos_padrao, ensure_ascii=False)
+            cur.execute(
+                """
+                INSERT INTO configuracoes (chave, valor, atualizado_em)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (chave) DO NOTHING
+                """,
+                (CHAVE_MOTIVOS_JUSTIFICATIVA, valor_json),
+            )
+            conn.commit()
+            return motivos_padrao
+
+        try:
+            motivos_salvos = json.loads(registro[0])
+            motivos_normalizados = _normalizar_lista_motivos(motivos_salvos)
+        except Exception:
+            motivos_normalizados = motivos_padrao
+
+        if not motivos_normalizados:
+            motivos_normalizados = motivos_padrao
+
+        # Mantém também o banco padronizado caso a configuração antiga esteja
+        # fora do padrão de caixa/ordenação.
+        valor_padronizado = json.dumps(motivos_normalizados, ensure_ascii=False)
+        if registro[0] != valor_padronizado:
+            cur.execute(
+                """
+                UPDATE configuracoes
+                   SET valor = %s, atualizado_em = CURRENT_TIMESTAMP
+                 WHERE chave = %s
+                """,
+                (valor_padronizado, CHAVE_MOTIVOS_JUSTIFICATIVA),
+            )
+            conn.commit()
+
+        return motivos_normalizados
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return motivos_padrao
+    finally:
+        liberar_conn(conn)
+
+
+def adicionar_motivo_justificativa(novo_motivo):
+    """Adiciona um novo motivo e grava a lista inteira normalizada."""
+    motivo = re.sub(r"\s+", " ", str(novo_motivo or "").strip()).upper()
+    if not motivo:
+        return False, "Informe um motivo antes de salvar."
+
+    conn = conectar_bd()
+    if not conn:
+        return False, "Não foi possível conectar ao banco de dados."
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT valor FROM configuracoes WHERE chave = %s",
+            (CHAVE_MOTIVOS_JUSTIFICATIVA,),
+        )
+        registro = cur.fetchone()
+
+        if registro and registro[0]:
+            try:
+                motivos_existentes = json.loads(registro[0])
+            except Exception:
+                motivos_existentes = MOTIVOS_JUSTIFICATIVA_INICIAIS
+        else:
+            motivos_existentes = MOTIVOS_JUSTIFICATIVA_INICIAIS
+
+        motivos_normalizados = _normalizar_lista_motivos(
+            list(motivos_existentes) + [motivo]
+        )
+
+        if motivo in motivos_normalizados and registro and registro[0]:
+            try:
+                motivos_anteriores = _normalizar_lista_motivos(json.loads(registro[0]))
+            except Exception:
+                motivos_anteriores = _normalizar_lista_motivos(MOTIVOS_JUSTIFICATIVA_INICIAIS)
+            if motivo in motivos_anteriores:
+                return False, "Este motivo já está cadastrado."
+
+        valor_json = json.dumps(motivos_normalizados, ensure_ascii=False)
+        cur.execute(
+            """
+            INSERT INTO configuracoes (chave, valor, atualizado_em)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (chave)
+            DO UPDATE SET
+                valor = EXCLUDED.valor,
+                atualizado_em = CURRENT_TIMESTAMP
+            """,
+            (CHAVE_MOTIVOS_JUSTIFICATIVA, valor_json),
+        )
+        conn.commit()
+        obter_motivos_justificativa.clear()
+        return True, motivo
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, str(e)
+    finally:
+        liberar_conn(conn)
+
+
+# ------------------------------------------------------------
+# 6.2 FUNÇÕES PARA GERENCIAR O LINK DA PLANILHA
 # ------------------------------------------------------------
 def salvar_link_planilha(link):
     conn = conectar_bd()
@@ -3694,6 +3858,9 @@ inicializar_tabelas()
 
 df_alunos = carregar_alunos()
 
+# Lista dinâmica usada em justificativas de falta e motivos de liberação.
+motivos_justificativa = obter_motivos_justificativa()
+
 c_out1, c_out2 = st.columns([10, 1])
 with c_out2:
     if st.button("SAIR"): 
@@ -4265,7 +4432,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     nome_sa = st.selectbox("Ou busque pelo Nome / Turma", lista_alunos_saida)
                 
                 hora_saida_manual = st.time_input("Horário Exato da Saída", obter_hora_atual().time())
-                mot = st.selectbox("Motivo", MOTIVOS_JUSTIFICATIVA)
+                mot = st.selectbox("Motivo", motivos_justificativa)
                 
                 if st.form_submit_button("CONFIRMAR SAÍDA"):
                     if cod_sa:
@@ -4415,7 +4582,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     )
                     motivo_falta = st.selectbox(
                         "Justificativa Oficial",
-                        MOTIVOS_JUSTIFICATIVA
+                        motivos_justificativa
                     )
                     
                     if st.form_submit_button("SALVAR JUSTIFICATIVA") and al_falta_sel:
@@ -4637,8 +4804,16 @@ if aba_atual == abas_do_sistema[indice_aba]:
             titulo_status = '✅ COMUNICADO' if comunicado_f else '🕐 PENDENTE'
             reincidente_txt = '🔁 REINCIDENTE' if faltas_anteriores > 0 else '🆕 PRIMEIRA OCORRÊNCIA'
 
+            telefone_bruto_f = str(row.get('telefone_responsavel') or '').strip()
+            if telefone_f:
+                whatsapp_txt = '📱 WHATSAPP CADASTRADO'
+            elif telefone_bruto_f:
+                whatsapp_txt = '⚠️ WHATSAPP INVÁLIDO'
+            else:
+                whatsapp_txt = '⚠️ SEM WHATSAPP'
+
             with st.expander(
-                f"{idx}. {nome_f} — {turma_f} | {titulo_status} | {reincidente_txt}",
+                f"{idx}. {nome_f} — {turma_f} | {titulo_status} | {reincidente_txt} | {whatsapp_txt}",
                 expanded=False,
             ):
                 info1, info2, info3, info4 = st.columns(4)
@@ -5370,6 +5545,56 @@ indice_aba += 1
 
 if eh_admin:
     if aba_atual == abas_do_sistema[indice_aba]:
+        # ================================================================
+        # MANUTENÇÃO — MOTIVOS DE JUSTIFICATIVA E LIBERAÇÃO
+        # ================================================================
+        st.subheader("⚙️ Motivos de Justificativa e Liberação")
+        st.caption(
+            "Esta é a lista única utilizada para justificar faltas, registrar motivos de saída/liberação "
+            "e registrar falta na 1ª chamada. Novos motivos são automaticamente gravados em MAIÚSCULAS "
+            "e reorganizados em ORDEM ALFABÉTICA."
+        )
+
+        motivos_manutencao = obter_motivos_justificativa()
+        col_motivos, col_novo = st.columns([1.55, 1])
+
+        with col_motivos:
+            st.markdown("#### 📋 Motivos cadastrados")
+            df_motivos = pd.DataFrame({"MOTIVO": motivos_manutencao})
+            st.dataframe(
+                df_motivos,
+                use_container_width=True,
+                hide_index=True,
+                height=min(430, max(180, 58 + len(df_motivos) * 36)),
+            )
+
+        with col_novo:
+            st.markdown("#### ➕ Cadastrar novo motivo")
+            with st.form("form_novo_motivo_justificativa", clear_on_submit=True):
+                novo_motivo = st.text_input(
+                    "Novo motivo",
+                    placeholder="Ex.: ATIVIDADE ESCOLAR EXTERNA",
+                )
+                st.info(
+                    "Ao salvar, o sistema normalizará o texto, eliminará duplicidades "
+                    "e atualizará toda a lista em ordem alfabética."
+                )
+                salvar_novo_motivo = st.form_submit_button(
+                    "➕ ADICIONAR MOTIVO",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+                if salvar_novo_motivo:
+                    ok_motivo, retorno_motivo = adicionar_motivo_justificativa(novo_motivo)
+                    if ok_motivo:
+                        st.success(f"✅ Motivo cadastrado: {retorno_motivo}")
+                        st.rerun()
+                    else:
+                        st.warning(f"⚠️ {retorno_motivo}")
+
+        st.markdown("---")
+
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
         with st.form("form_falta_1a", clear_on_submit=True):
             c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
@@ -5385,7 +5610,7 @@ if eh_admin:
                 lista_alunos_falta += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
                 
             f1_aluno = st.selectbox("Selecione o Estudante", lista_alunos_falta)
-            f1_motivo = st.selectbox("Motivo da Falta / Justificativa", MOTIVOS_JUSTIFICATIVA)
+            f1_motivo = st.selectbox("Motivo da Falta / Justificativa", motivos_justificativa)
             
             if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
                 if f1_aluno:
