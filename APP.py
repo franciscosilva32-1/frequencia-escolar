@@ -2927,6 +2927,167 @@ def buscar_suspensoes_na_data(data_str, turma="Todas"):
         liberar_conn(conn)
 
 
+def criar_figura_evolucao_anual(df_historico_aluno):
+    """Cria o gráfico completo de evolução do estudante por componente curricular.
+
+    A figura é usada tanto na tela quanto no PDF. Todos os componentes encontrados
+    no histórico são mantidos, mesmo que algum deles não tenha nota em todos os
+    períodos. As cores conhecidas usam DICIONARIO_CORES e as demais são atribuídas
+    automaticamente.
+    """
+    if not MATPLOTLIB_AVAILABLE or df_historico_aluno is None or df_historico_aluno.empty:
+        return None
+
+    colunas_necessarias = {'periodo', 'disciplina', 'acerto', 'questao'}
+    if not colunas_necessarias.issubset(df_historico_aluno.columns):
+        return None
+
+    base = df_historico_aluno.copy()
+    base['disciplina'] = base['disciplina'].astype(str).str.strip()
+    base['periodo'] = base['periodo'].astype(str).str.strip()
+    base = base[base['disciplina'].ne('') & base['periodo'].ne('')].copy()
+    if base.empty:
+        return None
+
+    base['acerto'] = pd.to_numeric(base['acerto'], errors='coerce').fillna(0)
+    base['questao'] = pd.to_numeric(base['questao'], errors='coerce')
+    base = base[base['questao'].notna()].copy()
+    if base.empty:
+        return None
+
+    progresso = (
+        base.groupby(['periodo', 'disciplina'], as_index=False)
+        .agg(Acertos=('acerto', 'sum'), Total=('questao', 'count'))
+    )
+    progresso['Nota'] = np.where(
+        progresso['Total'] > 0,
+        (progresso['Acertos'] / progresso['Total']) * 10,
+        np.nan,
+    )
+
+    # Mantém a ordem pedagógica dos períodos. Qualquer rótulo adicional
+    # existente no banco continua aparecendo depois dos quatro períodos padrão.
+    ordem_padrao = ['1º Período', '2º Período', '3º Período', '4º Período']
+    periodos_existentes = [str(x) for x in progresso['periodo'].dropna().unique()]
+    extras = sorted([p for p in periodos_existentes if p not in ordem_padrao])
+    ordem_periodos = [p for p in ordem_padrao if p in periodos_existentes] + extras
+
+    progresso['periodo'] = pd.Categorical(
+        progresso['periodo'], categories=ordem_periodos, ordered=True
+    )
+
+    progresso_pivot = (
+        progresso.pivot_table(
+            index='periodo',
+            columns='disciplina',
+            values='Nota',
+            aggfunc='mean',
+            observed=False,
+        )
+        .reindex(ordem_periodos)
+    )
+
+    if progresso_pivot.empty:
+        return None
+
+    disciplinas = sorted([str(c) for c in progresso_pivot.columns])
+    progresso_pivot = progresso_pivot.reindex(columns=disciplinas)
+
+    # Paleta auxiliar para componentes que ainda não possuem uma cor no dicionário.
+    cmap = plt.get_cmap('tab20')
+    cores = {}
+    usados = set()
+
+    for i, disciplina in enumerate(disciplinas):
+        abreviacao = DICIONARIO_ABREVIACAO.get(
+            disciplina, str(disciplina)[:4].upper()
+        )
+        cor = DICIONARIO_CORES.get(abreviacao) or DICIONARIO_CORES.get(disciplina)
+        if cor is None:
+            cor = cmap(i % cmap.N)
+        cores[disciplina] = cor
+        usados.add(str(cor))
+
+    n_disc = len(disciplinas)
+    n_colunas_legenda = 4 if n_disc >= 4 else max(1, n_disc)
+    n_linhas_legenda = int(np.ceil(n_disc / n_colunas_legenda))
+    altura = max(6.2, 5.0 + (0.42 * n_linhas_legenda))
+
+    fig, ax = plt.subplots(figsize=(12.5, altura))
+    x = np.arange(len(progresso_pivot.index))
+
+    for disciplina in disciplinas:
+        serie = progresso_pivot[disciplina]
+        cor = cores[disciplina]
+        abreviacao = DICIONARIO_ABREVIACAO.get(
+            disciplina, str(disciplina)[:4].upper()
+        )
+
+        ax.plot(
+            x,
+            serie.values,
+            marker='o',
+            linewidth=3.2,
+            markersize=8,
+            label=disciplina,
+            color=cor,
+        )
+
+        # Identifica cada linha somente no último período disponível,
+        # evitando sobrecarregar o gráfico quando há muitos componentes.
+        valores_validos = serie.dropna()
+        if not valores_validos.empty:
+            ultimo_periodo = valores_validos.index[-1]
+            y_val = valores_validos.iloc[-1]
+            x_val = list(progresso_pivot.index).index(ultimo_periodo)
+            ax.text(
+                x_val + 0.03,
+                y_val,
+                abreviacao,
+                color=cor,
+                fontsize=9,
+                fontweight='bold',
+                va='center',
+                ha='left',
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.72, pad=1.5),
+            )
+
+    ax.set_title('EVOLUÇÃO GERAL AO LONGO DO ANO', fontweight='bold', fontsize=18, pad=14)
+    ax.set_ylabel('Nota', fontweight='bold', fontsize=13)
+    ax.set_xlabel('Período', fontweight='bold', fontsize=13)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(p) for p in progresso_pivot.index], fontsize=11)
+    ax.set_xlim(-0.15, max(0.5, len(x) - 0.5))
+    ax.set_ylim(0, 10.5)
+    ax.set_yticks(np.arange(0, 11, 1))
+    ax.grid(True, linestyle='--', alpha=0.35, axis='both')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legenda dentro da própria figura, abaixo do gráfico. Isso garante que ela
+    # acompanhe o gráfico tanto na tela quanto na página paisagem do PDF.
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=n_colunas_legenda,
+        fontsize=9.5,
+        frameon=True,
+        title='COMPONENTES CURRICULARES',
+        title_fontsize=10,
+    )
+
+    fig.subplots_adjust(
+        left=0.07,
+        right=0.98,
+        top=0.88,
+        bottom=min(0.26 + (0.025 * max(0, n_linhas_legenda - 1)), 0.40),
+    )
+    return fig
+
+
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None, df_suspensoes_aluno=None, df_comunicacoes_aluno=None):
     if not FPDF: 
         return None
@@ -3178,37 +3339,23 @@ def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_fr
             pdf.ln()
 
     if df_historico_aluno is not None and not df_historico_aluno.empty and MATPLOTLIB_AVAILABLE:
-        progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-        progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
-        progresso_pivot = progresso.pivot(index='periodo', columns='disciplina', values='Nota')
-        fig, ax = plt.subplots(figsize=(10, 6))
-        for col_name in progresso_pivot.columns:
-            abreviacao = DICIONARIO_ABREVIACAO.get(col_name, col_name[:4].upper())
-            cor = DICIONARIO_CORES.get(abreviacao, DICIONARIO_CORES.get(col_name, "#000000"))
-            ax.plot(progresso_pivot.index, progresso_pivot[col_name], marker='o', linewidth=5, markersize=12, label=col_name, color=cor)
-            for x_val, y_val in zip(progresso_pivot.index, progresso_pivot[col_name]):
-                if pd.notna(y_val): 
-                    ax.text(x_val, y_val + 0.3, abreviacao, color=cor, fontsize=10, fontweight='bold', ha='center', va='bottom')
-        ax.set_title("Evolucao Geral ao Longo do Ano", fontweight='bold', fontsize=18)
-        ax.set_ylabel("Nota", fontweight='bold', fontsize=14)
-        ax.set_xlabel("Periodo", fontweight='bold', fontsize=14)
-        ax.set_ylim(0, 11) 
-        ax.grid(True, linestyle='--', alpha=0.7)
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12)
-        plt.tight_layout()
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp: 
-            plt.savefig(tmp.name, format='png', dpi=300, bbox_inches='tight')
-            tmp_img_name = tmp.name
-        plt.close(fig)
-        pdf.add_page()
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "EVOLUCAO AO LONGO DO ANO (HISTORICO COMPLETO)", 0, 1, "C")
-        pdf.ln(5)
-        pdf.image(tmp_img_name, x=10, w=190)
-        try: 
-            os.remove(tmp_img_name)
-        except: 
-            pass
+        fig = criar_figura_evolucao_anual(df_historico_aluno)
+        if fig is not None:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                fig.savefig(tmp.name, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+                tmp_img_name = tmp.name
+            plt.close(fig)
+
+            # A evolução recebe uma página própria em A4 paisagem.
+            pdf.add_page('L')
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Arial", "B", 15)
+            pdf.cell(0, 10, "EVOLUÇÃO AO LONGO DO ANO — HISTÓRICO COMPLETO", 0, 1, "C")
+            pdf.image(tmp_img_name, x=10, y=22, w=277)
+            try:
+                os.remove(tmp_img_name)
+            except Exception:
+                pass
     out = pdf.output(dest='S')
     if isinstance(out, str):
         return out.encode('latin-1')
@@ -5368,14 +5515,6 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             else: 
                                 st.error("Erro ao gerar PDF.")
                             
-                        st.markdown(f"#### 📈 Evolução ao Longo do Ano ({ano_f})")
-                        progresso = df_historico_aluno.groupby(['periodo', 'disciplina']).agg(Acertos=('acerto', 'sum'), Total=('questao', 'count')).reset_index()
-                        progresso['Nota'] = (progresso['Acertos'] / progresso['Total']) * 10
-                        try: 
-                            st.line_chart(progresso.pivot(index='periodo', columns='disciplina', values='Nota'), height=250)
-                        except: 
-                            pass
-                        
                         st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
                         medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                         for _, mb in medias_b.iterrows(): 
@@ -5402,6 +5541,16 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                     grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q["questao"]}<br>R:{q["resposta"]} G:{q["gabarito"]}</div>'
                                     
                                 st.markdown(grid+'</div><br>', unsafe_allow_html=True)
+
+                        # O mesmo gráfico completo usado no PDF fica sempre abaixo
+                        # do mapa de acertos, com todos os componentes curriculares.
+                        st.markdown(f"#### 📈 Evolução ao Longo do Ano ({ano_f})")
+                        fig_evolucao = criar_figura_evolucao_anual(df_historico_aluno)
+                        if fig_evolucao is not None:
+                            st.pyplot(fig_evolucao, use_container_width=True)
+                            plt.close(fig_evolucao)
+                        else:
+                            st.info("Não há dados suficientes para montar o gráfico de evolução deste estudante.")
                             
     with stabs[2]:
         if not dff.empty and not area_stats.empty:
