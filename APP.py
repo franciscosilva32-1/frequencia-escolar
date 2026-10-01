@@ -209,55 +209,143 @@ def obter_cor_componente(nome_disciplina, indice=0):
 
 
 def adicionar_rotulos_nos_pontos(ax, pivot, fontsize=8.5):
-    """Adiciona a abreviação de TODOS os componentes em TODOS os períodos.
+    """Identifica TODOS os componentes, evitando colisões com conectores.
 
-    Quando dois ou mais componentes possuem exatamente a mesma nota no mesmo
-    período, os rótulos são empilhados verticalmente para que nenhum desapareça.
+    Quando os componentes têm a mesma nota (ou notas muito próximas), as
+    tarjas são distribuídas em dois lados do ponto e, quando necessário, em
+    várias colunas. Cada tarja mantém a cor do respectivo componente e recebe
+    um conector até o ponto exato da linha.
     """
-    grupos = {}
+    if pivot is None or pivot.empty:
+        return
 
-    for col_idx, col_name in enumerate(pivot.columns):
-        abreviacao = DICIONARIO_ABREVIACAO.get(
-            col_name,
-            str(col_name)[:4].upper(),
-        )
-        cor = obter_cor_componente(col_name, col_idx)
+    espacamento_linha = 20
+    distancia_horizontal = 48
+    incremento_coluna = 54
+    limite_agrupamento = 0.55
 
-        for x_idx, y_val in enumerate(pivot[col_name].tolist()):
+    for x_idx in range(len(pivot.index)):
+        itens = []
+
+        for col_idx, col_name in enumerate(pivot.columns):
+            y_val = pivot.iloc[x_idx][col_name]
             if pd.isna(y_val):
                 continue
-            chave = (x_idx, round(float(y_val), 2))
-            grupos.setdefault(chave, []).append((abreviacao, cor))
 
-    for (x_idx, y_val), rotulos in grupos.items():
-        n = len(rotulos)
-        if n == 1:
-            deslocamentos = [10]
-        else:
-            centro = (n - 1) / 2
-            deslocamentos = [(i - centro) * 13 for i in range(n)]
-
-        for (rotulo, cor), deslocamento in zip(rotulos, deslocamentos):
-            ax.annotate(
-                rotulo,
-                xy=(x_idx, y_val),
-                xytext=(0, deslocamento),
-                textcoords="offset points",
-                ha="center",
-                va="center",
-                fontsize=fontsize,
-                fontweight="bold",
-                color=cor,
-                bbox=dict(
-                    boxstyle="round,pad=0.16",
-                    facecolor="white",
-                    edgecolor=cor,
-                    linewidth=0.8,
-                    alpha=0.90,
-                ),
-                zorder=20,
-                clip_on=False,
+            abreviacao = DICIONARIO_ABREVIACAO.get(
+                col_name,
+                str(col_name)[:4].upper(),
             )
+            cor = obter_cor_componente(col_name, col_idx)
+            itens.append({
+                "y": float(y_val),
+                "rotulo": abreviacao,
+                "cor": cor,
+            })
+
+        if not itens:
+            continue
+
+        itens.sort(key=lambda item: item["y"])
+
+        # Agrupa somente pontos suficientemente próximos para que as tarjas
+        # possam colidir. Pontos muito separados continuam com rótulo próprio.
+        grupos = []
+        grupo_atual = [itens[0]]
+        for item in itens[1:]:
+            if abs(item["y"] - grupo_atual[-1]["y"]) <= limite_agrupamento:
+                grupo_atual.append(item)
+            else:
+                grupos.append(grupo_atual)
+                grupo_atual = [item]
+        grupos.append(grupo_atual)
+
+        for grupo in grupos:
+            n = len(grupo)
+
+            if n == 1:
+                item = grupo[0]
+                ax.annotate(
+                    item["rotulo"],
+                    xy=(x_idx, item["y"]),
+                    xytext=(0, 10),
+                    textcoords="offset points",
+                    ha="center",
+                    va="center",
+                    fontsize=fontsize,
+                    fontweight="bold",
+                    color=item["cor"],
+                    bbox=dict(
+                        boxstyle="round,pad=0.16",
+                        facecolor="white",
+                        edgecolor=item["cor"],
+                        linewidth=0.8,
+                        alpha=0.90,
+                    ),
+                    zorder=20,
+                    annotation_clip=False,
+                )
+                continue
+
+            y_referencia = sum(item["y"] for item in grupo) / n
+            if y_referencia >= 9.25:
+                modo_vertical = "ABAIXO"
+            elif y_referencia <= 1.75:
+                modo_vertical = "ACIMA"
+            else:
+                modo_vertical = "CENTRO"
+
+            # Alternância equilibrada entre esquerda e direita. Isso é feito
+            # inclusive nos períodos extremos: quando há muitos componentes,
+            # usar os dois lados evita uma "coluna" de tarjas sobrecarregada.
+            ordem_lados = [1 if i % 2 == 0 else -1 for i in range(n)]
+            contadores = {1: 0, -1: 0}
+
+            for idx_item, item in enumerate(grupo):
+                lado = ordem_lados[idx_item]
+                rank = contadores[lado]
+                contadores[lado] += 1
+
+                coluna = rank // 3
+                linha = rank % 3
+
+                dx = lado * (distancia_horizontal + coluna * incremento_coluna)
+
+                if modo_vertical == "ABAIXO":
+                    dy = -24 - (linha * espacamento_linha)
+                elif modo_vertical == "ACIMA":
+                    dy = 24 + (linha * espacamento_linha)
+                else:
+                    dy = (linha - 1) * espacamento_linha
+
+                ax.annotate(
+                    item["rotulo"],
+                    xy=(x_idx, item["y"]),
+                    xytext=(dx, dy),
+                    textcoords="offset points",
+                    ha="center",
+                    va="center",
+                    fontsize=fontsize,
+                    fontweight="bold",
+                    color=item["cor"],
+                    bbox=dict(
+                        boxstyle="round,pad=0.16",
+                        facecolor="white",
+                        edgecolor=item["cor"],
+                        linewidth=0.9,
+                        alpha=0.95,
+                    ),
+                    arrowprops=dict(
+                        arrowstyle="-",
+                        color=item["cor"],
+                        linewidth=0.9,
+                        shrinkA=3,
+                        shrinkB=4,
+                        connectionstyle="arc3,rad=0.0",
+                    ),
+                    zorder=20,
+                    annotation_clip=False,
+                )
 
 
 def criar_grafico_evolucao(df_historico_aluno, figsize=(12, 6.6), fontsize_rotulo=8.5):
@@ -297,13 +385,13 @@ def criar_grafico_evolucao(df_historico_aluno, figsize=(12, 6.6), fontsize_rotul
         "EVOLUÇÃO GERAL AO LONGO DO ANO",
         fontweight="bold",
         fontsize=18,
-        pad=12,
+        pad=16,
     )
     ax.set_ylabel("Nota", fontweight="bold", fontsize=13)
     ax.set_xlabel("Período", fontweight="bold", fontsize=13)
     ax.set_xticks(x_values)
     ax.set_xticklabels(list(pivot.index), fontsize=11, fontweight="bold")
-    ax.set_ylim(0, 11.3)
+    ax.set_ylim(0, 11.6)
     ax.set_yticks(range(0, 11))
     ax.grid(True, linestyle="--", alpha=0.35)
     ax.margins(x=0.06)
@@ -319,7 +407,7 @@ def criar_grafico_evolucao(df_historico_aluno, figsize=(12, 6.6), fontsize_rotul
         title_fontsize=10,
         frameon=True,
     )
-    fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.28)
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.86, bottom=0.28)
     return fig, pivot
 
 MOTIVOS_JUSTIFICATIVA_INICIAIS = [
