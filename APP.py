@@ -1145,8 +1145,11 @@ def inicializar_tabelas():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data ON registros_v2(data)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_codigo_data_tipo ON registros_v2(codigo_aluno, data, tipo_registro)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reg_data_tipo_codigo ON registros_v2(data, tipo_registro, codigo_aluno)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_avs_geral ON avaliacoes_avs(ano, periodo, area, turma)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_com_falta_codigo ON comunicacoes_faltas_v1(codigo_aluno, data_falta)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_com_codigo_tipo_data ON comunicacoes_faltas_v1(codigo_aluno, tipo_comunicacao, data_falta)")
         conn.commit()
         for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'configuracoes', 'comunicacoes_faltas_v1']:
             try: 
@@ -3334,6 +3337,168 @@ def buscar_suspensoes_na_data(data_str, turma="Todas"):
         liberar_conn(conn)
 
 
+
+def carregar_historico_frequencia_alunos(codigos_alunos):
+    """Carrega o histórico de frequência de vários estudantes em uma única consulta.
+
+    Mantém a mesma semântica de carregar_historico_frequencia_aluno(), mas
+    elimina consultas repetidas quando vários estudantes são processados
+    na mesma tela/operação.
+    """
+    codigos = [
+        str(c).strip()
+        for c in (codigos_alunos or [])
+        if str(c).strip()
+    ]
+    codigos = list(dict.fromkeys(codigos))
+    if not codigos:
+        return {}
+
+    conn = conectar_bd()
+    if not conn:
+        return {}
+    try:
+        query = """
+            WITH alunos AS (
+                SELECT unnest(%s::text[]) AS codigo_aluno
+            ),
+            dias AS (
+                SELECT
+                    a.codigo_aluno,
+                    c.data
+                FROM alunos a
+                CROSS JOIN calendario_letivo c
+                WHERE c.dia_letivo = TRUE
+                  AND c.data <= CURRENT_DATE
+
+                UNION
+
+                SELECT
+                    r.codigo_aluno,
+                    r.data
+                FROM registros_v2 r
+                WHERE r.codigo_aluno = ANY(%s)
+                  AND r.data <= CURRENT_DATE
+            )
+            SELECT
+                d.codigo_aluno,
+                d.data,
+                CASE
+                    WHEN r.tipo_registro = 'PRESENCA'
+                         AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
+                    WHEN r.tipo_registro = 'PRESENCA' THEN 'PRESENTE'
+                    WHEN r.tipo_registro = 'FALTA'
+                         AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL
+                        THEN 'FALTA JUSTIFICADA'
+                    WHEN r.tipo_registro = 'FALTA' THEN 'FALTA'
+                    ELSE 'AUSENTE SEM REGISTRO'
+                END AS situacao,
+                r.hora_entrada,
+                r.hora_saida,
+                r.motivo_saida
+            FROM dias d
+            LEFT JOIN registros_v2 r
+              ON r.codigo_aluno = d.codigo_aluno
+             AND r.data = d.data
+            ORDER BY d.codigo_aluno, d.data DESC
+        """
+        df = pd.read_sql_query(
+            query,
+            conn,
+            params=[codigos, codigos],
+        )
+        if df.empty:
+            return {}
+        return {
+            str(codigo): grupo.drop(columns=["codigo_aluno"]).reset_index(drop=True)
+            for codigo, grupo in df.groupby("codigo_aluno", sort=False)
+        }
+    except Exception:
+        return {}
+    finally:
+        liberar_conn(conn)
+
+
+def carregar_suspensoes_alunos(codigos_alunos):
+    """Carrega suspensões de vários estudantes em uma única consulta."""
+    codigos = [
+        str(c).strip()
+        for c in (codigos_alunos or [])
+        if str(c).strip()
+    ]
+    codigos = list(dict.fromkeys(codigos))
+    if not codigos:
+        return {}
+
+    conn = conectar_bd()
+    if not conn:
+        return {}
+    try:
+        garantir_tabela_suspensoes_na_conexao(conn)
+        query = """
+            SELECT
+                codigo_aluno,
+                data_inicio,
+                data_fim,
+                motivo,
+                criado_em,
+                id
+            FROM public.suspensoes_v1
+            WHERE codigo_aluno = ANY(%s)
+            ORDER BY codigo_aluno, data_inicio DESC, id DESC
+        """
+        df = pd.read_sql_query(query, conn, params=[codigos])
+        if df.empty:
+            return {}
+        return {
+            str(codigo): grupo.drop(columns=["codigo_aluno", "id"]).reset_index(drop=True)
+            for codigo, grupo in df.groupby("codigo_aluno", sort=False)
+        }
+    except Exception:
+        return {}
+    finally:
+        liberar_conn(conn)
+
+
+def carregar_comunicacoes_alunos(codigos_alunos):
+    """Carrega comunicações de vários estudantes em uma única consulta."""
+    codigos = [
+        str(c).strip()
+        for c in (codigos_alunos or [])
+        if str(c).strip()
+    ]
+    codigos = list(dict.fromkeys(codigos))
+    if not codigos:
+        return {}
+
+    conn = conectar_bd()
+    if not conn:
+        return {}
+    try:
+        query = """
+            SELECT
+                codigo_aluno,
+                data_falta,
+                tipo_comunicacao,
+                status,
+                data_comunicacao
+            FROM comunicacoes_faltas_v1
+            WHERE codigo_aluno = ANY(%s)
+            ORDER BY codigo_aluno, data_falta DESC, data_comunicacao DESC
+        """
+        df = pd.read_sql_query(query, conn, params=[codigos])
+        if df.empty:
+            return {}
+        return {
+            str(codigo): grupo.drop(columns=["codigo_aluno"]).reset_index(drop=True)
+            for codigo, grupo in df.groupby("codigo_aluno", sort=False)
+        }
+    except Exception:
+        return {}
+    finally:
+        liberar_conn(conn)
+
+
 def gerar_pdf_boletim(aluno, turma, nota_g, df_b, df_historico_aluno=None, df_frequencia_aluno=None, df_suspensoes_aluno=None, df_comunicacoes_aluno=None):
     if not FPDF:
         return None
@@ -5219,6 +5384,70 @@ if aba_atual == abas_do_sistema[indice_aba]:
         c_com3.metric("🕐 Pendentes", total_pendentes)
         c_com4.metric("⚠️ Sem WhatsApp", total_sem_whatsapp)
 
+        # Carregamento em lote: substitui as consultas repetidas por estudante
+        # sem alterar os dados apresentados na interface.
+        codigos_faltosos_com = [
+            str(c).strip()
+            for c in df_faltosos_com["codigo"].dropna().tolist()
+            if str(c).strip()
+        ]
+        historicos_faltosos_com = carregar_historico_frequencia_alunos(
+            codigos_faltosos_com
+        )
+        comunicacoes_faltosos_com = carregar_comunicacoes_alunos(
+            codigos_faltosos_com
+        )
+
+        data_ref_com = pd.to_datetime(data_comunicacao, errors="coerce")
+        resumos_faltosos_com = {}
+        for codigo_resumo in codigos_faltosos_com:
+            df_h_resumo = historicos_faltosos_com.get(codigo_resumo, pd.DataFrame())
+            faltas_anteriores_resumo = 0
+            if not df_h_resumo.empty and "data" in df_h_resumo.columns:
+                datas_resumo = pd.to_datetime(
+                    df_h_resumo["data"], errors="coerce"
+                )
+                mascara_resumo = (
+                    datas_resumo.notna()
+                    & (datas_resumo < data_ref_com)
+                    & df_h_resumo["situacao"].isin([
+                        "FALTA",
+                        "FALTA JUSTIFICADA",
+                        "AUSENTE SEM REGISTRO",
+                    ])
+                )
+                faltas_anteriores_resumo = int(mascara_resumo.sum())
+
+            df_c_resumo = comunicacoes_faltosos_com.get(
+                codigo_resumo,
+                pd.DataFrame(),
+            )
+            comunicacoes_realizadas_resumo = 0
+            ultima_comunicacao_resumo = None
+            if not df_c_resumo.empty:
+                tipos = (
+                    df_c_resumo["tipo_comunicacao"]
+                    .fillna("")
+                    .astype(str)
+                    .str.upper()
+                )
+                df_c_whatsapp = df_c_resumo.loc[
+                    tipos == "WHATSAPP"
+                ].copy()
+                comunicacoes_realizadas_resumo = len(df_c_whatsapp)
+                if not df_c_whatsapp.empty:
+                    ultima_comunicacao_resumo = pd.to_datetime(
+                        df_c_whatsapp["data_comunicacao"],
+                        errors="coerce",
+                    ).max()
+
+            resumos_faltosos_com[codigo_resumo] = {
+                "faltas_anteriores": faltas_anteriores_resumo,
+                "comunicacoes_realizadas": comunicacoes_realizadas_resumo,
+                "ultima_comunicacao": ultima_comunicacao_resumo,
+            }
+
+        # Mantém o separador visual da versão anterior antes da lista de estudantes.
         st.markdown("---")
 
         for idx, row in enumerate(df_faltosos_com.to_dict('records'), start=1):
@@ -5228,7 +5457,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
             telefone_f = normalizar_telefone_whatsapp(row.get('telefone_responsavel', ''))
             motivo_f = str(row.get('motivo_saida') or '').strip()
             comunicado_f = bool(row.get('comunicado', False))
-            reincidencia = resumo_reincidencia_aluno(codigo_f, data_comunicacao)
+            reincidencia = resumos_faltosos_com.get(
+                codigo_f,
+                {
+                    "faltas_anteriores": 0,
+                    "comunicacoes_realizadas": 0,
+                    "ultima_comunicacao": None,
+                },
+            )
             faltas_anteriores = reincidencia.get('faltas_anteriores', 0)
             total_comunicacoes = reincidencia.get('comunicacoes_realizadas', 0)
 
@@ -5319,7 +5555,10 @@ if aba_atual == abas_do_sistema[indice_aba]:
                 # HISTÓRICO DE FALTAS — separado do histórico de comunicação
                 # --------------------------------------------------------
                 st.markdown('#### 📚 Histórico de faltas anteriores')
-                df_hist_faltas = carregar_historico_frequencia_aluno(codigo_f)
+                df_hist_faltas = historicos_faltosos_com.get(
+                    codigo_f,
+                    pd.DataFrame(),
+                )
                 if df_hist_faltas.empty:
                     st.info('Nenhum histórico de frequência disponível para este estudante.')
                 else:
@@ -5361,7 +5600,10 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         )
 
                 st.markdown('#### 📜 Histórico de comunicação')
-                df_com_hist = carregar_comunicacoes_aluno(codigo_f)
+                df_com_hist = comunicacoes_faltosos_com.get(
+                    codigo_f,
+                    pd.DataFrame(),
+                )
                 if df_com_hist.empty:
                     st.info('Nenhuma comunicação anterior registrada.')
                 else:
@@ -5737,16 +5979,66 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     with st.spinner(f"Gerando {len(lista_completa)} boletins. Por favor, aguarde..."):
                         zip_buffer = io.BytesIO()
                         df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
+
+                        dff_por_nome_lote = {
+                            str(nome): grupo
+                            for nome, grupo in dff.groupby("nome", sort=False)
+                        } if not dff.empty else {}
+                        historico_por_nome_lote = {
+                            str(nome): grupo
+                            for nome, grupo in df_historico_base.groupby("nome", sort=False)
+                        } if not df_historico_base.empty and "nome" in df_historico_base.columns else {}
+
+                        codigos_lote = []
+                        codigo_por_nome_turma = {}
+                        for aluno_lote in lista_completa:
+                            codigo_lote = obter_codigo_aluno_df(
+                                aluno_lote['nome'],
+                                aluno_lote['turma'],
+                                df_alunos,
+                            )
+                            codigo_por_nome_turma[
+                                (str(aluno_lote['nome']), str(aluno_lote['turma']))
+                            ] = codigo_lote
+                            if codigo_lote:
+                                codigos_lote.append(codigo_lote)
+
+                        historicos_lote = carregar_historico_frequencia_alunos(codigos_lote)
+                        suspensoes_lote = carregar_suspensoes_alunos(codigos_lote)
+                        comunicacoes_lote = carregar_comunicacoes_alunos(codigos_lote)
+
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for a in lista_completa:
-                                df_bol_ind = dff[dff['nome'] == a['nome']]
-                                df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
-                                codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
-                                df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
-                                df_susp_a = carregar_suspensoes_aluno(codigo_a)
-                                df_com_a = carregar_comunicacoes_aluno(codigo_a)
-                                pdf_bytes = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a, df_com_a)
-                                
+                                nome_lote = str(a['nome'])
+                                turma_lote = str(a['turma'])
+                                df_bol_ind = dff_por_nome_lote.get(
+                                    nome_lote,
+                                    pd.DataFrame(columns=dff.columns),
+                                )
+                                df_historico_aluno = historico_por_nome_lote.get(
+                                    nome_lote,
+                                    pd.DataFrame(columns=df_historico_base.columns),
+                                )
+                                codigo_a = codigo_por_nome_turma.get(
+                                    (nome_lote, turma_lote)
+                                )
+                                df_freq_a = historicos_lote.get(
+                                    str(codigo_a),
+                                    pd.DataFrame(),
+                                )
+                                df_susp_a = suspensoes_lote.get(
+                                    str(codigo_a),
+                                    pd.DataFrame(),
+                                )
+                                df_com_a = comunicacoes_lote.get(
+                                    str(codigo_a),
+                                    pd.DataFrame(),
+                                )
+                                pdf_bytes = gerar_pdf_boletim(
+                                    a['nome'], a['turma'], a['acerto']*10,
+                                    df_bol_ind, df_historico_aluno,
+                                    df_freq_a, df_susp_a, df_com_a
+                                )
                                 if pdf_bytes:
                                     safe_name = "".join([c for c in a['nome'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
                                     zip_file.writestr(f"Boletim_{a['turma']}_{safe_name}.pdf", pdf_bytes)
@@ -5763,13 +6055,24 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     st.info(f"📊 **Total de estudantes encontrados:** {len(lista_visualizacao)}.")
                 
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
-                
+
+                # Índices em memória para evitar repetir filtros completos dos
+                # mesmos DataFrames durante a renderização dos expanders.
+                dff_por_nome = {
+                    str(nome): grupo
+                    for nome, grupo in dff.groupby("nome", sort=False)
+                } if not dff.empty else {}
+                historico_por_nome = {
+                    str(nome): grupo
+                    for nome, grupo in df_historico_base.groupby("nome", sort=False)
+                } if not df_historico_base.empty and "nome" in df_historico_base.columns else {}
+
                 if not dff.empty:
                     medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
                     piores_por_aluno = medias_gerais_turma.sort_values(['nome', 'Nota']).groupby('nome').head(3)
                 else:
                     piores_por_aluno = pd.DataFrame(columns=['nome', 'disciplina', 'periodo', 'Nota'])
-                
+
                 for idx, a in enumerate(lista_visualizacao, start=1):
                     alerta_str = alertas_estudante.get(a['nome'], "")
                     if alerta_str:
@@ -5779,8 +6082,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
                         
                     with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
                         
-                        df_bol_ind = dff[dff['nome'] == a['nome']]
-                        df_historico_aluno = df_historico_base[df_historico_base['nome'] == a['nome']]
+                        df_bol_ind = dff_por_nome.get(
+                            str(a["nome"]),
+                            pd.DataFrame(columns=dff.columns),
+                        )
+                        df_historico_aluno = historico_por_nome.get(
+                            str(a["nome"]),
+                            pd.DataFrame(columns=df_historico_base.columns),
+                        )
                         
                         piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
                         piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
