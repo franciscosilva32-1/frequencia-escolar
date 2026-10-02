@@ -209,24 +209,24 @@ def obter_cor_componente(nome_disciplina, indice=0):
 
 
 def adicionar_rotulos_nos_pontos(ax, pivot, fontsize=8.5):
-    """Identifica TODOS os componentes, evitando colisões com conectores.
+    """Posiciona todos os rótulos de forma adaptativa e sem sobreposição.
 
-    Quando os componentes têm a mesma nota (ou notas muito próximas), as
-    tarjas são distribuídas em dois lados do ponto e, quando necessário, em
-    várias colunas. Cada tarja mantém a cor do respectivo componente e recebe
-    um conector até o ponto exato da linha.
+    Os rótulos são medidos em suas caixas reais antes da posição definitiva.
+    Quando há colisão, novas posições são testadas para a esquerda, direita,
+    acima e abaixo do ponto. Depois de distribuídos, uma segunda passagem
+    procura colisões remanescentes entre períodos diferentes.
+
+    A cor da tarja e do conector é a mesma da disciplina.
     """
     if pivot is None or pivot.empty:
         return
 
-    espacamento_linha = 20
-    distancia_horizontal = 48
-    incremento_coluna = 54
-    limite_agrupamento = 0.55
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
 
+    pontos = []
     for x_idx in range(len(pivot.index)):
-        itens = []
-
         for col_idx, col_name in enumerate(pivot.columns):
             y_val = pivot.iloc[x_idx][col_name]
             if pd.isna(y_val):
@@ -236,117 +236,261 @@ def adicionar_rotulos_nos_pontos(ax, pivot, fontsize=8.5):
                 col_name,
                 str(col_name)[:4].upper(),
             )
-            cor = obter_cor_componente(col_name, col_idx)
-            itens.append({
-                "y": float(y_val),
-                "rotulo": abreviacao,
-                "cor": cor,
-            })
+            pontos.append(
+                {
+                    "x": x_idx,
+                    "y": float(y_val),
+                    "rotulo": abreviacao,
+                    "cor": obter_cor_componente(col_name, col_idx),
+                    "disciplina": str(col_name),
+                }
+            )
 
-        if not itens:
+    if not pontos:
+        return
+
+    for ponto in pontos:
+        ponto["congestionamento"] = sum(
+            1
+            for outro in pontos
+            if outro is not ponto
+            and abs(outro["x"] - ponto["x"]) <= 0.25
+            and abs(outro["y"] - ponto["y"]) <= 0.80
+        )
+
+    pontos.sort(
+        key=lambda item: (
+            -item["congestionamento"],
+            item["x"],
+            item["y"],
+            item["disciplina"],
+        )
+    )
+
+    candidatos = [
+        (0, 18), (0, -18),
+        (34, 0), (-34, 0),
+        (34, 20), (34, -20), (-34, 20), (-34, -20),
+        (68, 0), (-68, 0),
+        (68, 20), (68, -20), (-68, 20), (-68, -20),
+        (102, 0), (-102, 0),
+        (102, 22), (102, -22), (-102, 22), (-102, -22),
+        (136, 0), (-136, 0),
+        (136, 24), (136, -24), (-136, 24), (-136, -24),
+        (0, 40), (0, -40),
+        (34, 40), (34, -40), (-34, 40), (-34, -40),
+        (68, 40), (68, -40), (-68, 40), (-68, -40),
+        (102, 40), (102, -40), (-102, 40), (-102, -40),
+        (136, 40), (136, -40), (-136, 40), (-136, -40),
+    ]
+
+    caixa_axes = ax.bbox
+    caixa_fig = fig.bbox
+
+    def bbox_expandido(bbox, margem=4):
+        return bbox.expanded(
+            (bbox.width + 2 * margem) / max(bbox.width, 1),
+            (bbox.height + 2 * margem) / max(bbox.height, 1),
+        )
+
+    def colide(a, b):
+        return not (
+            a.x1 < b.x0
+            or a.x0 > b.x1
+            or a.y1 < b.y0
+            or a.y0 > b.y1
+        )
+
+    def penalidade_borda(bbox):
+        fora_fig = 0
+        if bbox.x0 < caixa_fig.x0 + 2:
+            fora_fig += caixa_fig.x0 + 2 - bbox.x0
+        if bbox.x1 > caixa_fig.x1 - 2:
+            fora_fig += bbox.x1 - (caixa_fig.x1 - 2)
+        if bbox.y0 < caixa_fig.y0 + 2:
+            fora_fig += caixa_fig.y0 + 2 - bbox.y0
+        if bbox.y1 > caixa_fig.y1 - 2:
+            fora_fig += bbox.y1 - (caixa_fig.y1 - 2)
+
+        fora_axes = 0
+        if bbox.x0 < caixa_axes.x0:
+            fora_axes += caixa_axes.x0 - bbox.x0
+        if bbox.x1 > caixa_axes.x1:
+            fora_axes += bbox.x1 - caixa_axes.x1
+        if bbox.y0 < caixa_axes.y0:
+            fora_axes += caixa_axes.y0 - bbox.y0
+        if bbox.y1 > caixa_axes.y1:
+            fora_axes += bbox.y1 - caixa_axes.y1
+
+        return fora_fig * 500 + fora_axes * 5
+
+    def medir(ponto, dx, dy):
+        # Medimos somente o texto/tarja, sem criar o conector temporariamente.
+        # Isso torna a detecção de colisões muito mais leve.
+        temp = ax.annotate(
+            ponto["rotulo"],
+            xy=(ponto["x"], ponto["y"]),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            fontweight="bold",
+            color=ponto["cor"],
+            bbox=dict(
+                boxstyle="round,pad=0.16",
+                facecolor="white",
+                edgecolor=ponto["cor"],
+                linewidth=0.9,
+                alpha=0.95,
+            ),
+            zorder=20,
+            annotation_clip=False,
+        )
+        bbox = bbox_expandido(temp.get_window_extent(renderer), margem=4)
+        temp.remove()
+        return bbox
+
+    def criar_final(ponto, dx, dy):
+        return ax.annotate(
+            ponto["rotulo"],
+            xy=(ponto["x"], ponto["y"]),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            fontweight="bold",
+            color=ponto["cor"],
+            bbox=dict(
+                boxstyle="round,pad=0.16",
+                facecolor="white",
+                edgecolor=ponto["cor"],
+                linewidth=0.9,
+                alpha=0.95,
+            ),
+            arrowprops=dict(
+                arrowstyle="-",
+                color=ponto["cor"],
+                linewidth=0.9,
+                shrinkA=3,
+                shrinkB=4,
+                connectionstyle="arc3,rad=0.0",
+            ),
+            zorder=20,
+            annotation_clip=False,
+        )
+
+    registros = []
+
+    # Primeira distribuição.
+    for ponto in pontos:
+        melhor = None
+
+        for ordem, (dx, dy) in enumerate(candidatos):
+            bbox = medir(ponto, dx, dy)
+            colisao = sum(
+                1 for registro in registros
+                if colide(bbox, registro["bbox"])
+            )
+            score = (
+                colisao * 100000
+                + penalidade_borda(bbox)
+                + (abs(dx) + abs(dy)) * 0.08
+                + ordem * 0.0001
+            )
+
+            if melhor is None or score < melhor["score"]:
+                melhor = {
+                    "score": score,
+                    "dx": dx,
+                    "dy": dy,
+                    "bbox": bbox,
+                }
+
+            if colisao == 0 and penalidade_borda(bbox) == 0:
+                break
+
+        if melhor is None:
             continue
 
-        itens.sort(key=lambda item: item["y"])
+        ann = criar_final(
+            ponto,
+            melhor["dx"],
+            melhor["dy"],
+        )
+        registros.append(
+            {
+                "ann": ann,
+                "ponto": ponto,
+                "dx": melhor["dx"],
+                "dy": melhor["dy"],
+                "bbox": melhor["bbox"],
+            }
+        )
 
-        # Agrupa somente pontos suficientemente próximos para que as tarjas
-        # possam colidir. Pontos muito separados continuam com rótulo próprio.
-        grupos = []
-        grupo_atual = [itens[0]]
-        for item in itens[1:]:
-            if abs(item["y"] - grupo_atual[-1]["y"]) <= limite_agrupamento:
-                grupo_atual.append(item)
-            else:
-                grupos.append(grupo_atual)
-                grupo_atual = [item]
-        grupos.append(grupo_atual)
+    # Segunda distribuição: resolve colisões reais que surgiram entre
+    # diferentes períodos depois que todos os rótulos foram colocados.
+    for _ in range(8):
+        houve_mudanca = False
 
-        for grupo in grupos:
-            n = len(grupo)
+        for idx, registro in enumerate(registros):
+            bbox_atual = medir(
+                registro["ponto"],
+                registro["dx"],
+                registro["dy"],
+            )
 
-            if n == 1:
-                item = grupo[0]
-                ax.annotate(
-                    item["rotulo"],
-                    xy=(x_idx, item["y"]),
-                    xytext=(0, 10),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=fontsize,
-                    fontweight="bold",
-                    color=item["cor"],
-                    bbox=dict(
-                        boxstyle="round,pad=0.16",
-                        facecolor="white",
-                        edgecolor=item["cor"],
-                        linewidth=0.8,
-                        alpha=0.90,
-                    ),
-                    zorder=20,
-                    annotation_clip=False,
+            conflitos_atuais = [
+                j for j, outro in enumerate(registros)
+                if j != idx and colide(
+                    bbox_atual,
+                    outro["bbox"],
                 )
+            ]
+
+            if not conflitos_atuais:
+                registro["bbox"] = bbox_atual
                 continue
 
-            y_referencia = sum(item["y"] for item in grupo) / n
-            if y_referencia >= 9.25:
-                modo_vertical = "ABAIXO"
-            elif y_referencia <= 1.75:
-                modo_vertical = "ACIMA"
-            else:
-                modo_vertical = "CENTRO"
-
-            # Alternância equilibrada entre esquerda e direita. Isso é feito
-            # inclusive nos períodos extremos: quando há muitos componentes,
-            # usar os dois lados evita uma "coluna" de tarjas sobrecarregada.
-            ordem_lados = [1 if i % 2 == 0 else -1 for i in range(n)]
-            contadores = {1: 0, -1: 0}
-
-            for idx_item, item in enumerate(grupo):
-                lado = ordem_lados[idx_item]
-                rank = contadores[lado]
-                contadores[lado] += 1
-
-                coluna = rank // 3
-                linha = rank % 3
-
-                dx = lado * (distancia_horizontal + coluna * incremento_coluna)
-
-                if modo_vertical == "ABAIXO":
-                    dy = -24 - (linha * espacamento_linha)
-                elif modo_vertical == "ACIMA":
-                    dy = 24 + (linha * espacamento_linha)
-                else:
-                    dy = (linha - 1) * espacamento_linha
-
-                ax.annotate(
-                    item["rotulo"],
-                    xy=(x_idx, item["y"]),
-                    xytext=(dx, dy),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=fontsize,
-                    fontweight="bold",
-                    color=item["cor"],
-                    bbox=dict(
-                        boxstyle="round,pad=0.16",
-                        facecolor="white",
-                        edgecolor=item["cor"],
-                        linewidth=0.9,
-                        alpha=0.95,
-                    ),
-                    arrowprops=dict(
-                        arrowstyle="-",
-                        color=item["cor"],
-                        linewidth=0.9,
-                        shrinkA=3,
-                        shrinkB=4,
-                        connectionstyle="arc3,rad=0.0",
-                    ),
-                    zorder=20,
-                    annotation_clip=False,
+            melhor = None
+            for ordem, (dx, dy) in enumerate(candidatos):
+                bbox = medir(registro["ponto"], dx, dy)
+                colisao = sum(
+                    1 for j, outro in enumerate(registros)
+                    if j != idx and colide(bbox, outro["bbox"])
+                )
+                score = (
+                    colisao * 100000
+                    + penalidade_borda(bbox)
+                    + (abs(dx) + abs(dy)) * 0.08
+                    + ordem * 0.0001
                 )
 
+                if melhor is None or score < melhor["score"]:
+                    melhor = {
+                        "score": score,
+                        "dx": dx,
+                        "dy": dy,
+                        "bbox": bbox,
+                    }
+
+                if colisao == 0 and penalidade_borda(bbox) == 0:
+                    break
+
+            if melhor is not None:
+                registro["dx"] = melhor["dx"]
+                registro["dy"] = melhor["dy"]
+                registro["bbox"] = melhor["bbox"]
+                registro["ann"].set_position(
+                    (melhor["dx"], melhor["dy"])
+                )
+                houve_mudanca = True
+
+        if not houve_mudanca:
+            break
+
+    fig.canvas.draw()
 
 def criar_grafico_evolucao(df_historico_aluno, figsize=(12, 6.6), fontsize_rotulo=8.5):
     """Cria o gráfico completo de evolução, pronto para tela ou PDF."""
