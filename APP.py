@@ -6057,7 +6057,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                 df_historico_base = obter_dados_acad_filtrados(ano_f, "Todos", "Todas", "Todas")
 
                 # Índices em memória para evitar repetir filtros completos dos
-                # mesmos DataFrames durante a renderização dos expanders.
+                # mesmos DataFrames durante a renderização dos estudantes.
                 dff_por_nome = {
                     str(nome): grupo
                     for nome, grupo in dff.groupby("nome", sort=False)
@@ -6068,46 +6068,127 @@ if aba_atual == abas_do_sistema[indice_aba]:
                 } if not df_historico_base.empty and "nome" in df_historico_base.columns else {}
 
                 if not dff.empty:
-                    medias_gerais_turma = dff.groupby(['nome', 'disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                    piores_por_aluno = medias_gerais_turma.sort_values(['nome', 'Nota']).groupby('nome').head(3)
+                    medias_gerais_turma = (
+                        dff.groupby(["nome", "disciplina", "periodo"])
+                        .agg(Nota=("acerto", lambda x: (sum(x) / len(x)) * 10))
+                        .reset_index()
+                    )
+                    piores_por_aluno = (
+                        medias_gerais_turma
+                        .sort_values(["nome", "Nota"])
+                        .groupby("nome")
+                        .head(3)
+                    )
+                    piores_por_nome = {
+                        str(nome): grupo
+                        for nome, grupo in piores_por_aluno.groupby("nome", sort=False)
+                    }
                 else:
-                    piores_por_aluno = pd.DataFrame(columns=['nome', 'disciplina', 'periodo', 'Nota'])
+                    piores_por_nome = {}
+
+                # ------------------------------------------------------------
+                # FLUIDEZ: os expanders exibem primeiro somente o cabeçalho.
+                # O conteúdo pesado (gráfico, médias e mapa de questões) é
+                # carregado somente para o estudante solicitado pelo usuário.
+                # Isso evita gerar dezenas de gráficos e milhares de elementos
+                # Streamlit quando a página é aberta.
+                # ------------------------------------------------------------
+                chave_detalhe_atual = st.session_state.get("desempenho_aluno_detalhe")
+                chaves_visiveis = {
+                    f"{str(a['nome'])}|{str(a['turma'])}"
+                    for a in lista_visualizacao
+                }
+                if chave_detalhe_atual not in chaves_visiveis:
+                    chave_detalhe_atual = None
+                    st.session_state["desempenho_aluno_detalhe"] = None
 
                 for idx, a in enumerate(lista_visualizacao, start=1):
-                    alerta_str = alertas_estudante.get(a['nome'], "")
-                    if alerta_str:
-                        tag = f" &nbsp; 🚨 [{alerta_str}]"
-                    else:
-                        tag = ""
-                        
-                    with st.expander(f"👤 {idx}º | {a['nome']} ({a['turma']}) | Nota: {a['acerto']*10:.2f} {tag}"):
-                        
+                    nome_aluno_lista = str(a["nome"])
+                    turma_aluno_lista = str(a["turma"])
+                    chave_aluno = f"{nome_aluno_lista}|{turma_aluno_lista}"
+                    alerta_str = alertas_estudante.get(a["nome"], "")
+                    tag = f" &nbsp; 🚨 [{alerta_str}]" if alerta_str else ""
+                    detalhe_ativo = (chave_aluno == chave_detalhe_atual)
+
+                    with st.expander(
+                        f"👤 {idx}º | {nome_aluno_lista} ({turma_aluno_lista}) | Nota: {a['acerto'] * 10:.2f} {tag}",
+                        expanded=detalhe_ativo,
+                    ):
+                        if not detalhe_ativo:
+                            st.caption(
+                                "Análise detalhada sob demanda: gráfico, médias, mapa de questões e PDF."
+                            )
+                            if st.button(
+                                "📂 CARREGAR ANÁLISE DETALHADA",
+                                key=f"abrir_detalhe_desempenho_{idx}",
+                                use_container_width=True,
+                            ):
+                                st.session_state["desempenho_aluno_detalhe"] = chave_aluno
+                                st.rerun()
+                            continue
+
+                        if st.button(
+                            "✖ FECHAR ANÁLISE",
+                            key=f"fechar_detalhe_desempenho_{idx}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["desempenho_aluno_detalhe"] = None
+                            st.rerun()
+
                         df_bol_ind = dff_por_nome.get(
-                            str(a["nome"]),
+                            nome_aluno_lista,
                             pd.DataFrame(columns=dff.columns),
                         )
                         df_historico_aluno = historico_por_nome.get(
-                            str(a["nome"]),
+                            nome_aluno_lista,
                             pd.DataFrame(columns=df_historico_base.columns),
                         )
-                        
-                        piores_3 = piores_por_aluno[piores_por_aluno['nome'] == a['nome']]
-                        piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join([f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>" for _, r in piores_3.iterrows()])
-                        
-                        if not piores_3.empty: 
-                            st.markdown(f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>", unsafe_allow_html=True)
-                        
-                        if st.button("GERAR PDF (PERÍODO SELECIONADO)", key=f"pdf_{idx}_{a['nome']}"):
-                            codigo_a = obter_codigo_aluno_df(a['nome'], a['turma'], df_alunos)
+
+                        piores_3 = piores_por_nome.get(nome_aluno_lista, pd.DataFrame())
+                        piores_str = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(
+                            [
+                                f"📉 <span style='color:#ef4444; font-weight:900;'>{r['disciplina']} ({r['Nota']:.1f})</span>"
+                                for _, r in piores_3.iterrows()
+                            ]
+                        )
+
+                        if not piores_3.empty:
+                            st.markdown(
+                                f"<div style='margin-bottom: 15px; padding: 10px; background-color: #fef2f2; border-left: 5px solid #ef4444; border-radius: 5px; font-size: 1.1rem;'><b>Atenção - Menores Notas:</b> {piores_str}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        if st.button(
+                            "GERAR PDF (PERÍODO SELECIONADO)",
+                            key=f"pdf_{idx}_{nome_aluno_lista}",
+                        ):
+                            codigo_a = obter_codigo_aluno_df(
+                                nome_aluno_lista,
+                                turma_aluno_lista,
+                                df_alunos,
+                            )
                             df_freq_a = carregar_historico_frequencia_aluno(codigo_a)
                             df_susp_a = carregar_suspensoes_aluno(codigo_a)
                             df_com_a = carregar_comunicacoes_aluno(codigo_a)
-                            b_pdf = gerar_pdf_boletim(a['nome'], a['turma'], a['acerto']*10, df_bol_ind, df_historico_aluno, df_freq_a, df_susp_a, df_com_a)
-                            if b_pdf: 
-                                st.download_button("BAIXAR BOLETIM", b_pdf, f"Boletim_{a['nome']}.pdf")
-                            else: 
+                            b_pdf = gerar_pdf_boletim(
+                                nome_aluno_lista,
+                                turma_aluno_lista,
+                                a['acerto'] * 10,
+                                df_bol_ind,
+                                df_historico_aluno,
+                                df_freq_a,
+                                df_susp_a,
+                                df_com_a,
+                            )
+                            if b_pdf:
+                                st.download_button(
+                                    "BAIXAR BOLETIM",
+                                    b_pdf,
+                                    f"Boletim_{nome_aluno_lista}.pdf",
+                                )
+                            else:
                                 st.error("Erro ao gerar PDF.")
-                            
+
                         st.markdown(f"#### 📈 Evolução ao Longo do Ano ({ano_f})")
                         fig_evolucao, _ = criar_grafico_evolucao(
                             df_historico_aluno,
@@ -6118,21 +6199,37 @@ if aba_atual == abas_do_sistema[indice_aba]:
                             st.pyplot(fig_evolucao, use_container_width=True)
                             plt.close(fig_evolucao)
                         else:
-                            st.info("Ainda não existem dados suficientes para montar a evolução ao longo do ano.")
-                        
+                            st.info(
+                                "Ainda não existem dados suficientes para montar a evolução ao longo do ano."
+                            )
+
                         st.markdown("#### 📊 Médias por Disciplina (Filtros Atuais)")
-                        medias_b = df_bol_ind.groupby(['disciplina', 'periodo']).agg(Nota=('acerto', lambda x: (sum(x)/len(x))*10)).reset_index()
-                        for _, mb in medias_b.iterrows(): 
-                            st.write(f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})")
+                        medias_b = (
+                            df_bol_ind.groupby(["disciplina", "periodo"])
+                            .agg(Nota=("acerto", lambda x: (sum(x) / len(x)) * 10))
+                            .reset_index()
+                        )
+                        for _, mb in medias_b.iterrows():
+                            st.write(
+                                f"{mb['disciplina'].upper()} - {mb['periodo']} (Nota: {mb['Nota']:.1f})"
+                            )
                             st.progress(min(mb['Nota'] / 10, 1.0))
-                        
+
                         st.markdown("#### 📋 Mapa de Questões (Filtros Atuais)")
                         for p_m in sorted(df_bol_ind['periodo'].unique()):
-                            for d_m in sorted(df_bol_ind[df_bol_ind['periodo']==p_m]['disciplina'].unique()):
+                            for d_m in sorted(
+                                df_bol_ind[df_bol_ind['periodo'] == p_m]['disciplina'].unique()
+                            ):
                                 st.markdown(f"**{d_m} - {p_m}**")
-                                q_df = df_bol_ind[(df_bol_ind['periodo']==p_m) & (df_bol_ind['disciplina']==d_m)].sort_values("questao")
+                                q_df = (
+                                    df_bol_ind[
+                                        (df_bol_ind['periodo'] == p_m)
+                                        & (df_bol_ind['disciplina'] == d_m)
+                                    ]
+                                    .sort_values("questao")
+                                )
                                 grid = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
-                                
+
                                 for _, q in q_df.iterrows():
                                     if q['acerto'] == 1:
                                         cor = "#10b981"
@@ -6142,11 +6239,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
                                         cor = "#8b5cf6"
                                     else:
                                         cor = "#ef4444"
-                                        
-                                    grid += f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">Q{q["questao"]}<br>R:{q["resposta"]} G:{q["gabarito"]}</div>'
-                                    
-                                st.markdown(grid+'</div><br>', unsafe_allow_html=True)
-                            
+
+                                    grid += (
+                                        f'<div style="background:{cor}; color:white; padding:8px; border-radius:6px; width:75px; text-align:center; font-size:11px;">'
+                                        f'Q{q["questao"]}<br>R:{q["resposta"]} G:{q["gabarito"]}</div>'
+                                    )
+
+                                st.markdown(grid + '</div><br>', unsafe_allow_html=True)
+
     with stabs[2]:
         if not dff.empty and not area_stats.empty:
             estudantes_faltosos = area_stats[area_stats['Faltou']]
