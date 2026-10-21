@@ -1134,6 +1134,16 @@ def inicializar_tabelas():
         )""")
         cur.execute("CREATE TABLE IF NOT EXISTS calendario_letivo (data DATE PRIMARY KEY, dia_letivo BOOLEAN DEFAULT TRUE)")
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS calendario_letivo_turmas (
+                data DATE NOT NULL,
+                turma TEXT NOT NULL,
+                dia_letivo BOOLEAN NOT NULL DEFAULT TRUE,
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (data, turma)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_calendario_turmas_turma_data ON calendario_letivo_turmas(turma, data)")
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS comunicacoes_faltas_v1 (
                 id SERIAL PRIMARY KEY,
                 codigo_aluno TEXT REFERENCES alunos_v2(codigo),
@@ -1151,7 +1161,7 @@ def inicializar_tabelas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_com_falta_codigo ON comunicacoes_faltas_v1(codigo_aluno, data_falta)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_com_codigo_tipo_data ON comunicacoes_faltas_v1(codigo_aluno, tipo_comunicacao, data_falta)")
         conn.commit()
-        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'configuracoes', 'comunicacoes_faltas_v1']:
+        for tb in ['alunos_v2', 'registros_v2', 'avaliacoes_avs', 'faltas_primeira_chamada', 'satisfacao_v1', 'calendario_letivo', 'calendario_letivo_turmas', 'configuracoes', 'comunicacoes_faltas_v1']:
             try: 
                 cur.execute(f"ALTER TABLE {tb} ENABLE ROW LEVEL SECURITY;")
                 conn.commit()
@@ -1554,38 +1564,40 @@ def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
     try:
         cur = conn.cursor()
         cur.execute("""
-            WITH dias AS (
-                SELECT data
-                FROM calendario_letivo
-                WHERE dia_letivo = TRUE
-                  AND data < %s::date
+            WITH aluno AS (
+                SELECT codigo, turma FROM alunos_v2 WHERE codigo = %s
+            ), dias AS (
+                SELECT ct.data
+                FROM calendario_letivo_turmas ct
+                JOIN aluno a ON a.turma = ct.turma
+                WHERE ct.dia_letivo = TRUE AND ct.data < %s::date
                 UNION
-                SELECT data
-                FROM registros_v2
-                WHERE codigo_aluno = %s
-                  AND data < %s::date
+                SELECT c.data
+                FROM calendario_letivo c
+                CROSS JOIN aluno a
+                WHERE c.dia_letivo = TRUE AND c.data < %s::date
+                  AND NOT EXISTS (
+                      SELECT 1 FROM calendario_letivo_turmas ct
+                      WHERE ct.data = c.data AND ct.turma = a.turma
+                  )
+                UNION
+                SELECT data FROM registros_v2
+                WHERE codigo_aluno = %s AND data < %s::date
             ), historico AS (
-                SELECT
-                    d.data,
+                SELECT d.data,
                     CASE
-                        WHEN r.tipo_registro = 'PRESENCA'
-                             AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
+                        WHEN r.tipo_registro = 'PRESENCA' AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
                         WHEN r.tipo_registro = 'PRESENCA' THEN 'PRESENTE'
-                        WHEN r.tipo_registro = 'FALTA'
-                             AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL
-                            THEN 'FALTA JUSTIFICADA'
+                        WHEN r.tipo_registro = 'FALTA' AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL THEN 'FALTA JUSTIFICADA'
                         WHEN r.tipo_registro = 'FALTA' THEN 'FALTA'
                         ELSE 'AUSENTE SEM REGISTRO'
                     END AS situacao
                 FROM dias d
-                LEFT JOIN registros_v2 r
-                  ON r.codigo_aluno = %s
-                 AND r.data = d.data
+                LEFT JOIN registros_v2 r ON r.codigo_aluno = %s AND r.data = d.data
             )
-            SELECT COUNT(*)
-            FROM historico
+            SELECT COUNT(*) FROM historico
             WHERE situacao IN ('FALTA', 'FALTA JUSTIFICADA', 'AUSENTE SEM REGISTRO')
-        """, (data_falta_atual, codigo_aluno, data_falta_atual, codigo_aluno))
+        """, (codigo_aluno, data_falta_atual, data_falta_atual, codigo_aluno, data_falta_atual, codigo_aluno))
         resultado["faltas_anteriores"] = int(cur.fetchone()[0] or 0)
 
         cur.execute("""
@@ -1606,33 +1618,83 @@ def resumo_reincidencia_aluno(codigo_aluno, data_falta_atual):
 # ------------------------------------------------------------
 # 6. LÓGICA DE NEGÓCIO E CACHES
 # ------------------------------------------------------------
-def _fetch_dia_letivo_db(data_atual):
+def _fetch_dia_letivo_db(data_atual, turma=None):
+    """Consulta se a data está ativa globalmente ou para uma turma específica.
+
+    Se houver configuração explícita por turma, ela prevalece sobre o calendário
+    antigo por data. Para datas antigas sem configuração por turma, mantém-se o
+    comportamento legado de calendario_letivo.
+    """
     conn = conectar_bd()
-    if not conn: 
+    if not conn:
         raise ConnectionError("Sem conexão com o banco de dados")
     try:
         cur = conn.cursor()
-        cur.execute("SELECT dia_letivo FROM calendario_letivo WHERE data = %s", (data_atual,))
+        if turma is None:
+            cur.execute(
+                "SELECT COALESCE(dia_letivo, FALSE) FROM calendario_letivo WHERE data = %s",
+                (data_atual,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COALESCE(ct.dia_letivo, c.dia_letivo, FALSE)
+                FROM (SELECT %s::date AS data, %s::text AS turma) x
+                LEFT JOIN calendario_letivo_turmas ct
+                  ON ct.data = x.data AND ct.turma = x.turma
+                LEFT JOIN calendario_letivo c
+                  ON c.data = x.data
+                """,
+                (data_atual, str(turma)),
+            )
         res = cur.fetchone()
-        if res: 
-            return res[0]
-        return False
+        return bool(res[0]) if res else False
     finally:
         liberar_conn(conn)
 
 @st.cache_data(ttl=300)
-def _verificar_dia_letivo_cache(data_atual):
-    return _fetch_dia_letivo_db(data_atual)
+def _verificar_dia_letivo_cache(data_atual, turma=None):
+    return _fetch_dia_letivo_db(data_atual, turma)
 
-def verificar_dia_letivo(data_atual):
+def verificar_dia_letivo(data_atual, turma=None):
     if 'cache_dias_letivos' not in st.session_state:
         st.session_state['cache_dias_letivos'] = {}
+    chave_cache = (str(data_atual), str(turma or ""))
     try:
-        resultado = _verificar_dia_letivo_cache(data_atual)
-        st.session_state['cache_dias_letivos'][data_atual] = resultado
+        resultado = _verificar_dia_letivo_cache(data_atual, turma)
+        st.session_state['cache_dias_letivos'][chave_cache] = resultado
         return resultado
     except Exception:
-        return st.session_state['cache_dias_letivos'].get(data_atual, False)
+        return st.session_state['cache_dias_letivos'].get(chave_cache, False)
+
+
+def carregar_turmas_ativas_no_dia(data_atual, turmas_disponiveis):
+    """Retorna as turmas marcadas como ativas na data; datas antigas usam o calendário global."""
+    turmas = [str(t).strip() for t in (turmas_disponiveis or []) if str(t).strip()]
+    if not turmas:
+        return []
+    conn = conectar_bd()
+    if not conn:
+        return turmas
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT turma, dia_letivo FROM calendario_letivo_turmas WHERE data = %s",
+            (data_atual,),
+        )
+        registros = {str(t): bool(ativo) for t, ativo in cur.fetchall()}
+        if registros:
+            return [t for t in turmas if registros.get(t, False)]
+        cur.execute(
+            "SELECT dia_letivo FROM calendario_letivo WHERE data = %s",
+            (data_atual,),
+        )
+        legado = cur.fetchone()
+        if legado is None or bool(legado[0]):
+            return turmas
+        return []
+    finally:
+        liberar_conn(conn)
 
 def _fetch_alunos_db():
     conn = conectar_bd()
@@ -1701,8 +1763,19 @@ def carregar_resumo_dashboard(data_str, turma="Todas", horario_limite_saida_str=
             datetime.strptime(horario_limite_saida_str, "%H:%M:%S").time()
         )
 
+        filtro_calendario_sql = """
+            AND COALESCE(
+                (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+                 WHERE ct.data = %s::date AND ct.turma = a.turma),
+                (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                TRUE
+            ) = TRUE
+        """
         if turma == "Todas":
-            cur.execute("SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO'")
+            cur.execute(
+                "SELECT COUNT(*) FROM alunos_v2 a WHERE a.status = 'ATIVO' " + filtro_calendario_sql,
+                (data_str, data_str),
+            )
             total_alunos = int(cur.fetchone()[0] or 0)
 
             cur.execute("""
@@ -1712,11 +1785,11 @@ def carregar_resumo_dashboard(data_str, turma="Todas", horario_limite_saida_str=
                 WHERE r.data = %s
                   AND r.tipo_registro = 'PRESENCA'
                   AND a.status = 'ATIVO'
-            """, (data_str,))
+            """ + filtro_calendario_sql, (data_str, data_str, data_str))
         else:
             cur.execute(
-                "SELECT COUNT(*) FROM alunos_v2 WHERE status = 'ATIVO' AND turma = %s",
-                (turma,)
+                "SELECT COUNT(*) FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.turma = %s " + filtro_calendario_sql,
+                (turma, data_str, data_str),
             )
             total_alunos = int(cur.fetchone()[0] or 0)
 
@@ -1728,7 +1801,7 @@ def carregar_resumo_dashboard(data_str, turma="Todas", horario_limite_saida_str=
                   AND r.tipo_registro = 'PRESENCA'
                   AND a.status = 'ATIVO'
                   AND a.turma = %s
-            """, (data_str, turma))
+            """ + filtro_calendario_sql, (data_str, turma, data_str, data_str))
 
         registros = cur.fetchall()
 
@@ -1767,9 +1840,15 @@ def carregar_faltas(data_str):
                     AND p.data = %s
                     AND p.tipo_registro = 'PRESENCA'
               )
+              AND COALESCE(
+                  (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+                   WHERE ct.data = %s::date AND ct.turma = a.turma),
+                  (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                  TRUE
+              ) = TRUE
             ORDER BY a.turma, a.nome
         """
-        return pd.read_sql(query, conn, params=[data_str, data_str])
+        return pd.read_sql(query, conn, params=[data_str, data_str, data_str, data_str])
     except Exception as e:
         print(f"Erro ao carregar faltas: {e}")
         return pd.DataFrame()
@@ -2469,15 +2548,33 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
             SELECT
                 codigo,
                 nome,
-                email_responsavel
+                email_responsavel,
+                turma
             FROM alunos_v2
             WHERE status = 'ATIVO'
             """
         )
         alunos = {
-            row[0]: (row[1], row[2])
+            row[0]: (row[1], row[2], row[3])
             for row in cur.fetchall()
         }
+        datas_unicas = list(df["DATA"].dropna().unique())
+        calendario_por_turma = {}
+        calendario_global = {}
+        if datas_unicas:
+            cur.execute(
+                "SELECT data, turma, dia_letivo FROM calendario_letivo_turmas WHERE data = ANY(%s::date[])",
+                (datas_unicas,),
+            )
+            calendario_por_turma = {
+                (linha[0], str(linha[1])): bool(linha[2])
+                for linha in cur.fetchall()
+            }
+            cur.execute(
+                "SELECT data, dia_letivo FROM calendario_letivo WHERE data = ANY(%s::date[])",
+                (datas_unicas,),
+            )
+            calendario_global = {linha[0]: bool(linha[1]) for linha in cur.fetchall()}
     finally:
         liberar_conn(conn)
 
@@ -2490,7 +2587,6 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
         )
 
     # Busca registros de presença já existentes para as datas da fonte.
-    datas_unicas = list(df["DATA"].dropna().unique())
     registros_existentes = {}
 
     if datas_unicas:
@@ -2535,6 +2631,21 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
         if codigo not in alunos:
             erros.append(
                 f"Linha {idx+1}: Código '{codigo}' não encontrado ou inativo."
+            )
+            continue
+
+        turma_codigo = str(alunos[codigo][2] or "").strip()
+        chave_calendario_turma = (data, turma_codigo)
+        if chave_calendario_turma in calendario_por_turma:
+            dia_ativo_aluno = calendario_por_turma[chave_calendario_turma]
+        elif data in calendario_global:
+            dia_ativo_aluno = calendario_global[data]
+        else:
+            # Mantém a compatibilidade para datas antigas sem configuração de calendário.
+            dia_ativo_aluno = True
+        if not dia_ativo_aluno:
+            erros.append(
+                f"Linha {idx+1}: entrada ignorada; o dia não está ativo para a turma {turma_codigo} ({data.strftime('%d/%m/%Y')})."
             )
             continue
 
@@ -2604,7 +2715,7 @@ def processar_entrada_df(df, data_base, hora_limite, origem_entrada="PLANILHA"):
             )
         )
 
-        nome, email = alunos[codigo]
+        nome, email, _turma_codigo = alunos[codigo]
 
         if email:
             emails_para_disparar.append(
@@ -2856,7 +2967,7 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
 
         cur.execute(
             """
-            SELECT nome, email_responsavel
+            SELECT nome, email_responsavel, turma
             FROM alunos_v2
             WHERE UPPER(TRIM(codigo)) = %s
             LIMIT 1
@@ -2868,7 +2979,21 @@ def registrar_saida(cod, motivo, pais, data, h_saida, h_limite_saida):
             conn.rollback()
             return False
 
-        nome_aluno, email_responsavel = res
+        nome_aluno, email_responsavel, turma_aluno = res
+        cur.execute(
+            """
+            SELECT COALESCE(ct.dia_letivo, c.dia_letivo, FALSE)
+            FROM (SELECT %s::date AS data, %s::text AS turma) x
+            LEFT JOIN calendario_letivo_turmas ct
+              ON ct.data = x.data AND ct.turma = x.turma
+            LEFT JOIN calendario_letivo c ON c.data = x.data
+            """,
+            (data, str(turma_aluno or "")),
+        )
+        calendario_ativo = cur.fetchone()
+        if not calendario_ativo or not bool(calendario_ativo[0]):
+            conn.rollback()
+            return False
 
         try:
             h_s_obj = (
@@ -3014,6 +3139,84 @@ def importar_csv_desempenho(file, ano, periodo, area, turma):
 
 
 
+def carregar_historico_mensal_turma(turma, data_inicio, data_fim):
+    """Carrega o histórico mensal de todos os estudantes ativos de uma turma.
+
+    Os dias letivos são determinados primeiro pela configuração por turma; em
+    datas antigas sem configuração individual, usa-se o calendário global. As
+    ocorrências efetivamente registradas são mantidas mesmo em datas legadas.
+    """
+    conn = conectar_bd()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        query = """
+            WITH turma_alunos AS (
+                SELECT codigo, nome, turma
+                FROM alunos_v2
+                WHERE status = 'ATIVO' AND turma = %s
+            ), dias_ativos AS (
+                SELECT ct.data
+                FROM calendario_letivo_turmas ct
+                WHERE ct.turma = %s
+                  AND ct.dia_letivo = TRUE
+                  AND ct.data BETWEEN %s AND %s
+                UNION
+                SELECT c.data
+                FROM calendario_letivo c
+                WHERE c.dia_letivo = TRUE
+                  AND c.data BETWEEN %s AND %s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM calendario_letivo_turmas ct
+                      WHERE ct.data = c.data AND ct.turma = %s
+                  )
+            ), linhas_base AS (
+                SELECT ta.codigo, ta.nome, ta.turma, d.data
+                FROM turma_alunos ta
+                CROSS JOIN dias_ativos d
+                UNION
+                SELECT ta.codigo, ta.nome, ta.turma, r.data
+                FROM turma_alunos ta
+                JOIN registros_v2 r ON r.codigo_aluno = ta.codigo
+                WHERE r.data BETWEEN %s AND %s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM dias_ativos d WHERE d.data = r.data
+                  )
+            )
+            SELECT
+                b.codigo,
+                b.nome,
+                b.turma,
+                b.data,
+                CASE
+                    WHEN r.tipo_registro = 'PRESENCA' AND r.status_entrada = 'ATRASO' THEN 'ATRASO'
+                    WHEN r.tipo_registro = 'PRESENCA' THEN 'PRESENTE'
+                    WHEN r.tipo_registro = 'FALTA'
+                         AND NULLIF(TRIM(r.motivo_saida), '') IS NOT NULL THEN 'FALTA JUSTIFICADA'
+                    WHEN r.tipo_registro = 'FALTA' THEN 'FALTA'
+                    ELSE 'AUSENTE SEM REGISTRO'
+                END AS situacao,
+                r.hora_entrada,
+                r.hora_saida,
+                r.motivo_saida
+            FROM linhas_base b
+            LEFT JOIN registros_v2 r
+              ON r.codigo_aluno = b.codigo
+             AND r.data = b.data
+            ORDER BY b.nome, b.data
+        """
+        return pd.read_sql_query(
+            query,
+            conn,
+            params=[turma, turma, data_inicio, data_fim, data_inicio, data_fim, turma, data_inicio, data_fim],
+        )
+    except Exception as e:
+        print(f"Erro ao carregar histórico mensal da turma: {e}")
+        return pd.DataFrame()
+    finally:
+        liberar_conn(conn)
+
+
 @st.cache_data(ttl=60)
 def carregar_historico_frequencia_aluno(codigo_aluno):
     """Retorna o histórico completo de frequência do estudante até hoje."""
@@ -3024,11 +3227,26 @@ def carregar_historico_frequencia_aluno(codigo_aluno):
         return pd.DataFrame()
     try:
         query = """
-            WITH dias AS (
-                SELECT data
-                FROM calendario_letivo
-                WHERE dia_letivo = TRUE
-                  AND data <= CURRENT_DATE
+            WITH aluno AS (
+                SELECT codigo, turma
+                FROM alunos_v2
+                WHERE codigo = %s
+            ), dias AS (
+                SELECT ct.data
+                FROM calendario_letivo_turmas ct
+                JOIN aluno a ON a.turma = ct.turma
+                WHERE ct.dia_letivo = TRUE
+                  AND ct.data <= CURRENT_DATE
+                UNION
+                SELECT c.data
+                FROM calendario_letivo c
+                CROSS JOIN aluno a
+                WHERE c.dia_letivo = TRUE
+                  AND c.data <= CURRENT_DATE
+                  AND NOT EXISTS (
+                      SELECT 1 FROM calendario_letivo_turmas ct
+                      WHERE ct.data = c.data AND ct.turma = a.turma
+                  )
                 UNION
                 SELECT data
                 FROM registros_v2
@@ -3057,7 +3275,7 @@ def carregar_historico_frequencia_aluno(codigo_aluno):
             ORDER BY d.data DESC
         """
         return pd.read_sql_query(
-            query, conn, params=[codigo_aluno, codigo_aluno]
+            query, conn, params=[codigo_aluno, codigo_aluno, codigo_aluno]
         )
     except Exception:
         return pd.DataFrame()
@@ -3361,15 +3579,29 @@ def carregar_historico_frequencia_alunos(codigos_alunos):
         query = """
             WITH alunos AS (
                 SELECT unnest(%s::text[]) AS codigo_aluno
+            ), alunos_turma AS (
+                SELECT s.codigo_aluno, a.turma
+                FROM alunos s
+                JOIN alunos_v2 a ON a.codigo = s.codigo_aluno
             ),
             dias AS (
-                SELECT
-                    a.codigo_aluno,
-                    c.data
-                FROM alunos a
+                SELECT at.codigo_aluno, ct.data
+                FROM alunos_turma at
+                JOIN calendario_letivo_turmas ct ON ct.turma = at.turma
+                WHERE ct.dia_letivo = TRUE
+                  AND ct.data <= CURRENT_DATE
+
+                UNION
+
+                SELECT at.codigo_aluno, c.data
+                FROM alunos_turma at
                 CROSS JOIN calendario_letivo c
                 WHERE c.dia_letivo = TRUE
                   AND c.data <= CURRENT_DATE
+                  AND NOT EXISTS (
+                      SELECT 1 FROM calendario_letivo_turmas ct
+                      WHERE ct.data = c.data AND ct.turma = at.turma
+                  )
 
                 UNION
 
@@ -3989,6 +4221,16 @@ def garantir_tabela_suspensoes_na_conexao(conn):
         )
     """)
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.calendario_letivo_turmas (
+            data DATE NOT NULL,
+            turma TEXT NOT NULL,
+            dia_letivo BOOLEAN NOT NULL DEFAULT TRUE,
+            atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (data, turma)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_calendario_turmas_turma_data ON public.calendario_letivo_turmas(turma, data)")
+    cur.execute("""
         ALTER TABLE public.suspensoes_v1
         ADD COLUMN IF NOT EXISTS codigo_aluno TEXT
     """)
@@ -4060,9 +4302,8 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, f"Não foi possível preparar a estrutura de suspensões: {e_schema}"
 
     try:
-        # A consulta utiliza quatro parâmetros de data:
-        # 1) falta, 2) início da suspensão, 3) fim da suspensão, 4) presença.
-        params_aus = [data_str, data_str, data_str, data_str]
+        # Datas: falta, início/fim da suspensão, presença, calendário da turma (turma e legado).
+        params_aus = [data_str, data_str, data_str, data_str, data_str, data_str]
         query_aus = """
             SELECT
                 a.codigo,
@@ -4094,6 +4335,12 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
                       AND r.data = %s
                       AND r.tipo_registro = 'PRESENCA'
               )
+              AND COALESCE(
+                    (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+                     WHERE ct.data = %s::date AND ct.turma = a.turma),
+                    (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                    FALSE
+              ) = TRUE
         """
         if turma != "Todas":
             query_aus += " AND a.turma = %s"
@@ -4101,7 +4348,7 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         query_aus += " ORDER BY a.turma, a.nome"
         df_aus = pd.read_sql_query(query_aus, conn, params=params_aus)
 
-        params_tarde = [data_str]
+        params_tarde = [data_str, data_str, data_str]
         query_tarde = """
             SELECT
                 a.codigo,
@@ -4115,6 +4362,11 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
               AND r.tipo_registro = 'PRESENCA'
               AND r.hora_entrada >= TIME '12:00:00'
               AND a.status = 'ATIVO'
+              AND COALESCE(
+                    (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct WHERE ct.data = %s::date AND ct.turma = a.turma),
+                    (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                    FALSE
+              ) = TRUE
         """
         if turma != "Todas":
             query_tarde += " AND a.turma = %s"
@@ -4122,7 +4374,7 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         query_tarde += " ORDER BY a.turma, r.hora_entrada, a.nome"
         df_tarde = pd.read_sql_query(query_tarde, conn, params=params_tarde)
 
-        params_lib = [data_str, hora_limite]
+        params_lib = [data_str, hora_limite, data_str, data_str]
         query_lib = """
             SELECT a.codigo, a.nome, a.turma, r.hora_saida, r.motivo_saida
             FROM registros_v2 r
@@ -4132,6 +4384,11 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
               AND r.hora_saida IS NOT NULL
               AND r.hora_saida < %s
               AND a.status = 'ATIVO'
+              AND COALESCE(
+                    (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct WHERE ct.data = %s::date AND ct.turma = a.turma),
+                    (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                    FALSE
+              ) = TRUE
         """
         if turma != "Todas":
             query_lib += " AND a.turma = %s"
@@ -4140,10 +4397,27 @@ def carregar_dados_painel_informativo(data_str, turma, hora_limite_saida_str="17
         df_lib = pd.read_sql_query(query_lib, conn, params=params_lib)
 
         cur = conn.cursor()
-        cur.execute(
-            "SELECT COALESCE(dia_letivo, FALSE) FROM calendario_letivo WHERE data = %s",
-            (data_str,),
-        )
+        if turma == "Todas":
+            cur.execute(
+                """
+                SELECT (
+                    EXISTS (SELECT 1 FROM calendario_letivo_turmas WHERE data = %s AND dia_letivo = TRUE)
+                    OR COALESCE((SELECT dia_letivo FROM calendario_letivo WHERE data = %s), FALSE)
+                )
+                """,
+                (data_str, data_str),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COALESCE(
+                    (SELECT dia_letivo FROM calendario_letivo_turmas WHERE data = %s AND turma = %s),
+                    (SELECT dia_letivo FROM calendario_letivo WHERE data = %s),
+                    FALSE
+                )
+                """,
+                (data_str, turma, data_str),
+            )
         res_cal = cur.fetchone()
         dia_letivo = bool(res_cal[0]) if res_cal else False
         # Um estudante liberado não permanece na lista de presentes à tarde.
@@ -4638,7 +4912,7 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
 
         cur.execute(
             """
-            SELECT nome, email_responsavel
+            SELECT nome, email_responsavel, turma
             FROM alunos_v2
             WHERE UPPER(TRIM(codigo)) = %s
               AND UPPER(TRIM(status)) = 'ATIVO'
@@ -4651,7 +4925,21 @@ def registrar_entrada_direta(codigo, data, hora_entrada, hora_limite):
             conn.rollback()
             return False, f"Código {codigo} não encontrado ou aluno inativo."
 
-        nome_aluno, email_responsavel = aluno
+        nome_aluno, email_responsavel, turma_aluno = aluno
+        cur.execute(
+            """
+            SELECT COALESCE(ct.dia_letivo, c.dia_letivo, FALSE)
+            FROM (SELECT %s::date AS data, %s::text AS turma) x
+            LEFT JOIN calendario_letivo_turmas ct
+              ON ct.data = x.data AND ct.turma = x.turma
+            LEFT JOIN calendario_letivo c ON c.data = x.data
+            """,
+            (data_db, str(turma_aluno or "")),
+        )
+        calendario_ativo = cur.fetchone()
+        if not calendario_ativo or not bool(calendario_ativo[0]):
+            conn.rollback()
+            return False, f"O dia {data_db.strftime('%d/%m/%Y')} não está ativo para a turma {turma_aluno}."
 
         # Se já existir um registro para a data, preserva integralmente
         # o registro existente. Assim, o modo SISTEMA nunca sobrescreve
@@ -4807,31 +5095,100 @@ if aba_atual == abas_do_sistema[indice_aba]:
         h_lim_s = st.time_input("🔴 Horário de Término (Saída)", datetime.strptime("17:00", "%H:%M").time())
         st.session_state.h_lim_s_atual = h_lim_s
     
-    with st.form("form_controle_dias"):
-        st.markdown("📅 **Ativação do Calendário:**")
-        col_d1, col_d2 = st.columns(2)
-        with col_d1: 
-            data_selecionada = st.date_input("Selecione a Data no Calendário", value=obter_hora_atual().date())
-        with col_d2: 
-            st.write("")
-            st.write("")
-            is_ativo = st.checkbox("Ativar como Dia Letivo?", value=True)
-            
-        if st.form_submit_button("💾 Salvar Configuração do Dia"):
-            conn = conectar_bd()
-            if conn:
+    st.markdown("📅 **Ativação do Calendário por Turma**")
+    turmas_dia_disponiveis = []
+    if isinstance(df_alunos, pd.DataFrame) and not df_alunos.empty and "turma" in df_alunos.columns:
+        df_turmas_dia = df_alunos.copy()
+        if "status" in df_turmas_dia.columns:
+            df_turmas_dia = df_turmas_dia[
+                df_turmas_dia["status"].fillna("").astype(str).str.upper().eq("ATIVO")
+            ]
+        turmas_dia_disponiveis = sorted(
+            df_turmas_dia["turma"].dropna().astype(str).str.strip().loc[lambda x: x.ne("")].unique().tolist()
+        )
+
+    data_selecionada = st.date_input(
+        "Selecione a data que será configurada",
+        value=obter_hora_atual().date(),
+        key="data_config_calendario_turma",
+    )
+    turmas_ativas_padrao = carregar_turmas_ativas_no_dia(
+        data_selecionada,
+        turmas_dia_disponiveis,
+    )
+    st.caption("Marque as turmas que terão dia letivo. As turmas sem marcação serão consideradas liberadas nessa data.")
+    turmas_ativas_selecionadas = []
+    if turmas_dia_disponiveis:
+        colunas_turmas_dia = st.columns(3)
+        for idx_turma_dia, turma_dia in enumerate(turmas_dia_disponiveis):
+            with colunas_turmas_dia[idx_turma_dia % 3]:
+                ativa_turma_dia = st.checkbox(
+                    turma_dia,
+                    value=(turma_dia in turmas_ativas_padrao),
+                    key=f"cal_dia_{data_selecionada.strftime('%Y%m%d')}_{turma_dia}",
+                )
+                if ativa_turma_dia:
+                    turmas_ativas_selecionadas.append(turma_dia)
+        liberadas_preview = [t for t in turmas_dia_disponiveis if t not in turmas_ativas_selecionadas]
+        col_ativas, col_liberadas = st.columns(2)
+        col_ativas.metric("Turmas com dia letivo", len(turmas_ativas_selecionadas))
+        col_liberadas.metric("Turmas liberadas", len(liberadas_preview))
+        if liberadas_preview:
+            st.caption("Turmas liberadas nesta data: " + ", ".join(liberadas_preview))
+    else:
+        st.warning("Não há turmas disponíveis no cadastro de estudantes.")
+
+    if st.button("💾 Salvar Configuração do Dia", type="primary", key="salvar_calendario_por_turma"):
+        conn = conectar_bd()
+        if conn:
+            try:
+                cur = conn.cursor()
+                is_ativo = bool(turmas_ativas_selecionadas)
+                cur.execute(
+                    """INSERT INTO calendario_letivo (data, dia_letivo)
+                       VALUES (%s, %s)
+                       ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo""",
+                    (data_selecionada, is_ativo),
+                )
+                for turma_dia in turmas_dia_disponiveis:
+                    cur.execute(
+                        """INSERT INTO calendario_letivo_turmas (data, turma, dia_letivo, atualizado_em)
+                           VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                           ON CONFLICT (data, turma) DO UPDATE SET
+                               dia_letivo = EXCLUDED.dia_letivo,
+                               atualizado_em = CURRENT_TIMESTAMP""",
+                        (data_selecionada, turma_dia, turma_dia in turmas_ativas_selecionadas),
+                    )
+                conn.commit()
+                _verificar_dia_letivo_cache.clear()
+                verificar_dia_letivo_cache = st.session_state.get("cache_dias_letivos", {})
+                verificar_dia_letivo_cache.clear()
+                for cache_funcao in (
+                    carregar_dados_painel_informativo,
+                    carregar_resumo_dashboard,
+                    carregar_faltas,
+                    contar_presencas_data,
+                    carregar_historico_frequencia_aluno,
+                ):
+                    try:
+                        cache_funcao.clear()
+                    except Exception:
+                        pass
+                st.success(
+                    f"Data {data_selecionada.strftime('%d/%m/%Y')} salva: "
+                    f"{len(turmas_ativas_selecionadas)} turma(s) com dia letivo e "
+                    f"{len(turmas_dia_disponiveis) - len(turmas_ativas_selecionadas)} turma(s) liberada(s)."
+                )
+            except Exception as e:
                 try:
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO calendario_letivo (data, dia_letivo) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET dia_letivo = EXCLUDED.dia_letivo", (data_selecionada, is_ativo))
-                    conn.commit()
-                    _verificar_dia_letivo_cache.clear()
-                    st.success(f"Pronto! A data {data_selecionada.strftime('%d/%m/%Y')} foi configurada.")
-                except Exception as e: 
-                    st.error(f"Erro ao salvar: {e}")
-                finally: 
-                    liberar_conn(conn)
-            else: 
-                st.error("Sem conexão com o banco de dados.")
+                    conn.rollback()
+                except Exception:
+                    pass
+                st.error(f"Erro ao salvar a configuração do calendário: {e}")
+            finally:
+                liberar_conn(conn)
+        else:
+            st.error("Sem conexão com o banco de dados.")
 
     st.markdown("---")
     
@@ -5252,7 +5609,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
         FROM alunos_v2 a
         LEFT JOIN registros_v2 r ON a.codigo = r.codigo_aluno AND r.data = %s
         WHERE a.status = 'ATIVO'
+          AND COALESCE(
+              (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+               WHERE ct.data = %s::date AND ct.turma = a.turma),
+              (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+              TRUE
+          ) = TRUE
     """
+    params.extend([dt_f.strftime("%Y-%m-%d"), dt_f.strftime("%Y-%m-%d")])
     if t_f_gestao != "Todas":
         query += " AND a.turma = %s"
         params.append(t_f_gestao)
@@ -5315,6 +5679,88 @@ if aba_atual == abas_do_sistema[indice_aba]:
         "Registre primeiro a comunicação no banco. Em seguida, clique em 'ABRIR WHATSAPP' para abrir diretamente o aplicativo, sem criar novas abas pelo sistema."
     )
 
+    with st.expander("📇 Buscar contato do responsável / Exportar contatos por turma", expanded=False):
+        df_contatos_base = df_alunos.copy() if isinstance(df_alunos, pd.DataFrame) else pd.DataFrame()
+        if not df_contatos_base.empty:
+            if "status" in df_contatos_base.columns:
+                df_contatos_base = df_contatos_base[
+                    df_contatos_base["status"].fillna("").astype(str).str.upper().eq("ATIVO")
+                ].copy()
+            for col_contato in ["codigo", "nome", "turma", "telefone_responsavel", "email_responsavel"]:
+                if col_contato not in df_contatos_base.columns:
+                    df_contatos_base[col_contato] = ""
+            df_contatos_base["codigo"] = df_contatos_base["codigo"].fillna("").astype(str).str.strip()
+            df_contatos_base["nome"] = df_contatos_base["nome"].fillna("").astype(str).str.strip()
+            df_contatos_base["turma"] = df_contatos_base["turma"].fillna("").astype(str).str.strip()
+            df_contatos_base = df_contatos_base[df_contatos_base["codigo"].ne("")].sort_values(["turma", "nome"])
+
+            opcoes_contato = {
+                f"{row['nome']} — {row['turma']} [{row['codigo']}]": row
+                for _, row in df_contatos_base.iterrows()
+            }
+            aluno_contato_sel = st.selectbox(
+                "Pesquisar estudante para consultar o celular do responsável",
+                [""] + list(opcoes_contato.keys()),
+                key="busca_contato_responsavel_comunicacao",
+            )
+            if aluno_contato_sel:
+                aluno_contato = opcoes_contato[aluno_contato_sel]
+                telefone_bruto_contato = str(aluno_contato.get("telefone_responsavel") or "").strip()
+                telefone_norm_contato = normalizar_telefone_whatsapp(telefone_bruto_contato)
+                c_cont1, c_cont2, c_cont3 = st.columns([2, 1, 2])
+                c_cont1.write(f"**Estudante:** {aluno_contato['nome']}")
+                c_cont2.write(f"**Turma:** {aluno_contato['turma']}")
+                if telefone_norm_contato and len(telefone_norm_contato) in (12, 13):
+                    c_cont3.success(f"📱 Celular do responsável: {telefone_bruto_contato}")
+                    st.caption(f"Número normalizado para WhatsApp: +{telefone_norm_contato}")
+                elif telefone_bruto_contato:
+                    c_cont3.warning(f"Número cadastrado, mas inválido: {telefone_bruto_contato}")
+                else:
+                    c_cont3.warning("Este estudante não possui celular do responsável cadastrado.")
+                email_contato = str(aluno_contato.get("email_responsavel") or "").strip()
+                if email_contato:
+                    st.caption(f"E-mail do responsável: {email_contato}")
+
+            st.markdown("---")
+            turmas_contato = sorted(df_contatos_base["turma"].dropna().astype(str).str.strip().loc[lambda x: x.ne("")].unique().tolist())
+            turma_export_contatos = st.selectbox(
+                "Turma para visualizar/exportar os contatos",
+                ["Todas as turmas"] + turmas_contato,
+                key="turma_exportar_contatos_responsaveis",
+            )
+            if turma_export_contatos == "Todas as turmas":
+                df_export_contatos = df_contatos_base.copy()
+            else:
+                df_export_contatos = df_contatos_base[
+                    df_contatos_base["turma"].eq(turma_export_contatos)
+                ].copy()
+            df_export_exib = df_export_contatos[[
+                "codigo", "nome", "turma", "telefone_responsavel", "email_responsavel"
+            ]].rename(columns={
+                "codigo": "Código",
+                "nome": "Estudante",
+                "turma": "Turma",
+                "telefone_responsavel": "Celular do responsável / WhatsApp",
+                "email_responsavel": "E-mail do responsável",
+            }).fillna("")
+            st.caption(f"{len(df_export_exib)} estudante(s) ativo(s) incluído(s) na lista.")
+            st.dataframe(df_export_exib, use_container_width=True, hide_index=True)
+            csv_contatos = df_export_exib.to_csv(index=False, sep=";").encode("utf-8-sig")
+            nome_arquivo_contatos = (
+                "Contatos_Responsaveis_Todas_as_Turmas.csv"
+                if turma_export_contatos == "Todas as turmas"
+                else f"Contatos_Responsaveis_{re.sub(r'[^A-Za-z0-9_-]+', '_', turma_export_contatos)}.csv"
+            )
+            st.download_button(
+                "📥 Exportar lista de contatos em CSV",
+                data=csv_contatos,
+                file_name=nome_arquivo_contatos,
+                mime="text/csv",
+                key="baixar_contatos_responsaveis_csv",
+            )
+        else:
+            st.info("Não há estudantes cadastrados para consultar os contatos.")
+
     data_comunicacao = data_f_global.strftime("%Y-%m-%d")
     turma_comunicacao = tf
 
@@ -5349,8 +5795,14 @@ if aba_atual == abas_do_sistema[indice_aba]:
                       WHERE data = %s
                         AND tipo_registro = 'PRESENCA'
                   )
+                  AND COALESCE(
+                      (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+                       WHERE ct.data = %s::date AND ct.turma = a.turma),
+                      (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = %s::date),
+                      TRUE
+                  ) = TRUE
             """
-            params_com.extend([data_comunicacao, data_comunicacao])
+            params_com.extend([data_comunicacao, data_comunicacao, data_comunicacao, data_comunicacao])
 
             if turma_comunicacao != "Todas":
                 query_com += " AND a.turma = %s"
@@ -5682,25 +6134,184 @@ indice_aba += 1
 # ------------------------------------------------------------
 if aba_atual == abas_do_sistema[indice_aba]:
     st.subheader("🚨 Risco de Evasão — alunos com 5 dias ausentes")
-    dias_u = [(obter_hora_atual() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7) if (obter_hora_atual() - timedelta(days=i)).weekday() < 5][:5]
-    
-    if dias_u:
+    # Busca uma janela maior para localizar os últimos cinco dias realmente
+    # letivos de cada turma, ignorando feriados e dias de liberação.
+    dias_candidatos_risco = [
+        (obter_hora_atual().date() - timedelta(days=i))
+        for i in range(90)
+        if (obter_hora_atual().date() - timedelta(days=i)).weekday() < 5
+    ]
+
+    if dias_candidatos_risco:
         conn = conectar_bd()
         if conn:
             try:
-                df_risco = pd.read_sql_query("SELECT a.codigo, a.nome, a.turma FROM alunos_v2 a WHERE a.status = 'ATIVO' AND a.codigo NOT IN (SELECT DISTINCT codigo_aluno FROM registros_v2 WHERE data IN %s AND tipo_registro='PRESENCA')", conn, params=[tuple(dias_u)])
-                if not df_risco.empty: 
+                df_risco = pd.read_sql_query(
+                    """
+                    WITH dias AS (
+                        SELECT unnest(%s::date[]) AS data
+                    ), alunos_ativos AS (
+                        SELECT codigo, nome, turma
+                        FROM alunos_v2
+                        WHERE status = 'ATIVO'
+                    ), dias_letivos_por_aluno AS (
+                        SELECT a.codigo, a.nome, a.turma, d.data
+                        FROM alunos_ativos a
+                        CROSS JOIN dias d
+                        WHERE COALESCE(
+                            (SELECT ct.dia_letivo FROM calendario_letivo_turmas ct
+                             WHERE ct.data = d.data AND ct.turma = a.turma),
+                            (SELECT c.dia_letivo FROM calendario_letivo c WHERE c.data = d.data),
+                            TRUE
+                        ) = TRUE
+                    ), ultimos_dias_letivos AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY codigo ORDER BY data DESC
+                        ) AS ordem_dia
+                        FROM dias_letivos_por_aluno
+                    ), avaliacao AS (
+                        SELECT
+                            ud.codigo,
+                            ud.nome,
+                            ud.turma,
+                            COUNT(*) AS dias_letivos,
+                            COUNT(*) FILTER (WHERE NOT EXISTS (
+                                SELECT 1 FROM registros_v2 r
+                                WHERE r.codigo_aluno = ud.codigo
+                                  AND r.data = ud.data
+                                  AND r.tipo_registro = 'PRESENCA'
+                            )) AS dias_sem_presenca
+                        FROM ultimos_dias_letivos ud
+                        WHERE ud.ordem_dia <= 5
+                        GROUP BY ud.codigo, ud.nome, ud.turma
+                    )
+                    SELECT codigo, nome, turma
+                    FROM avaliacao
+                    WHERE dias_letivos = 5
+                      AND dias_sem_presenca = 5
+                    ORDER BY turma, nome
+                    """,
+                    conn,
+                    params=[dias_candidatos_risco],
+                )
+                if not df_risco.empty:
                     st.error(f"{len(df_risco)} alunos em risco")
                     st.dataframe(df_risco, hide_index=True)
-                else: 
+                else:
                     st.success("Nenhum aluno ativo nesta situação.")
-            except: 
-                st.info("Aguardando...")
-            finally: 
+            except Exception as e:
+                st.info(f"Não foi possível avaliar o risco de evasão neste momento: {e}")
+            finally:
                 liberar_conn(conn)
+
 indice_aba += 1
 
 if aba_atual == abas_do_sistema[indice_aba]:
+    st.subheader("📅 Histórico de Frequência por Mês e Turma")
+    st.caption("Consulte a frequência de todos os estudantes ativos de uma turma durante o mês selecionado. Dias em que a turma esteve liberada não são contabilizados como faltas.")
+
+    df_alunos_hist_mensal = df_alunos.copy() if isinstance(df_alunos, pd.DataFrame) else pd.DataFrame()
+    if not df_alunos_hist_mensal.empty:
+        if "status" in df_alunos_hist_mensal.columns:
+            df_alunos_hist_mensal = df_alunos_hist_mensal[
+                df_alunos_hist_mensal["status"].fillna("").astype(str).str.upper().eq("ATIVO")
+            ].copy()
+    turmas_hist_mensal = sorted(
+        df_alunos_hist_mensal["turma"].dropna().astype(str).str.strip().loc[lambda x: x.ne("")].unique().tolist()
+    ) if not df_alunos_hist_mensal.empty and "turma" in df_alunos_hist_mensal.columns else []
+
+    meses_hist_mensal = []
+    hoje_mes_hist = obter_hora_atual().date().replace(day=1)
+    for deslocamento in range(0, 60):
+        dt_mes = (pd.Timestamp(hoje_mes_hist) - pd.DateOffset(months=deslocamento)).date()
+        meses_hist_mensal.append((dt_mes.strftime("%Y-%m"), dt_mes.strftime("%m/%Y")))
+    mapa_meses_hist = {rotulo: valor for valor, rotulo in meses_hist_mensal}
+
+    if turmas_hist_mensal:
+        c_hist_turma, c_hist_mes = st.columns([2, 1])
+        with c_hist_turma:
+            turma_hist_mensal = st.selectbox(
+                "Turma",
+                turmas_hist_mensal,
+                key="hist_mensal_turma",
+            )
+        with c_hist_mes:
+            mes_hist_mensal_label = st.selectbox(
+                "Mês/Ano",
+                [rotulo for _, rotulo in meses_hist_mensal],
+                key="hist_mensal_mes",
+            )
+        mes_hist_mensal = mapa_meses_hist[mes_hist_mensal_label]
+        data_inicio_hist = pd.Timestamp(f"{mes_hist_mensal}-01").date()
+        data_fim_hist = (pd.Timestamp(data_inicio_hist) + pd.offsets.MonthEnd(1)).date()
+        df_hist_mensal = carregar_historico_mensal_turma(
+            turma_hist_mensal,
+            data_inicio_hist,
+            data_fim_hist,
+        )
+        if df_hist_mensal.empty:
+            st.info("Não há estudantes ativos nem registros/dias letivos para essa turma no mês selecionado.")
+        else:
+            df_hist_mensal["data"] = pd.to_datetime(df_hist_mensal["data"], errors="coerce")
+            status_sigla = {
+                "PRESENTE": "P",
+                "ATRASO": "AT",
+                "FALTA JUSTIFICADA": "FJ",
+                "FALTA": "F",
+                "AUSENTE SEM REGISTRO": "FNI",
+            }
+            df_hist_mensal["sigla"] = df_hist_mensal["situacao"].map(status_sigla).fillna("—")
+            resumo_mensal = df_hist_mensal.groupby(["codigo", "nome", "turma"], dropna=False).agg(
+                Dias_Considerados=("data", "count"),
+                Presenças=("situacao", lambda serie: int((serie == "PRESENTE").sum())),
+                Atrasos=("situacao", lambda serie: int((serie == "ATRASO").sum())),
+                Faltas_Justificadas=("situacao", lambda serie: int((serie == "FALTA JUSTIFICADA").sum())),
+                Faltas_Nao_Justificadas=("situacao", lambda serie: int(serie.isin(["FALTA", "AUSENTE SEM REGISTRO"]).sum())),
+            ).reset_index().rename(columns={
+                "codigo": "Código", "nome": "Estudante", "turma": "Turma",
+                "Dias_Considerados": "Dias considerados", "Presenças": "Presenças",
+                "Atrasos": "Atrasos", "Faltas_Justificadas": "Faltas justificadas",
+                "Faltas_Nao_Justificadas": "Faltas não justificadas",
+            })
+            st.markdown("#### Resumo mensal por estudante")
+            st.dataframe(resumo_mensal, use_container_width=True, hide_index=True)
+
+            pivot_mensal = df_hist_mensal.pivot_table(
+                index=["codigo", "nome", "turma"],
+                columns="data",
+                values="sigla",
+                aggfunc="first",
+            ).reset_index()
+            colunas_pivot = []
+            for coluna in pivot_mensal.columns:
+                if isinstance(coluna, (pd.Timestamp, datetime)):
+                    colunas_pivot.append(pd.to_datetime(coluna).strftime("%d/%m"))
+                else:
+                    colunas_pivot.append({"codigo": "Código", "nome": "Estudante", "turma": "Turma"}.get(str(coluna), str(coluna)))
+            pivot_mensal.columns = colunas_pivot
+            pivot_mensal = pivot_mensal.sort_values("Estudante")
+            st.markdown("#### Histórico diário da turma")
+            st.caption("Legenda: P = presente; AT = atraso; FJ = falta justificada; F = falta; FNI = falta não justificada/sem registro.")
+            st.dataframe(pivot_mensal, use_container_width=True, hide_index=True)
+
+            df_export_hist_mensal = df_hist_mensal.rename(columns={
+                "codigo": "Código", "nome": "Estudante", "turma": "Turma", "data": "Data",
+                "situacao": "Situação", "hora_entrada": "Hora de entrada", "hora_saida": "Hora de saída",
+                "motivo_saida": "Motivo/justificativa",
+            })[["Código", "Estudante", "Turma", "Data", "Situação", "Hora de entrada", "Hora de saída", "Motivo/justificativa"]].copy()
+            df_export_hist_mensal["Data"] = pd.to_datetime(df_export_hist_mensal["Data"], errors="coerce").dt.strftime("%d/%m/%Y")
+            csv_hist_mensal = df_export_hist_mensal.to_csv(index=False, sep=";").encode("utf-8-sig")
+            st.download_button(
+                "📥 Exportar histórico mensal detalhado (CSV)",
+                data=csv_hist_mensal,
+                file_name=f"Historico_Frequencia_{re.sub(r'[^A-Za-z0-9_-]+', '_', turma_hist_mensal)}_{mes_hist_mensal}.csv",
+                mime="text/csv",
+                key="exportar_historico_mensal_turma",
+            )
+    else:
+        st.info("Não há turmas com estudantes ativos no cadastro.")
+
+    st.markdown("---")
     st.subheader("📈 Histórico Individual")
 
     lista_historico = [""]
@@ -5727,11 +6338,25 @@ if aba_atual == abas_do_sistema[indice_aba]:
                 # em que o aluno não possui uma linha em registros_v2. Isso evita
                 # que faltas não justificadas "desapareçam" do histórico.
                 query_hist = """
-                    WITH dias AS (
-                        SELECT data
-                        FROM calendario_letivo
-                        WHERE dia_letivo = TRUE
-                          AND data <= CURRENT_DATE
+                    WITH aluno AS (
+                        SELECT codigo, turma FROM alunos_v2 WHERE codigo = %s
+                    ), dias AS (
+                        SELECT ct.data
+                        FROM calendario_letivo_turmas ct
+                        JOIN aluno a ON a.turma = ct.turma
+                        WHERE ct.dia_letivo = TRUE AND ct.data <= CURRENT_DATE
+
+                        UNION
+
+                        SELECT c.data
+                        FROM calendario_letivo c
+                        CROSS JOIN aluno a
+                        WHERE c.dia_letivo = TRUE
+                          AND c.data <= CURRENT_DATE
+                          AND NOT EXISTS (
+                              SELECT 1 FROM calendario_letivo_turmas ct
+                              WHERE ct.data = c.data AND ct.turma = a.turma
+                          )
 
                         UNION
 
@@ -5770,6 +6395,7 @@ if aba_atual == abas_do_sistema[indice_aba]:
                     query_hist,
                     conn,
                     params=[
+                        codigo_historico,
                         codigo_historico,
                         codigo_historico,
                     ],
