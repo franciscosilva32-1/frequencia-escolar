@@ -1088,6 +1088,9 @@ def inicializar_tabelas():
         cur.execute("""CREATE TABLE IF NOT EXISTS faltas_primeira_chamada (
             id SERIAL PRIMARY KEY, codigo_aluno TEXT REFERENCES alunos_v2(codigo), ano TEXT, periodo TEXT, area TEXT, motivo TEXT, data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(codigo_aluno, ano, periodo, area)
         )""")
+        # Metadados da aplicação da avaliação para auditoria do cruzamento com a frequência.
+        cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN IF NOT EXISTS data_avaliacao DATE")
+        cur.execute("ALTER TABLE faltas_primeira_chamada ADD COLUMN IF NOT EXISTS hora_avaliacao TIME")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS configuracoes (
                 chave TEXT PRIMARY KEY,
@@ -1855,21 +1858,159 @@ def carregar_faltas(data_str):
     finally:
         liberar_conn(conn)
 
+def identificar_faltas_primeira_chamada(data_avaliacao, hora_avaliacao):
+    """Cruza a frequência da data com o início da avaliação e devolve os ausentes identificados.
+
+    Regras usadas:
+    - sem registro de entrada: ausente na frequência;
+    - saída anterior ao início da avaliação: liberado antes da avaliação;
+    - entrada posterior ao início da avaliação: chegou após o início da avaliação.
+
+    O motivo é obtido do registro de falta ou da saída, quando existente. Quando não há
+    justificativa registrada, isso é indicado explicitamente, sem presumir uma causa.
+    """
+    if isinstance(data_avaliacao, str):
+        data_avaliacao = datetime.strptime(data_avaliacao, "%Y-%m-%d").date()
+    if not hasattr(hora_avaliacao, "hour"):
+        hora_avaliacao = datetime.strptime(str(hora_avaliacao)[:8], "%H:%M:%S").time()
+
+    conn = conectar_bd()
+    if not conn:
+        raise ConnectionError("Não foi possível conectar ao banco de dados.")
+
+    query = """
+        SELECT
+            a.codigo AS codigo_aluno,
+            a.nome,
+            a.turma,
+            p.hora_entrada,
+            p.hora_saida,
+            p.motivo_saida AS motivo_saida_presenca,
+            p.status_entrada,
+            f.motivo_saida AS motivo_falta
+        FROM alunos_v2 a
+        LEFT JOIN registros_v2 p
+            ON p.codigo_aluno = a.codigo
+           AND p.data = %s::date
+           AND p.tipo_registro = 'PRESENCA'
+        LEFT JOIN registros_v2 f
+            ON f.codigo_aluno = a.codigo
+           AND f.data = %s::date
+           AND f.tipo_registro = 'FALTA'
+        WHERE a.status = 'ATIVO'
+          AND COALESCE(
+                (SELECT ct.dia_letivo
+                 FROM calendario_letivo_turmas ct
+                 WHERE ct.data = %s::date AND ct.turma = a.turma),
+                (SELECT c.dia_letivo
+                 FROM calendario_letivo c
+                 WHERE c.data = %s::date),
+                TRUE
+          ) = TRUE
+        ORDER BY a.turma, a.nome
+    """
+    try:
+        df_freq = pd.read_sql_query(
+            query,
+            conn,
+            params=[data_avaliacao, data_avaliacao, data_avaliacao, data_avaliacao],
+        )
+    finally:
+        liberar_conn(conn)
+
+    def texto(valor):
+        if valor is None or pd.isna(valor):
+            return ""
+        return str(valor).strip()
+
+    def converter_hora(valor):
+        if valor is None or pd.isna(valor):
+            return None
+        if hasattr(valor, "hour") and hasattr(valor, "minute"):
+            return valor
+        valor_txt = str(valor).strip()
+        for formato in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(valor_txt[:8], formato).time()
+            except ValueError:
+                continue
+        return None
+
+    def hora_texto(valor):
+        hora = converter_hora(valor)
+        return hora.strftime("%H:%M") if hora else "—"
+
+    candidatos = []
+    for _, linha in df_freq.iterrows():
+        entrada = converter_hora(linha.get("hora_entrada"))
+        saida = converter_hora(linha.get("hora_saida"))
+        motivo_saida = texto(linha.get("motivo_saida_presenca"))
+        motivo_falta = texto(linha.get("motivo_falta"))
+
+        situacao = None
+        motivo_identificado = ""
+
+        if entrada is None:
+            situacao = "AUSENTE NA FREQUÊNCIA"
+            motivo_identificado = motivo_falta or "SEM JUSTIFICATIVA REGISTRADA NA FREQUÊNCIA"
+        elif saida is not None and saida < hora_avaliacao:
+            situacao = "LIBERADO ANTES DA AVALIAÇÃO"
+            motivo_identificado = (
+                motivo_saida
+                or motivo_falta
+                or f"SAÍDA REGISTRADA ÀS {saida.strftime('%H:%M')}, ANTES DA AVALIAÇÃO"
+            )
+        elif entrada > hora_avaliacao:
+            situacao = "ENTRADA APÓS O INÍCIO DA AVALIAÇÃO"
+            motivo_identificado = (
+                f"ENTRADA REGISTRADA ÀS {entrada.strftime('%H:%M')}, APÓS O INÍCIO DA AVALIAÇÃO"
+            )
+            if motivo_falta:
+                motivo_identificado += f" — JUSTIFICATIVA NA FREQUÊNCIA: {motivo_falta}"
+
+        if situacao:
+            candidatos.append({
+                "codigo_aluno": texto(linha.get("codigo_aluno")),
+                "nome": texto(linha.get("nome")),
+                "turma": texto(linha.get("turma")),
+                "situacao": situacao,
+                "hora_entrada": hora_texto(linha.get("hora_entrada")),
+                "hora_saida": hora_texto(linha.get("hora_saida")),
+                "motivo": motivo_identificado,
+            })
+
+    return pd.DataFrame(
+        candidatos,
+        columns=["codigo_aluno", "nome", "turma", "situacao", "hora_entrada", "hora_saida", "motivo"],
+    )
+
+
 @st.cache_data(ttl=60)
 def carregar_faltas_primeira_chamada(ano):
     query = """
-        SELECT a.nome, a.turma, f.periodo, f.area, f.motivo, TO_CHAR(f.data_registro, 'DD/MM/YYYY') as data_registro 
-        FROM faltas_primeira_chamada f JOIN alunos_v2 a ON f.codigo_aluno = a.codigo WHERE f.ano = %s ORDER BY f.periodo, f.area, a.turma, a.nome
+        SELECT
+            a.nome,
+            a.turma,
+            f.periodo,
+            f.area,
+            f.motivo,
+            TO_CHAR(f.data_avaliacao, 'DD/MM/YYYY') AS data_avaliacao,
+            TO_CHAR(f.hora_avaliacao, 'HH24:MI') AS hora_avaliacao,
+            TO_CHAR(f.data_registro, 'DD/MM/YYYY HH24:MI') AS data_registro
+        FROM faltas_primeira_chamada f
+        JOIN alunos_v2 a ON f.codigo_aluno = a.codigo
+        WHERE f.ano = %s
+        ORDER BY f.periodo, f.area, a.turma, a.nome
     """
     conn = conectar_bd()
-    if not conn: 
+    if not conn:
         return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn, params=[str(ano)])
         return df
-    except Exception: 
+    except Exception:
         return pd.DataFrame()
-    finally: 
+    finally:
         liberar_conn(conn)
 
 @st.cache_data(ttl=300)
@@ -7066,47 +7207,292 @@ if eh_admin:
         st.markdown("---")
 
         st.subheader("📝 Registrar Falta na 1ª Chamada de Avaliação")
-        with st.form("form_falta_1a", clear_on_submit=True):
+        st.caption(
+            "Informe a data e o horário em que a avaliação começou. O sistema cruza esses dados "
+            "com a frequência diária e identifica ausências, saídas antecipadas e entradas após o início da prova."
+        )
+
+        with st.form("form_analisar_faltas_1a"):
             c_f1, c_f2, c_f3 = st.columns([1, 1, 2])
-            with c_f1: 
-                f1_ano = st.selectbox("Ano Letivo", anos_disponiveis, index=anos_disponiveis.index(ano_atual))
-            with c_f2: 
-                f1_per = st.selectbox("Período Acadêmico", ["1º Período", "2º Período", "3º Período", "4º Período"])
-            with c_f3: 
-                f1_area = st.selectbox("Área Acadêmica", ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"])
-            
-            lista_alunos_falta = [""]
-            if not df_alunos.empty:
-                lista_alunos_falta += [f"{r['codigo']} - {r['nome']} ({r['turma']})" for _, r in df_alunos.iterrows()]
-                
-            f1_aluno = st.selectbox("Selecione o Estudante", lista_alunos_falta)
-            f1_motivo = st.selectbox("Motivo da Falta / Justificativa", motivos_justificativa)
-            
-            if st.form_submit_button("💾 SALVAR REGISTRO DE FALTA"):
-                if f1_aluno:
-                    cod_aluno = f1_aluno.split(" - ")[0]
-                    conn_f1 = conectar_bd()
-                    if conn_f1:
-                        try:
-                            cur_f1 = conn_f1.cursor()
-                            cur_f1.execute("""
-                                INSERT INTO faltas_primeira_chamada (codigo_aluno, ano, periodo, area, motivo) 
-                                VALUES (%s, %s, %s, %s, %s) 
-                                ON CONFLICT (codigo_aluno, ano, periodo, area) 
-                                DO UPDATE SET motivo = EXCLUDED.motivo, data_registro = CURRENT_TIMESTAMP
-                            """, (cod_aluno, f1_ano, f1_per, f1_area, f1_motivo))
-                            conn_f1.commit()
-                            carregar_faltas_primeira_chamada.clear()
-                            st.success(f"Falta na 1ª chamada de {f1_area} registrada com sucesso para {f1_aluno.split(' - ')[1]}!")
-                        except Exception as e: 
-                            st.error(f"Erro ao salvar: {e}")
-                        finally: 
-                            liberar_conn(conn_f1)
-                    else: 
-                        st.error("Sem conexão com o banco de dados.")
-                else: 
-                    st.error("Por favor, selecione um estudante na lista.")
-                    
+            with c_f1:
+                f1_ano = st.selectbox(
+                    "Ano Letivo",
+                    anos_disponiveis,
+                    index=anos_disponiveis.index(ano_atual),
+                    key="f1_ano_lote",
+                )
+            with c_f2:
+                f1_per = st.selectbox(
+                    "Período Acadêmico",
+                    ["1º Período", "2º Período", "3º Período", "4º Período"],
+                    key="f1_periodo_lote",
+                )
+            with c_f3:
+                f1_area = st.selectbox(
+                    "Área Acadêmica",
+                    ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"],
+                    key="f1_area_lote",
+                )
+
+            c_data_av, c_hora_av = st.columns(2)
+            with c_data_av:
+                f1_data_avaliacao = st.date_input(
+                    "Data da aplicação da avaliação",
+                    value=obter_hora_atual().date(),
+                    key="f1_data_avaliacao_lote",
+                )
+            with c_hora_av:
+                f1_hora_avaliacao = st.time_input(
+                    "Horário de início da avaliação",
+                    value=datetime.strptime("08:00", "%H:%M").time(),
+                    key="f1_hora_avaliacao_lote",
+                    step=300,
+                )
+
+            analisar_frequencia = st.form_submit_button(
+                "🔎 CRUZAR COM A FREQUÊNCIA",
+                use_container_width=True,
+                type="primary",
+            )
+
+        meta_f1_atual = {
+            "ano": str(f1_ano),
+            "periodo": str(f1_per),
+            "area": str(f1_area),
+            "data": f1_data_avaliacao.isoformat(),
+            "hora": f1_hora_avaliacao.strftime("%H:%M:%S"),
+        }
+        sufixo_f1 = (
+            f"{meta_f1_atual['ano']}_{meta_f1_atual['periodo']}_{meta_f1_atual['area']}_"
+            f"{meta_f1_atual['data']}_{f1_hora_avaliacao.strftime('%H%M')}"
+        ).replace(" ", "_")
+
+        if analisar_frequencia:
+            try:
+                df_resultado_f1 = identificar_faltas_primeira_chamada(
+                    f1_data_avaliacao, f1_hora_avaliacao
+                )
+                st.session_state["resultado_faltas_1a"] = df_resultado_f1
+                st.session_state["meta_faltas_1a"] = meta_f1_atual
+                st.session_state.pop("erro_faltas_1a", None)
+            except Exception as e:
+                st.session_state["erro_faltas_1a"] = str(e)
+                st.session_state.pop("resultado_faltas_1a", None)
+                st.session_state["meta_faltas_1a"] = meta_f1_atual
+
+        if st.session_state.get("meta_faltas_1a") == meta_f1_atual:
+            erro_f1 = st.session_state.get("erro_faltas_1a")
+            if erro_f1:
+                st.error(f"Não foi possível cruzar a frequência: {erro_f1}")
+            elif "resultado_faltas_1a" in st.session_state:
+                df_resultado_f1 = st.session_state["resultado_faltas_1a"]
+                st.markdown("---")
+                st.markdown("#### 📋 Resultado do cruzamento")
+                st.caption(
+                    f"Avaliação: {f1_data_avaliacao.strftime('%d/%m/%Y')} às "
+                    f"{f1_hora_avaliacao.strftime('%H:%M')}. A comparação usa o horário exato informado."
+                )
+
+                if df_resultado_f1.empty:
+                    st.success(
+                        "Nenhum estudante foi identificado como ausente no horário da avaliação "
+                        "com base nos registros de frequência encontrados."
+                    )
+                else:
+                    n_sem_justificativa = int(
+                        df_resultado_f1["motivo"].str.contains(
+                            "SEM JUSTIFICATIVA REGISTRADA", case=False, na=False
+                        ).sum()
+                    )
+                    n_liberados = int(
+                        (df_resultado_f1["situacao"] == "LIBERADO ANTES DA AVALIAÇÃO").sum()
+                    )
+                    n_chegada_posterior = int(
+                        (df_resultado_f1["situacao"] == "ENTRADA APÓS O INÍCIO DA AVALIAÇÃO").sum()
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Ausentes identificados", len(df_resultado_f1))
+                    m2.metric("Liberados antes da prova", n_liberados)
+                    m3.metric("Entraram após o início", n_chegada_posterior)
+                    m4.metric("Sem justificativa", n_sem_justificativa)
+
+                    df_exibicao_f1 = df_resultado_f1.rename(columns={
+                        "codigo_aluno": "Código",
+                        "nome": "Estudante",
+                        "turma": "Turma",
+                        "situacao": "Situação identificada",
+                        "hora_entrada": "Entrada",
+                        "hora_saida": "Saída",
+                        "motivo": "Motivo identificado na frequência",
+                    })
+                    st.dataframe(
+                        df_exibicao_f1,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.info(
+                        "Critérios: estudante sem entrada registrada; saída anterior ao horário da avaliação; "
+                        "ou entrada posterior ao início da prova (incluindo quem chegou à tarde). "
+                        "Quando não existe justificativa no registro de frequência, o sistema informa essa ausência de dado."
+                    )
+
+                    opcoes_excluir_f1 = {
+                        f"{linha['codigo_aluno']} — {linha['nome']} ({linha['turma']})": str(linha['codigo_aluno'])
+                        for _, linha in df_resultado_f1.iterrows()
+                    }
+                    excluir_f1 = st.multiselect(
+                        "Não registrar (opcional): exclua casos em que a frequência esteja incorreta",
+                        options=list(opcoes_excluir_f1.keys()),
+                        key=f"excluir_faltas_1a_{sufixo_f1}",
+                    )
+                    codigos_excluir_f1 = {opcoes_excluir_f1[item] for item in excluir_f1}
+                    df_salvar_f1 = df_resultado_f1[
+                        ~df_resultado_f1["codigo_aluno"].astype(str).isin(codigos_excluir_f1)
+                    ].copy()
+
+                    confirmar_f1 = st.checkbox(
+                        "Conferi a lista e confirmo o registro das faltas selecionadas.",
+                        key=f"confirmar_faltas_1a_{sufixo_f1}",
+                    )
+                    if st.button(
+                        f"💾 REGISTRAR {len(df_salvar_f1)} FALTA(S) NA 1ª CHAMADA",
+                        use_container_width=True,
+                        type="primary",
+                        key=f"salvar_faltas_1a_{sufixo_f1}",
+                        disabled=df_salvar_f1.empty,
+                    ):
+                        if not confirmar_f1:
+                            st.warning("Marque a confirmação após conferir a lista.")
+                        else:
+                            conn_f1 = conectar_bd()
+                            if conn_f1:
+                                try:
+                                    cur_f1 = conn_f1.cursor()
+                                    registros_f1 = [
+                                        (
+                                            str(linha["codigo_aluno"]),
+                                            str(f1_ano),
+                                            str(f1_per),
+                                            str(f1_area),
+                                            str(linha["motivo"]),
+                                            f1_data_avaliacao,
+                                            f1_hora_avaliacao,
+                                        )
+                                        for _, linha in df_salvar_f1.iterrows()
+                                    ]
+                                    cur_f1.executemany(
+                                        """
+                                        INSERT INTO faltas_primeira_chamada
+                                            (codigo_aluno, ano, periodo, area, motivo, data_avaliacao, hora_avaliacao)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                        ON CONFLICT (codigo_aluno, ano, periodo, area)
+                                        DO UPDATE SET
+                                            motivo = EXCLUDED.motivo,
+                                            data_avaliacao = EXCLUDED.data_avaliacao,
+                                            hora_avaliacao = EXCLUDED.hora_avaliacao,
+                                            data_registro = CURRENT_TIMESTAMP
+                                        """,
+                                        registros_f1,
+                                    )
+                                    conn_f1.commit()
+                                    carregar_faltas_primeira_chamada.clear()
+                                    st.success(
+                                        f"{len(registros_f1)} falta(s) da 1ª chamada registrada(s) "
+                                        f"para {f1_area}, em {f1_data_avaliacao.strftime('%d/%m/%Y')} "
+                                        f"às {f1_hora_avaliacao.strftime('%H:%M')}."
+                                    )
+                                except Exception as e:
+                                    try:
+                                        conn_f1.rollback()
+                                    except Exception:
+                                        pass
+                                    st.error(f"Erro ao salvar os registros: {e}")
+                                finally:
+                                    liberar_conn(conn_f1)
+                            else:
+                                st.error("Sem conexão com o banco de dados.")
+
+        with st.expander("Registro individual manual (exceções ou correções)"):
+            st.caption(
+                "Use esta opção apenas quando for necessário registrar uma falta que não foi identificada "
+                "pelo cruzamento automático."
+            )
+            with st.form("form_falta_1a_manual", clear_on_submit=True):
+                c_m1, c_m2, c_m3 = st.columns([1, 1, 2])
+                with c_m1:
+                    f1_manual_ano = st.selectbox(
+                        "Ano Letivo", anos_disponiveis,
+                        index=anos_disponiveis.index(ano_atual), key="f1_manual_ano"
+                    )
+                with c_m2:
+                    f1_manual_per = st.selectbox(
+                        "Período Acadêmico",
+                        ["1º Período", "2º Período", "3º Período", "4º Período"],
+                        key="f1_manual_periodo",
+                    )
+                with c_m3:
+                    f1_manual_area = st.selectbox(
+                        "Área Acadêmica",
+                        ["LÍNGUA PORTUGUESA", "MATEMÁTICA", "LINGUAGENS", "HUMANAS", "NATUREZA"],
+                        key="f1_manual_area",
+                    )
+
+                lista_alunos_falta = [""]
+                if not df_alunos.empty:
+                    lista_alunos_falta += [
+                        f"{r['codigo']} - {r['nome']} ({r['turma']})"
+                        for _, r in df_alunos.iterrows()
+                    ]
+                f1_manual_aluno = st.selectbox(
+                    "Selecione o Estudante", lista_alunos_falta, key="f1_manual_aluno"
+                )
+                f1_manual_motivo = st.selectbox(
+                    "Motivo da Falta / Justificativa", motivos_justificativa,
+                    key="f1_manual_motivo",
+                )
+                salvar_f1_manual = st.form_submit_button(
+                    "💾 SALVAR REGISTRO INDIVIDUAL", use_container_width=True
+                )
+
+                if salvar_f1_manual:
+                    if not f1_manual_aluno:
+                        st.error("Por favor, selecione um estudante na lista.")
+                    else:
+                        cod_manual = f1_manual_aluno.split(" - ")[0]
+                        conn_manual = conectar_bd()
+                        if conn_manual:
+                            try:
+                                cur_manual = conn_manual.cursor()
+                                cur_manual.execute(
+                                    """
+                                    INSERT INTO faltas_primeira_chamada
+                                        (codigo_aluno, ano, periodo, area, motivo)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    ON CONFLICT (codigo_aluno, ano, periodo, area)
+                                    DO UPDATE SET
+                                        motivo = EXCLUDED.motivo,
+                                        data_registro = CURRENT_TIMESTAMP
+                                    """,
+                                    (cod_manual, str(f1_manual_ano), str(f1_manual_per), str(f1_manual_area), f1_manual_motivo),
+                                )
+                                conn_manual.commit()
+                                carregar_faltas_primeira_chamada.clear()
+                                st.success(
+                                    "Falta registrada para "
+                                    f"{f1_manual_aluno.split(' - ')[1]}."
+                                )
+                            except Exception as e:
+                                try:
+                                    conn_manual.rollback()
+                                except Exception:
+                                    pass
+                                st.error(f"Erro ao salvar: {e}")
+                            finally:
+                                liberar_conn(conn_manual)
+                        else:
+                            st.error("Sem conexão com o banco de dados.")
+
         st.markdown("---")
         
         st.subheader("🔗 Link da Pesquisa de Satisfação Pública")
